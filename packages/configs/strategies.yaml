@@ -20,7 +20,7 @@ strategies:
   baseline_openai_jev:
     enabled: true
     mode: paper
-    max_signal_age_ms: 8000
+    max_signal_age_ms: 20000
     call_model: true
 
 combination:

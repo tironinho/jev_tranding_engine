@@ -146,12 +146,24 @@ class OpenAIProvider:
 
 def _extract_json(payload: dict) -> dict:
     if isinstance(payload.get("output_parsed"), dict):
-        return payload["output_parsed"]
+        return _coerce_market_state(payload["output_parsed"])
     texts: list[str] = []
     for item in payload.get("output") or []:
-        for part in item.get("content") or []:
-            if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+            continue
+        for part in content or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") in {"output_text", "text"} and isinstance(part.get("text"), str):
                 texts.append(part["text"])
+            elif isinstance(part.get("json"), dict):
+                return _coerce_market_state(part["json"])
+            elif isinstance(part.get("parsed"), dict):
+                return _coerce_market_state(part["parsed"])
     if not texts:
         raise OpenAIInvalidSchema("missing output_text")
     try:
@@ -160,7 +172,30 @@ def _extract_json(payload: dict) -> dict:
         raise OpenAIInvalidSchema("output is not json") from exc
     if not isinstance(loaded, dict):
         raise OpenAIInvalidSchema("output is not an object")
-    return loaded
+    return _coerce_market_state(loaded)
+
+
+def _coerce_market_state(payload: dict) -> dict:
+    """Keep a 0–1 score and a short evidence line inside the contract the model was given."""
+    numeric = (
+        "trend_strength",
+        "momentum_quality",
+        "breakout_quality",
+        "overextension",
+        "reversal_risk",
+        "anomaly_score",
+        "confidence",
+    )
+    coerced = dict(payload)
+    for name in numeric:
+        value = coerced.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            coerced[name] = max(0.0, min(1.0, float(value)))
+    evidence = coerced.get("evidence")
+    if isinstance(evidence, list):
+        lines = [str(item).strip()[:160] for item in evidence if str(item).strip()]
+        coerced["evidence"] = lines[:8] or ["snapshot"]
+    return coerced
 
 
 def _usage(payload: dict) -> dict[str, int] | None:

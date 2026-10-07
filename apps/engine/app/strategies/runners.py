@@ -242,7 +242,8 @@ class BaselineOpenAIJevStrategy:
             )
         except OpenAINotConfigured:
             return _no_ai(context, snapshot, metadata, OPENAI_NOT_CONFIGURED, started, SignalStatus.SKIPPED)
-        except OpenAIInvalidSchema:
+        except OpenAIInvalidSchema as exc:
+            metadata["error"] = str(exc)[:300]
             return _no_ai(context, snapshot, metadata, OPENAI_INVALID_SCHEMA, started, SignalStatus.VALID)
         except OpenAICallError as exc:
             code = OPENAI_CIRCUIT_OPEN if "CIRCUIT" in str(exc) else OPENAI_ERROR

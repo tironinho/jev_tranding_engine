@@ -186,7 +186,7 @@ def strategies_from_file(payload: dict) -> dict[str, StrategySettings]:
     defaults = {
         "baseline": StrategySettings("baseline", True, OperatingMode.PAPER, 2000, False),
         "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.PAPER, 4000, True),
-        "baseline_openai_jev": StrategySettings("baseline_openai_jev", True, OperatingMode.PAPER, 8000, True),
+        "baseline_openai_jev": StrategySettings("baseline_openai_jev", True, OperatingMode.PAPER, 20000, True),
     }
     for key, current in defaults.items():
         item = raw.get(key) or {}

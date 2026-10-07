@@ -391,11 +391,14 @@ class TradingEngine:
                 openai=self.openai,
                 failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
             )
-            if waited_ms > cfg.max_signal_age_ms:
+            budget_ms = cfg.max_signal_age_ms
+            if key == "baseline_openai_jev":
+                budget_ms = max(budget_ms, int((self.settings.openai_timeout_s + 4) * 1000))
+            if waited_ms > budget_ms:
                 decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
                 decision.signal_status = SignalStatus.EXPIRED
             else:
-                timeout = max(0.05, (cfg.max_signal_age_ms - waited_ms) / 1000)
+                timeout = max(0.05, (budget_ms - waited_ms) / 1000)
                 try:
                     decision = await asyncio.wait_for(
                         self.strategies[key].evaluate(snapshot, snapshot.features, context),
@@ -411,7 +414,7 @@ class TradingEngine:
                     decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, STRATEGY_ERROR)
                     context.artifacts.append({"kind": "error", "error": str(exc)})
             elapsed = (time.perf_counter() - started) * 1000
-            if decision.signal_status is SignalStatus.VALID and elapsed > cfg.max_signal_age_ms:
+            if decision.signal_status is SignalStatus.VALID and elapsed > budget_ms:
                 decision.signal_status = SignalStatus.EXPIRED
                 if EXPIRED_SIGNAL not in decision.reason_codes:
                     decision.reason_codes.append(EXPIRED_SIGNAL)

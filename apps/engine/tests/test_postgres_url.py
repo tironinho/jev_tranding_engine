@@ -18,3 +18,16 @@ def test_pooler_disables_statement_cache_and_drops_channel_binding():
     assert "sslmode" not in url
     assert args["statement_cache_size"] == 0
     assert "ssl" in args
+
+
+def test_binance_urls_drop_pasted_newlines():
+    from app.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        binance_spot_rest_url="https://data-api.binance.vision\n",
+        binance_spot_ws_url="wss://data-stream.binance.vision/stream\r\n",
+    )
+    assert settings.binance_spot_rest_url == "https://data-api.binance.vision"
+    assert settings.binance_spot_ws_url == "wss://data-stream.binance.vision/stream"
+    assert "\n" not in settings.binance_spot_rest_url

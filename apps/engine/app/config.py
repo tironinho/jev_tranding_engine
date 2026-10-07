@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.enums import OperatingMode, SlippageModelName, TargetMode
@@ -301,6 +301,24 @@ class Settings(BaseSettings):
     human_approval_required: bool = True
     openai_research_model: str = ""
     openai_research_prompt_version: str = "evolution_researcher_v1"
+
+    @field_validator(
+        "database_url",
+        "binance_futures_rest_url",
+        "binance_spot_rest_url",
+        "binance_futures_ws_url",
+        "binance_spot_ws_url",
+        "openai_base_url",
+        "web_origin",
+        "market_type",
+        "snapshot_trigger",
+        mode="before",
+    )
+    @classmethod
+    def strip_env_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @property
     def symbol_list(self) -> list[str]:

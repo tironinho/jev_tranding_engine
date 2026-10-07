@@ -55,8 +55,8 @@ def sortino(returns: list[float]) -> float | None:
     return (avg / dev) * math.sqrt(len(returns))
 
 
-def summarize_trades(trades: list[TradeRecord], starting_equity: float) -> dict:
-    closed = list(trades)
+def summarize_trades(trades: list[TradeRecord], starting_equity: float, mark: float | None = None) -> dict:
+    closed = sorted(trades, key=lambda trade: trade.closed_at)
     count = len(closed)
     if count == 0:
         return {
@@ -115,6 +115,8 @@ def summarize_trades(trades: list[TradeRecord], starting_equity: float) -> dict:
     equity = [starting_equity]
     for trade in closed:
         equity.append(equity[-1] + trade.net_pnl)
+    if mark is not None:
+        equity.append(mark)
     returns = [(equity[i] / equity[i - 1] - 1) for i in range(1, len(equity)) if equity[i - 1]]
     durations = [(trade.closed_at - trade.opened_at).total_seconds() for trade in closed]
     return {

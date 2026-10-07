@@ -25,7 +25,7 @@ async def test_same_snapshot_reaches_every_strategy_and_paper_is_isolated():
     assert by_strategy["baseline"].action is Action.LONG
     assert by_strategy["baseline_openai_jev"].signal_status.value == "skipped"
     assert by_strategy["baseline"].metadata["scores"] == by_strategy["baseline_jev"].metadata["scores"]
-    assert eng.accounts.accounts["baseline"].positions["BTCUSDT"].quantity > 0
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
     assert eng.accounts.accounts["baseline_jev"].positions == {}
     assert eng.accounts.accounts["baseline_openai_jev"].positions == {}
     assert len(eng.accounts.accounts["baseline"].trades) == 0
@@ -60,7 +60,7 @@ async def test_duplicate_client_order_does_not_open_two_positions():
     eng.strategy_settings["baseline_openai_jev"].enabled = False
     first = await eng.evaluate_snapshot(snapshot)
     baseline = next(item for item in first if item.strategy == "baseline")
-    qty_before = eng.accounts.accounts["baseline"].positions["BTCUSDT"].quantity
+    qty_before = eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity
     from app.execution.paper import PaperExecutionProvider
 
     intent = OrderIntent(
@@ -84,7 +84,7 @@ async def test_duplicate_client_order_does_not_open_two_positions():
     assert order.client_order_id == again.client_order_id == baseline.decision_id.hex
     assert order.status is OrderStatus.FILLED
     assert fills_again == fills
-    assert eng.accounts.accounts["baseline"].positions["BTCUSDT"].quantity == qty_before
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == qty_before
 
 
 def test_limit_below_the_market_is_not_filled():
@@ -125,9 +125,26 @@ async def test_each_paper_strategy_opens_its_own_book():
     by_strategy = {item.strategy: item for item in decisions}
     assert by_strategy["baseline"].action is Action.LONG
     assert by_strategy["baseline_jev"].action is Action.LONG
-    assert eng.accounts.accounts["baseline"].positions["BTCUSDT"].quantity > 0
-    assert eng.accounts.accounts["baseline_jev"].positions["BTCUSDT"].quantity > 0
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
+    assert eng.accounts.accounts["baseline_jev"].sole("BTCUSDT").quantity > 0
     assert eng.accounts.accounts["baseline_openai_jev"].positions == {}
+
+
+@pytest.mark.asyncio
+async def test_a_later_signal_opens_another_position_on_the_same_symbol():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    for key, cfg in eng.strategy_settings.items():
+        cfg.mode = OperatingMode.PAPER if key == "baseline" else OperatingMode.SHADOW
+        cfg.enabled = True
+    await eng.evaluate_snapshot(snapshot)
+    first = eng.accounts.accounts["baseline"].sole("BTCUSDT")
+    later = snapshot.model_copy(update={"timestamp": snapshot.timestamp + timedelta(seconds=61)})
+    await eng.evaluate_snapshot(later)
+    opened = [item for item in eng.accounts.accounts["baseline"].positions.values() if item.symbol == "BTCUSDT"]
+    assert len(opened) == 2
+    assert first.position_id in {item.position_id for item in opened}
 
 
 @pytest.mark.asyncio
@@ -141,7 +158,7 @@ async def test_baseline_opens_a_new_symbol_while_another_entry_is_fresh():
     account.last_entry_at = snapshot.timestamp - timedelta(seconds=5)
     account.last_entry_by_symbol["ETHUSDT"] = account.last_entry_at
     await eng.evaluate_snapshot(snapshot)
-    assert account.positions["BTCUSDT"].quantity > 0
+    assert account.sole("BTCUSDT").quantity > 0
 
 
 @pytest.mark.asyncio

@@ -118,8 +118,8 @@ def test_account_snapshot_restores_cash_position_and_overrides():
     )
     restored = fresh.accounts.accounts["baseline"]
     assert restored.cash == eng.accounts.accounts["baseline"].cash
-    assert restored.positions["BTCUSDT"].quantity == 2
-    assert restored.positions["BTCUSDT"].stop == 90
+    assert restored.sole("BTCUSDT").quantity == 2
+    assert restored.sole("BTCUSDT").stop == 90
     assert fresh.strategy_settings["baseline"].mode is OperatingMode.SHADOW
     assert fresh.strategy_settings["baseline"].enabled is False
     assert fresh.strategy_settings["baseline"].max_signal_age_ms == 1500
@@ -198,7 +198,7 @@ async def test_price_events_do_not_time_exit_on_the_wall_clock():
     state.best_ask = 100.1
     await eng.on_price("BTCUSDT", 100, clock() + timedelta(minutes=30))
     await asyncio.gather(*list(eng._background))
-    assert "BTCUSDT" in eng.accounts.accounts["baseline"].positions
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
     exit_at = clock() + timedelta(minutes=60)
     await eng.on_price("BTCUSDT", 100, exit_at)
     await asyncio.gather(*list(eng._background))
@@ -254,7 +254,7 @@ async def test_live_entry_opens_a_position_places_a_stop_and_blocks_the_next_can
     snapshot, book = long_snapshot()
     attach_book(eng, book)
     await eng.evaluate_snapshot(snapshot)
-    position = eng.accounts.accounts["baseline"].positions["BTCUSDT"]
+    position = eng.accounts.accounts["baseline"].sole("BTCUSDT")
     assert position.mode == "live"
     assert position.quantity > 0
     assert position.stop_client_order_id.endswith("S")

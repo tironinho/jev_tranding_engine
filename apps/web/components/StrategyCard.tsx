@@ -11,6 +11,7 @@ export type StrategyCardData = {
   profit_factor: number | null;
   expectancy_r: number | null;
   net_pnl: number;
+  marked_pnl?: number | null;
   max_drawdown: number | null;
   equity: number;
 };
@@ -18,6 +19,7 @@ export type StrategyCardData = {
 export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; liveArmed: boolean }) {
   const mode = card.enabled ? card.mode : "off";
   const hasTrades = card.trades > 0;
+  const result = card.marked_pnl ?? card.net_pnl;
   return (
     <article className="border border-line bg-panel p-3">
       <div className="flex items-start justify-between gap-3">
@@ -29,7 +31,7 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="WIN RATE" value={hasTrades ? pct(card.win_rate) : "NO DATA"} />
         <Stat label="PROFIT FACTOR" value={hasTrades ? num(card.profit_factor, 2) : "NO DATA"} />
         <Stat label="EXPECTANCY" value={hasTrades ? `${num(card.expectancy_r, 2)} R` : "NO DATA"} />
-        <Stat label="NET PNL" value={hasTrades ? money(card.net_pnl) : "NO DATA"} className={hasTrades ? signedClass(card.net_pnl) : ""} />
+        <Stat label="NET PNL" value={hasTrades ? money(result) : "NO DATA"} className={hasTrades ? signedClass(result) : ""} />
         <Stat label="DRAWDOWN" value={hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
       <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">

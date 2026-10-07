@@ -30,24 +30,32 @@ class VirtualAccount:
 
     def equity(self, marks: dict[str, float]) -> float:
         marked = sum(
-            unrealized(position, marks.get(symbol, position.entry_price))
-            for symbol, position in self.positions.items()
+            unrealized(position, marks.get(position.symbol, position.entry_price))
+            for position in self.positions.values()
         )
         return self.cash + sum(self.margin_locked.values()) + marked
 
     def exposure(self, marks: dict[str, float]) -> float:
         total = 0.0
-        for symbol, position in self.positions.items():
-            mark = marks.get(symbol, position.entry_price)
+        for position in self.positions.values():
+            mark = marks.get(position.symbol, position.entry_price)
             total += abs(mark * position.quantity)
         return total
 
     def symbol_exposure(self, symbol: str, marks: dict[str, float]) -> float:
-        position = self.positions.get(symbol)
-        if position is None:
-            return 0.0
-        mark = marks.get(symbol, position.entry_price)
-        return abs(mark * position.quantity)
+        total = 0.0
+        for position in self.positions.values():
+            if position.symbol != symbol:
+                continue
+            mark = marks.get(symbol, position.entry_price)
+            total += abs(mark * position.quantity)
+        return total
+
+    def sole(self, symbol: str) -> PositionRecord:
+        matches = [position for position in self.positions.values() if position.symbol == symbol]
+        if len(matches) != 1:
+            raise KeyError(symbol)
+        return matches[0]
 
 
 class AccountBook:
@@ -98,7 +106,6 @@ class AccountBook:
         account = self.accounts[strategy]
         account.cash -= entry_fee
         account.cash -= margin
-        account.margin_locked[symbol] = margin
         account.realized_pnl_today -= entry_fee
         position = PositionRecord(
             strategy=strategy,
@@ -119,13 +126,15 @@ class AccountBook:
             mode=mode,  # type: ignore[arg-type]
             stop_client_order_id=stop_client_order_id,
         )
-        account.positions[symbol] = position
+        key = str(position.position_id)
+        account.margin_locked[key] = margin
+        account.positions[key] = position
         account.last_entry_at = opened_at
         account.last_entry_by_symbol[symbol] = opened_at
         return position
 
-    def update_excursion(self, strategy: str, symbol: str, mark: float) -> None:
-        position = self.accounts[strategy].positions.get(symbol)
+    def update_excursion(self, strategy: str, position_id: str, mark: float) -> None:
+        position = self.accounts[strategy].positions.get(position_id)
         if position is None:
             return
         if position.side is Action.LONG:
@@ -141,7 +150,7 @@ class AccountBook:
         self,
         *,
         strategy: str,
-        symbol: str,
+        position_id: str,
         exit_price: float,
         closed_at: datetime,
         exit_fee: float,
@@ -152,8 +161,10 @@ class AccountBook:
         market_regime: str | None,
     ) -> TradeRecord:
         account = self.accounts[strategy]
-        position = account.positions.pop(symbol)
-        margin = account.margin_locked.pop(symbol, 0.0)
+        position = account.positions.pop(position_id)
+        margin = account.margin_locked.pop(position_id, None)
+        if margin is None:
+            margin = account.margin_locked.pop(position.symbol, 0.0)
         if position.side is Action.LONG:
             gross = (exit_price - position.entry_price) * position.quantity
         else:
@@ -166,7 +177,7 @@ class AccountBook:
         trade = TradeRecord(
             trade_id=uuid4(),
             strategy=strategy,
-            symbol=symbol,
+            symbol=position.symbol,
             side=position.side,
             quantity=position.quantity,
             entry_price=position.entry_price,
@@ -247,7 +258,8 @@ class AccountBook:
             position = PositionRecord.model_validate(raw)
             if position.status is not PositionStatus.OPEN:
                 continue
-            account.positions[position.symbol] = position
+            account.positions[str(position.position_id)] = position
+        account.margin_locked = _margin_by_position(account.positions, account.margin_locked)
         account.trades = [TradeRecord.model_validate(raw) for raw in payload.get("trades") or []]
         for position in account.positions.values():
             account.last_entry_by_symbol.setdefault(position.symbol, position.opened_at)
@@ -267,3 +279,18 @@ class AccountBook:
         account.realized_pnl_today = 0.0
         last = max(trade.closed_at for trade in trades)
         account.equity_points.append({"t": last.isoformat(), "equity": account.cash, "mark": False})
+
+
+def _margin_by_position(positions: dict[str, PositionRecord], locked: dict[str, float]) -> dict[str, float]:
+    """Keep margin next to the position. Older snapshots keyed it by symbol."""
+    by_symbol: dict[str, list[PositionRecord]] = {}
+    for position in positions.values():
+        by_symbol.setdefault(position.symbol, []).append(position)
+    remapped: dict[str, float] = {}
+    for key, amount in locked.items():
+        matches = by_symbol.get(key)
+        if matches is not None and len(matches) == 1:
+            remapped[str(matches[0].position_id)] = float(amount)
+        else:
+            remapped[key] = float(amount)
+    return remapped

@@ -59,6 +59,12 @@ def _trade(strategy: str, net: float, gross: float, decision_id) -> TradeRecord:
     )
 
 
+def test_open_mark_counts_in_drawdown_and_not_in_closed_pnl():
+    summary = summarize_trades([_trade("baseline", -28, -20, uuid4())], 10_000, mark=9_965)
+    assert summary["net_pnl"] == -28
+    assert summary["max_drawdown"] == pytest.approx((10_000 - 9_965) / 10_000)
+
+
 def test_consensus_labels():
     opportunity = uuid4()
     three = [

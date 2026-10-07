@@ -14,7 +14,8 @@ min_stop_pct: 0.0025
 min_entry_interval_seconds: 60
 # Saída explícita por tempo. Sinal de 1 minuto mirando nível de 15 minutos não fica aberto por horas.
 max_hold_minutes: 60
-allow_pyramiding: false
+# Sinal novo abre outra posição no mesmo símbolo. O teto continua max_open_positions e a exposição.
+allow_pyramiding: true
 max_leverage: 1
 apply_funding: true
 expected_hold_minutes: 15

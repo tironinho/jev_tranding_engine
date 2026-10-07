@@ -267,9 +267,11 @@ def extend_target_for_costs(
     slippage_cost: float,
     min_net_rr: float,
 ) -> tuple[float, bool]:
-    """Move the target only far enough to clear costs, and only by at most one round trip.
+    """Move the target far enough to clear costs, and no farther than the planned reward.
 
-    A minimum net RR of 50 is a real rejection. A 2.5R target that lands at 1.4996 is the fee on the winner.
+    A 2.5R plan on the minimum stop lands under 1.5 once taker fees and slippage sit on both sides.
+    That gap is still the cost, so the target steps out. A minimum of 50 is farther than the planned
+    reward and stays a rejection.
     """
     required = target_for_min_net_rr(
         side=side,
@@ -286,16 +288,15 @@ def extend_target_for_costs(
     )
     if required is None:
         return target, False
-    slack = abs(entry) * (entry_fee_rate + exit_fee_rate) + abs(exit_slippage_per_unit)
-    cushion = slack + abs(entry) * 1e-6
+    room = abs(target - entry)
     if side is Action.LONG:
         if required <= target or required <= entry:
             return target, False
-        if required - target <= cushion:
+        if required - target <= room:
             return required, True
         return target, False
     if required >= target or required >= entry or required <= 0:
         return target, False
-    if target - required <= cushion:
+    if target - required <= room:
         return required, True
     return target, False

@@ -98,6 +98,7 @@ export function PositionTable({
   rows,
 }: {
   rows: Array<{
+    position_id?: string;
     strategy: string;
     symbol: string;
     side: string;
@@ -126,7 +127,7 @@ export function PositionTable({
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={`${row.strategy}-${row.symbol}`} className="border-b border-line/70 font-mono">
+            <tr key={row.position_id ?? `${row.strategy}-${row.symbol}-${row.entry}`} className="border-b border-line/70 font-mono">
               <td className="px-2 py-2">{row.strategy}</td>
               <td className="px-2 py-2">{row.symbol}</td>
               <td className="px-2 py-2">{row.side}</td>

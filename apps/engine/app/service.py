@@ -545,15 +545,20 @@ class TradingEngine:
 
     async def _manage_one(self, key: str, symbol: str, state, as_of: datetime, extreme: dict | None) -> None:
         account = self.accounts.accounts[key]
-        position = account.positions.get(symbol)
-        if position is None or state.last_price is None:
+        if state.last_price is None:
             return
+        positions = [position for position in list(account.positions.values()) if position.symbol == symbol]
+        for position in positions:
+            await self._manage_position(key, symbol, position, state, as_of, extreme)
+
+    async def _manage_position(self, key: str, symbol: str, position, state, as_of: datetime, extreme: dict | None) -> None:
         observed = _observed_quotes(state, extreme)
-        self.accounts.update_excursion(key, symbol, observed["min_bid"] or state.last_price)
-        self.accounts.update_excursion(key, symbol, observed["max_bid"] or state.last_price)
+        position_id = str(position.position_id)
+        self.accounts.update_excursion(key, position_id, observed["min_bid"] or state.last_price)
+        self.accounts.update_excursion(key, position_id, observed["max_bid"] or state.last_price)
         if position.side is Action.SHORT:
-            self.accounts.update_excursion(key, symbol, observed["min_ask"] or state.last_price)
-            self.accounts.update_excursion(key, symbol, observed["max_ask"] or state.last_price)
+            self.accounts.update_excursion(key, position_id, observed["min_ask"] or state.last_price)
+            self.accounts.update_excursion(key, position_id, observed["max_ask"] or state.last_price)
         hold_minutes = max(0.0, (as_of - position.opened_at).total_seconds() / 60)
         reason = position_exit_observed(
             position.side,
@@ -720,7 +725,7 @@ class TradingEngine:
         funding = funding_cashflow(position.side, state.funding_rate, exit_price * quantity, periods)
         trade = self.accounts.close_position(
             strategy=key,
-            symbol=symbol,
+            position_id=str(position.position_id),
             exit_price=exit_price,
             closed_at=as_of,
             exit_fee=exit_fee,
@@ -858,7 +863,7 @@ class TradingEngine:
             open_positions=len(account.positions),
             symbol_exposure_notional=account.symbol_exposure(snapshot.symbol, marks),
             total_exposure_notional=account.exposure(marks),
-            has_position_on_symbol=snapshot.symbol in account.positions,
+            has_position_on_symbol=any(position.symbol == snapshot.symbol for position in account.positions.values()),
             last_entry_at=account.last_entry_by_symbol.get(snapshot.symbol),
             now=snapshot.timestamp,
             trading_enabled=self.trading_enabled,
@@ -916,10 +921,13 @@ class TradingEngine:
     def performance(self) -> dict:
         reports = {}
         for key in STRATEGY_KEYS:
-            trades = [trade for trade in self.accounts.accounts[key].trades]
-            reports[key] = summarize_trades(trades, self.settings.initial_paper_equity)
+            account = self.accounts.accounts[key]
+            trades = list(account.trades)
+            marked = account.equity(self._marks())
+            reports[key] = summarize_trades(trades, self.settings.initial_paper_equity, mark=marked)
+            reports[key]["marked_pnl"] = marked - self.settings.initial_paper_equity
             reports[key]["by_regime"] = slice_performance(trades, self.settings.initial_paper_equity)
-            reports[key]["equity"] = self.accounts.accounts[key].equity(self._marks())
+            reports[key]["equity"] = marked
             reports[key]["mode"] = self.strategy_settings[key].mode.value
             reports[key]["enabled"] = self.strategy_settings[key].enabled
         return reports
@@ -955,12 +963,13 @@ class TradingEngine:
         rows = []
         marks = self._marks()
         for key, account in self.accounts.accounts.items():
-            for symbol, position in account.positions.items():
-                mark = marks.get(symbol, position.entry_price)
+            for position in account.positions.values():
+                mark = marks.get(position.symbol, position.entry_price)
                 rows.append(
                     {
+                        "position_id": str(position.position_id),
                         "strategy": key,
-                        "symbol": symbol,
+                        "symbol": position.symbol,
                         "side": position.side.value,
                         "quantity": position.quantity,
                         "entry": position.entry_price,

@@ -8,7 +8,6 @@ from app.config import RiskLimits
 from app.domain.enums import (
     ENGINE_DISABLED,
     ENTRY_THROTTLED,
-    EXISTING_POSITION,
     EXCHANGE_RULES_UNAVAILABLE,
     INSUFFICIENT_LIQUIDITY,
     INSUFFICIENT_MARGIN,
@@ -107,8 +106,6 @@ class RiskEngine:
             reasons.append(PERSISTENCE_UNAVAILABLE)
         if context.market_type == MarketType.SPOT.value and decision.action is Action.SHORT:
             reasons.append(SPOT_SHORT_NOT_SUPPORTED)
-        if context.has_position_on_symbol and not self.limits.allow_pyramiding:
-            reasons.append(EXISTING_POSITION)
         if context.last_entry_at is not None:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:

@@ -17,7 +17,6 @@ from app.service import TradingEngine
 LABELS = {
     "baseline": "BASELINE",
     "baseline_jev": "BASELINE + JEV",
-    "baseline_openai_jev": "BASELINE + OPENAI + JEV",
 }
 
 router = APIRouter()
@@ -138,9 +137,8 @@ async def overview(request: Request) -> dict:
     engine = _engine(request)
     performance = engine.performance()
     cards = []
-    for key, label in LABELS.items():
-        stats = performance[key]
-        cards.append({"key": key, "label": label, **stats})
+    for key, stats in performance.items():
+        cards.append({"key": key, "label": LABELS.get(key, key), **stats})
     return {
         "status": engine.status(),
         "strategies": cards,

@@ -6,11 +6,16 @@ import pytest
 from app.analytics.comparison import compare_strategies
 from app.analytics.performance import summarize_trades
 from app.consensus.engine import consensus_from_decisions
-from app.domain.enums import Action, ConsensusLabel, OperatingMode
+from app.domain.enums import Action, ConsensusLabel, OperatingMode, SignalStatus
 from app.domain.schemas import StrategyDecision, TradeRecord
 
 
-def _decision(strategy: str, action: Action, opportunity) -> StrategyDecision:
+def _decision(
+    strategy: str,
+    action: Action,
+    opportunity,
+    status: SignalStatus = SignalStatus.VALID,
+) -> StrategyDecision:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return StrategyDecision(
         correlation_id=opportunity,
@@ -22,6 +27,7 @@ def _decision(strategy: str, action: Action, opportunity) -> StrategyDecision:
         action=action,
         confidence=0.6,
         reason_codes=[],
+        signal_status=status,
         mode=OperatingMode.PAPER,
     )
 
@@ -79,6 +85,26 @@ def test_consensus_labels():
         _decision("baseline_openai_jev", Action.NO_TRADE, opportunity),
     ]
     assert consensus_from_decisions(quiet).label is ConsensusLabel.NO_CONSENSUS
+    standby = [
+        _decision("baseline", Action.LONG, opportunity),
+        _decision("baseline_jev", Action.LONG, opportunity),
+        _decision("baseline_openai_jev", Action.NO_TRADE, opportunity, SignalStatus.SKIPPED),
+    ]
+    agreed = consensus_from_decisions(standby)
+    assert agreed.label is ConsensusLabel.LONG_2_2
+    assert "baseline_openai_jev" not in agreed.actions
+    partial = [
+        _decision("baseline", Action.LONG, opportunity),
+        _decision("baseline_jev", Action.NO_TRADE, opportunity),
+        _decision("baseline_openai_jev", Action.NO_TRADE, opportunity, SignalStatus.SKIPPED),
+    ]
+    assert consensus_from_decisions(partial).label is ConsensusLabel.NO_CONSENSUS
+    standby_short = [
+        _decision("baseline", Action.SHORT, opportunity),
+        _decision("baseline_jev", Action.SHORT, opportunity),
+        _decision("baseline_openai_jev", Action.NO_TRADE, opportunity, SignalStatus.SKIPPED),
+    ]
+    assert consensus_from_decisions(standby_short).label is ConsensusLabel.SHORT_2_2
 
 
 def test_net_pnl_is_not_gross_and_expectancy_matches_definition():

@@ -90,7 +90,7 @@ Triggers:
 | `app/risk` | Stop estrutural, alvo, custos, RR bruto/líquido, sizing por risco, limites, kill switch. |
 | `app/execution` | Slippage (`fixed_bps`, `spread_based`, `orderbook_based`), paper, live protegido, idempotência. |
 | `app/accounts` | Três contas virtuais com o mesmo capital inicial. |
-| `app/consensus` | 3/3, 2/3, conflito, sem consenso. Não opera. |
+| `app/consensus` | Acordo só entre quem votou: 3/3, 2/3, 2/2 se um ficou skipped, conflito, sem consenso. Não opera. |
 | `app/analytics` | PnL líquido, expectativa, drawdown, Sharpe/Sortino, comparação e ROI de IA quando houver custo real. |
 | `app/events` | `EventBus` sobre `asyncio.Queue`. Troca futura por Redis/Kafka/NATS fica atrás da interface. |
 | `app/db` | SQLAlchemy + Alembic. Memória se não houver `DATABASE_URL`. |

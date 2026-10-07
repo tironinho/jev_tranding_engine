@@ -52,6 +52,8 @@ class ConsensusLabel(StrEnum):
     SHORT_3_3 = "3/3 SHORT"
     LONG_2_3 = "2/3 LONG"
     SHORT_2_3 = "2/3 SHORT"
+    LONG_2_2 = "2/2 LONG"
+    SHORT_2_2 = "2/2 SHORT"
     CONFLICT = "CONFLICT"
     NO_CONSENSUS = "NO_CONSENSUS"
 

@@ -15,4 +15,5 @@ def build_jev_provider(settings: Settings):
         base_url=settings.jev_base_url,
         api_key=settings.jev_api_key,
         model=settings.jev_model,
+        timeout_s=settings.jev_timeout_s,
     )

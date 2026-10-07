@@ -7,7 +7,7 @@ from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBl
 from app.execution.paper import OrderIntent
 from app.domain.enums import OrderType
 from app.providers.jev.real import RealJevProvider
-from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented
+from app.providers.jev.schemas import JevMarketRequest
 from app.providers.openai.prompts import PROMPT_SHA256, get_prompt
 from app.providers.openai.provider import OpenAIProvider
 from app.providers.openai.schemas import MarketState, OpenAIInvalidSchema
@@ -15,7 +15,7 @@ from app.strategies.rules import apply_jev_veto
 from app.config import CombinationConfig
 from app.domain.enums import Action
 from app.providers.jev.schemas import JevAssessment
-from tests.conftest import clock, settings
+from tests.conftest import clock, engine, settings
 
 
 class _BoomClient:
@@ -45,6 +45,14 @@ def _intent():
 
 
 @pytest.mark.asyncio
+async def test_dashboard_cannot_select_live_while_disarmed():
+    eng = engine()
+    with pytest.raises(PermissionError, match="LIVE_LOCKED"):
+        await eng.update_strategy("baseline", enabled=None, mode="live", call_model=None, actor="test")
+    assert eng.strategy_settings["baseline"].mode.value == "paper"
+
+
+@pytest.mark.asyncio
 async def test_live_flags_block_before_any_http():
     cfg = settings(trading_live_enabled=False, allow_real_orders=False, binance_api_key="k", binance_api_secret="s")
     provider = BinanceExecutionProvider(cfg, client=_BoomClient())  # type: ignore[arg-type]
@@ -57,21 +65,60 @@ async def test_live_flags_block_before_any_http():
 
 
 @pytest.mark.asyncio
-async def test_real_jev_does_not_call_network():
+async def test_real_jev_calls_only_the_configured_url():
     source = inspect.getsource(RealJevProvider)
     assert "httpx" not in source
     assert "requests" not in source
     assert "aiohttp" not in source
-    provider = RealJevProvider(prompt_version="jev_market_v1", base_url="https://example.invalid", api_key="x", model="m")
+    assert "https://" not in source
     request = JevMarketRequest(
         prompt_version="jev_market_v1",
         symbol="BTCUSDT",
         market_type="futures",
         timestamp=clock(),
-        features={},
+        features={"ema_alignment": 1},
     )
-    with pytest.raises(JevNotImplemented):
-        await provider.evaluate_market_state(request)
+    missing = RealJevProvider(prompt_version="jev_market_v1", base_url="", api_key="", model="m")
+    with pytest.raises(Exception):
+        await missing.evaluate_market_state(request)
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {
+                "trend_continuation_probability": 0.8,
+                "reversal_probability": 0.2,
+                "buying_pressure_probability": 0.7,
+                "selling_pressure_probability": 0.3,
+                "false_breakout_probability": 0.1,
+                "volatility_expansion_probability": 0.2,
+                "liquidity_sweep_probability": 0.1,
+            }
+
+    class _Client:
+        def __init__(self):
+            self.urls: list[str] = []
+
+        async def post(self, url, headers=None, json=None, timeout=None):
+            self.urls.append(url)
+            assert headers["Authorization"].startswith("Bearer ")
+            assert json["symbol"] == "BTCUSDT"
+            return _Response()
+
+    client = _Client()
+    provider = RealJevProvider(
+        prompt_version="jev_market_v1",
+        base_url="https://jev.example/evaluate",
+        api_key="secret",
+        model="m",
+        client=client,
+    )
+    assessment = await provider.evaluate_market_state(request)
+    assert client.urls == ["https://jev.example/evaluate"]
+    assert assessment.provider == "real"
+    assert assessment.is_mock is False
+    assert assessment.trend_continuation_probability == 0.8
 
 
 def test_prompt_v1_refuses_orders_and_is_locked():

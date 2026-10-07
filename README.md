@@ -15,8 +15,8 @@ A arquitetura está em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - Processo persistente em Python (`asyncio`), com API FastAPI, SSE e Postgres opcional.
 - Coleta pública de mercado Binance (spot ou futures, nunca misturados), com reconnect, backoff e book stale virando `NO_TRADE`.
 - Feature engine explicável, baseline determinística, risk engine, simulador paper e três contas virtuais com o mesmo capital inicial.
-- Jev: interface, schemas, mock determinístico e `RealJevProvider` sem HTTP. Nenhum endpoint do Jev foi inventado.
-- OpenAI: Responses API com JSON Schema. Sem chave, ou com `call_model=false`, a estratégia fica em standby e não gasta.
+- Jev: interface, schemas, mock determinístico e `RealJevProvider`. O real só faz POST na `JEV_BASE_URL` configurada. Sem key e URL, `JEV_PROVIDER=auto` continua no mock.
+- OpenAI: Responses API com JSON Schema. `call_model` nasce ligado na estratégia OpenAI. Sem chave, ela fica em standby e não gasta.
 - Live existe atrás de `TRADING_LIVE_ENABLED` e `ALLOW_REAL_ORDERS`. Os dois vêm `false`. O dashboard não consegue ligar esses flags.
 - Backtest e replay reutilizam feature, estratégia, risco e o simulador.
 
@@ -40,7 +40,7 @@ Segredos ficam só no processo do engine e no servidor Next. Não use prefixo `N
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | Opcionais. Mercado público não precisa. |
 | `OPENAI_API_KEY` / `OPENAI_MODEL` / `OPENAI_PROMPT_VERSION` | Interpretação. Sem chave, a estratégia não chama a API. |
 | `OPENAI_INPUT_USD_PER_1M` / `OPENAI_OUTPUT_USD_PER_1M` | Se vazios, tokens são gravados e o custo fica `null`. |
-| `JEV_*` | Sem documentação oficial o adapter real continua stub. `JEV_PROVIDER=auto` usa mock enquanto key e URL estiverem vazios. |
+| `JEV_*` | `JEV_PROVIDER=auto` usa mock enquanto key e URL estiverem vazios. Com os dois, o POST vai para `JEV_BASE_URL`. |
 | `ENGINE_API_SECRET` | Bearer da API. Obrigatório quando `ENVIRONMENT=production`. |
 | `TRADING_ENGINE_ENABLED` | Kill switch de boot. |
 | `TRADING_LIVE_ENABLED` e `ALLOW_REAL_ORDERS` | Os dois precisam ser `true` para existir ordem real. |
@@ -94,7 +94,7 @@ npm run dev
 
 Abra `http://localhost:3000`. O browser fala só com o Next. O Next chama `ENGINE_API_URL` e anexa `ENGINE_API_SECRET`.
 
-Sem credenciais o processo sobe. Binance privado fica desligado, OpenAI fica sem chamadas, Jev fica em mock ou stub. Isso não derruba a baseline.
+Sem credenciais o processo sobe. Binance privado fica desligado, OpenAI fica sem chamadas, Jev fica no mock. Isso não derruba a baseline.
 
 ## Docker
 
@@ -119,7 +119,7 @@ Spot e futures não são misturados. `market_type` vai no snapshot.
 
 A chamada usa `POST /v1/responses` com `text.format` JSON Schema strict. A resposta passa por Pydantic. JSON inválido vira rejeição, nunca decisão lida de texto livre. O modelo não define quantidade, alavancagem, stop, alvo ou ordem.
 
-`call_model` nasce `false` na estratégia OpenAI. Ligar no dashboard, com chave presente, é o que passa a gastar. O prompt `market_interpreter_v1` não deve ser editado no lugar: crie `market_interpreter_v2`.
+`call_model` nasce `true` na estratégia OpenAI. Sem `OPENAI_API_KEY` a chamada não acontece. O prompt `market_interpreter_v1` não deve ser editado no lugar: crie `market_interpreter_v2`.
 
 O cache de market state existe e fica desligado.
 
@@ -127,7 +127,7 @@ O cache de market state existe e fica desligado.
 
 `JevProvider.evaluate_market_state` devolve `JevAssessment`. `MockJevProvider` é determinístico, marcado `is_mock=true`, e só existe para testar o encanamento. Não é um modelo de mercado.
 
-`RealJevProvider` levanta erro até a documentação oficial existir. A estratégia cai em `NO_TRADE` (default), não na baseline. `FALLBACK_TO_BASELINE` existe na configuração e não é o default.
+`RealJevProvider` envia o `JevMarketRequest` para `JEV_BASE_URL` e exige as probabilidades do `JevAssessment`. URL vazia, HTTP ruim ou JSON inválido caem em `NO_TRADE` (default), não na baseline. `FALLBACK_TO_BASELINE` existe na configuração e não é o default.
 
 ## Modos
 
@@ -138,7 +138,7 @@ O cache de market state existe e fica desligado.
 | `paper` | simula na conta virtual daquela estratégia |
 | `live` | só envia ordem se os dois flags de ambiente e o modo da estratégia estiverem armados |
 
-Default de boot: baseline em paper, as outras duas em shadow, para não gastar OpenAI e para o mock do Jev não parecer execução. Para a comparação de PnL ser justa, coloque as três em paper ao mesmo tempo, com o mesmo capital inicial. Contas já criadas não são zeradas pelo dashboard.
+Default de boot: as três estratégias em paper, com o mesmo capital inicial. Fill é simulado. Ordem real continua impossível sem `TRADING_LIVE_ENABLED` e `ALLOW_REAL_ORDERS`, e o dashboard não consegue marcar `live` enquanto esses flags estiverem desligados. Contas já criadas não são zeradas pelo dashboard.
 
 `STOP ALL TRADING` impede entrada nova, mantém stop e alvo das posições paper já abertas, e grava auditoria. Não fecha posição sozinho.
 

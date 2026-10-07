@@ -185,8 +185,8 @@ def strategies_from_file(payload: dict) -> dict[str, StrategySettings]:
     raw = payload.get("strategies") or {}
     defaults = {
         "baseline": StrategySettings("baseline", True, OperatingMode.PAPER, 2000, False),
-        "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.SHADOW, 4000, True),
-        "baseline_openai_jev": StrategySettings("baseline_openai_jev", True, OperatingMode.SHADOW, 8000, False),
+        "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.PAPER, 4000, True),
+        "baseline_openai_jev": StrategySettings("baseline_openai_jev", True, OperatingMode.PAPER, 8000, True),
     }
     for key, current in defaults.items():
         item = raw.get(key) or {}
@@ -263,6 +263,7 @@ class Settings(BaseSettings):
     jev_model: str = ""
     jev_prompt_version: str = "jev_market_v1"
     jev_failure_policy: str = "NO_TRADE"
+    jev_timeout_s: float = 3.0
     engine_api_secret: str = ""
     environment: str = "development"
     trading_engine_enabled: bool = True

@@ -160,6 +160,8 @@ class TradingEngine:
         self._http = httpx.AsyncClient()
         self.openai.client = self._http
         self.live.client = self._http
+        if getattr(self.jev, "provider_name", "") == "real":
+            self.jev.client = self._http
         if isinstance(self.fee_provider, BinanceFeeProvider):
             self.fee_provider.client = self._http
         if self.postgres is not None:
@@ -210,6 +212,8 @@ class TradingEngine:
 
     async def update_strategy(self, key: str, *, enabled: bool | None, mode: str | None, call_model: bool | None, actor: str) -> dict:
         current = self.strategy_settings[key]
+        if mode == "live" and not self.settings.live_armed:
+            raise PermissionError("LIVE_LOCKED")
         if mode is not None:
             current.mode = OperatingMode(mode)
         if enabled is not None:

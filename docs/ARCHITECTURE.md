@@ -20,7 +20,7 @@ Mercado → Features → Estratégia (ação + confiança + razões)
 
 - Estratégia não define quantidade, risco monetário, stop final, alvo final nem alavancagem.
 - OpenAI não envia ordem, não lê API autenticada da Binance e não altera limites.
-- Jev não envia ordem. Enquanto não houver documentação oficial, só existem interface, schemas, mock e stub.
+- Jev não envia ordem. O adapter real só chama a `JEV_BASE_URL` informada no ambiente. Sem key e URL, o processo usa o mock.
 - O Risk Engine é determinístico. Nenhum LLM o altera em runtime.
 - `LIVE` só atravessa o provider se `TRADING_LIVE_ENABLED`, `ALLOW_REAL_ORDERS` e `mode=live` forem verdadeiros ao mesmo tempo.
 
@@ -32,7 +32,7 @@ Dashboard Next.js  --HTTP/SSE-->  API FastAPI  -->  Trading Engine (processo per
                                                       +--> PostgreSQL (quando DATABASE_URL existe)
                                                       +--> Binance market data (público)
                                                       +--> OpenAI Responses API (opcional)
-                                                      +--> JevProvider (mock ou stub)
+                                                      +--> JevProvider (mock, ou real na URL configurada)
 ```
 
 O engine sobe com o processo (`python main.py` ou Uvicorn). Trabalho de mercado, decisão e execução acontece em workers `asyncio`, não em request/response serverless. A API observa e configura esse processo.
@@ -86,7 +86,7 @@ Triggers:
 | `app/features` | Indicadores explicáveis. Só candles fechados com `close_time <= T` e trades/book com timestamp `<= T`. |
 | `app/strategies` | `score_baseline` único. As outras estratégias reutilizam esse resultado. |
 | `app/providers/openai` | Responses API, JSON Schema, validação Pydantic, custo, timeout, retry, circuit breaker. |
-| `app/providers/jev` | `JevProvider`, `MockJevProvider`, `RealJevProvider` sem HTTP inventado. |
+| `app/providers/jev` | `JevProvider`, `MockJevProvider`, `RealJevProvider` (POST só na URL configurada). |
 | `app/risk` | Stop estrutural, alvo, custos, RR bruto/líquido, sizing por risco, limites, kill switch. |
 | `app/execution` | Slippage (`fixed_bps`, `spread_based`, `orderbook_based`), paper, live protegido, idempotência. |
 | `app/accounts` | Três contas virtuais com o mesmo capital inicial. |
@@ -140,7 +140,7 @@ Versões gravadas em toda decisão:
 - `jev_veto_only_v1`
 - `openai_jev_veto_only_v1`
 - `market_interpreter_v1` (prompt OpenAI; versão nova = chave nova, sem edição silenciosa)
-- `jev_market_v1` (rótulo do prompt Jev, sem endpoint inventado)
+- `jev_market_v1` (rótulo do prompt Jev; o host vem só de `JEV_BASE_URL`)
 
 `score_baseline` produz scores em `[-1, +1]`, um composto e `LONG` / `SHORT` / `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
 
@@ -217,7 +217,7 @@ Autenticação: `Authorization: Bearer $ENGINE_API_SECRET` em tudo que não é h
 
 ## O que esta versão deliberadamente não faz
 
-- Não implementa HTTP do Jev.
+- O HTTP do Jev existe só contra `JEV_BASE_URL`. Não há host padrão no código.
 - Não liga cache agressivo de Market State.
 - Não opera consensus.
 - Não liga trailing, saída parcial ou break-even.

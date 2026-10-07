@@ -81,6 +81,18 @@ async def test_spot_balance_sums_free_and_locked_usdt():
 
 
 @pytest.mark.asyncio
+async def test_margin_wallet_is_not_read_from_the_market_host():
+    provider = BinanceBalanceProvider(
+        settings(binance_api_key="k", binance_api_secret="s", market_type="margin"),
+        client=_Boom(),
+    )
+    payload = await provider.snapshot()
+    assert payload["status"] == "UNAVAILABLE"
+    assert payload["detail"] == "MARGIN_WALLET_NOT_READ"
+    assert payload["wallet"] is None
+
+
+@pytest.mark.asyncio
 async def test_balance_http_error_has_no_invented_wallet():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"code": -2015, "msg": "rejected"})

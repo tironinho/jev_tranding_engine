@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -23,6 +23,7 @@ from app.domain.enums import (
     PERSISTENCE_UNAVAILABLE,
     RISK_REJECTED,
     SPOT_SHORT_NOT_SUPPORTED,
+    TARGET_EXTENDED_FOR_FEES,
     Action,
     MarketType,
 )
@@ -32,6 +33,7 @@ from app.execution.slippage import SlippageConfig, simulate_fill
 from app.market.state import OrderBook
 from app.risk.economics import (
     compute_trade_economics,
+    extend_target_for_costs,
     funding_cashflow,
     funding_periods,
     plan_geometry,
@@ -141,7 +143,7 @@ class RiskEngine:
         entry_rate = rate_for(self._entry_liquidity(), fees.maker, fees.taker)
         exit_rate = rate_for(self._exit_liquidity(), fees.maker, fees.taker)
         exit_slip = entry_guess * (max(probe.slippage_bps, 0) / 10_000)
-        qty = size_quantity(
+        ideal = size_quantity(
             equity=context.equity,
             risk_fraction=min(self.limits.risk_per_trade, self.limits.max_risk_per_trade),
             entry=entry_guess,
@@ -151,24 +153,26 @@ class RiskEngine:
             exit_slippage_per_unit=exit_slip,
         )
         if context.step_size:
-            qty = round_down_to_step(qty, context.step_size)
-        if qty <= 0:
+            ideal = round_down_to_step(ideal, context.step_size)
+        if ideal <= 0:
             return self._reject(decision, [MAX_RISK_PER_TRADE])
+        qty = self._fit_to_capital(ideal, entry_guess, context, entry_rate)
+        if qty <= 0:
+            return self._reject(decision, [self._capital_reason(context, entry_rate)])
 
-        preview = simulate_fill(
-            side=side_book,
-            quantity=qty,
-            best_bid=snapshot.best_bid,
-            best_ask=snapshot.best_ask,
-            book=book,
-            config=self.slippage,
-        )
-        if not preview.fully_filled and not self.limits.allow_partial_entry:
-            return self._reject(decision, [INSUFFICIENT_LIQUIDITY], details={"preview": preview.model_dump()})
-        if preview.filled_quantity <= 0:
+        preview = self._fill(side_book, qty, snapshot, book)
+        if preview is None:
             return self._reject(decision, [INSUFFICIENT_LIQUIDITY])
-        qty = preview.filled_quantity if preview.fully_filled else preview.filled_quantity
         entry = preview.estimated_fill_price
+        refit = self._fit_to_capital(preview.filled_quantity, entry, context, entry_rate)
+        if refit <= 0:
+            return self._reject(decision, [self._capital_reason(context, entry_rate)])
+        if refit + 1e-12 < preview.filled_quantity:
+            preview = self._fill(side_book, refit, snapshot, book)
+            if preview is None:
+                return self._reject(decision, [INSUFFICIENT_LIQUIDITY])
+            entry = preview.estimated_fill_price
+        qty = preview.filled_quantity
         # Re-plan geometry off the actual estimated entry so stop distance matches the fill.
         geometry = plan_geometry(decision.action, entry, snapshot.features, self.limits)
         if isinstance(geometry, str):
@@ -184,6 +188,23 @@ class RiskEngine:
         included = preview.model in {SlippageModelNameValue.ORDERBOOK, SlippageModelNameValue.SPREAD}
         if preview.model == "fixed_bps":
             included = False
+        slip_per_unit = entry * max(preview.slippage_bps, 0) / 10_000
+        target, extended = extend_target_for_costs(
+            side=decision.action,
+            entry=entry,
+            stop=geometry.stop,
+            target=geometry.target,
+            quantity=qty,
+            entry_fee_rate=entry_rate,
+            exit_fee_rate=exit_rate,
+            exit_slippage_per_unit=slip_per_unit,
+            funding_cashflow_total=funding,
+            spread_cost=extra_spread,
+            slippage_cost=extra_slip,
+            min_net_rr=self.limits.min_net_rr,
+        )
+        if extended:
+            geometry = replace(geometry, target=target, reasons=(*geometry.reasons, TARGET_EXTENDED_FOR_FEES))
         economics = compute_trade_economics(
             side=decision.action,
             entry=entry,
@@ -192,7 +213,7 @@ class RiskEngine:
             quantity=qty,
             entry_fee_rate=entry_rate,
             exit_fee_rate=exit_rate,
-            exit_slippage_per_unit=entry * max(preview.slippage_bps, 0) / 10_000,
+            exit_slippage_per_unit=slip_per_unit,
             funding_cashflow_total=funding,
             fee_source=fees.source,
             spread_cost=extra_spread,
@@ -213,9 +234,9 @@ class RiskEngine:
         projected_total = context.total_exposure_notional + notional
         if context.equity <= 0:
             return self._reject(decision, [INSUFFICIENT_MARGIN], economics=economics)
-        if projected_symbol / context.equity > self.limits.max_symbol_exposure:
+        if projected_symbol / context.equity > self.limits.max_symbol_exposure + 1e-6:
             return self._reject(decision, [MAX_SYMBOL_EXPOSURE], economics=economics)
-        if projected_total / context.equity > self.limits.max_total_exposure:
+        if projected_total / context.equity > self.limits.max_total_exposure + 1e-6:
             return self._reject(decision, [MAX_TOTAL_EXPOSURE], economics=economics)
         if notional > context.cash * self.limits.max_leverage + 1e-6:
             return self._reject(decision, [INSUFFICIENT_MARGIN], economics=economics)
@@ -229,6 +250,7 @@ class RiskEngine:
             side=decision.action,
             details={
                 "geometry_reasons": list(geometry.reasons),
+                "quantity_capped": qty + 1e-12 < ideal,
                 "slippage_model": preview.model,
                 "expected_price": preview.expected_price,
                 "slippage_bps": preview.slippage_bps,
@@ -236,6 +258,51 @@ class RiskEngine:
                 "preview_warnings": preview.warnings,
             },
         )
+
+    def _fill(self, side: str, quantity: float, snapshot: MarketSnapshot, book: OrderBook | None):
+        preview = simulate_fill(
+            side=side,
+            quantity=quantity,
+            best_bid=snapshot.best_bid,
+            best_ask=snapshot.best_ask,
+            book=book,
+            config=self.slippage,
+        )
+        if not preview.fully_filled and not self.limits.allow_partial_entry:
+            return None
+        if preview.filled_quantity <= 0 or preview.estimated_fill_price <= 0:
+            return None
+        return preview
+
+    def _capital_room(self, context: RiskContext, entry_fee_rate: float) -> tuple[float, str]:
+        if context.equity <= 0 or context.cash <= 0:
+            return 0.0, INSUFFICIENT_MARGIN
+        symbol_room = context.equity * self.limits.max_symbol_exposure - context.symbol_exposure_notional
+        total_room = context.equity * self.limits.max_total_exposure - context.total_exposure_notional
+        cash_room = context.cash * max(self.limits.max_leverage, 0.0) / (1 + max(entry_fee_rate, 0.0))
+        room, reason = min(
+            (
+                (symbol_room, MAX_SYMBOL_EXPOSURE),
+                (total_room, MAX_TOTAL_EXPOSURE),
+                (cash_room, INSUFFICIENT_MARGIN),
+            ),
+            key=lambda item: item[0],
+        )
+        if room <= 0:
+            return 0.0, reason
+        return room, reason
+
+    def _capital_reason(self, context: RiskContext, entry_fee_rate: float) -> str:
+        return self._capital_room(context, entry_fee_rate)[1]
+
+    def _fit_to_capital(self, qty: float, entry: float, context: RiskContext, entry_fee_rate: float) -> float:
+        room, _reason = self._capital_room(context, entry_fee_rate)
+        if entry <= 0 or room <= 0:
+            return 0.0
+        fitted = min(qty, room / entry)
+        if context.step_size:
+            fitted = round_down_to_step(fitted, context.step_size)
+        return fitted
 
     def _entry_liquidity(self) -> str:
         return "taker" if self.limits.order_style == "market" else "maker"

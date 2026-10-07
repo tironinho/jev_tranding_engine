@@ -65,6 +65,20 @@ async def test_live_flags_block_before_any_http():
 
 
 @pytest.mark.asyncio
+async def test_margin_never_sends_a_live_order():
+    cfg = settings(
+        market_type="margin",
+        trading_live_enabled=True,
+        allow_real_orders=True,
+        binance_api_key="k",
+        binance_api_secret="s",
+    )
+    provider = BinanceExecutionProvider(cfg, client=_BoomClient())  # type: ignore[arg-type]
+    with pytest.raises(LiveExecutionBlocked, match="MARGIN_PAPER_ONLY"):
+        await provider.submit(_intent())
+
+
+@pytest.mark.asyncio
 async def test_real_jev_calls_only_the_configured_url():
     source = inspect.getsource(RealJevProvider)
     assert "httpx" not in source

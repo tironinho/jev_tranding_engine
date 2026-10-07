@@ -10,7 +10,7 @@ from uuid import UUID
 import httpx
 
 from app.config import Settings
-from app.domain.enums import LIVE_LOCKED, NO_CREDENTIALS, OrderStatus, OrderType
+from app.domain.enums import LIVE_LOCKED, MARGIN_PAPER_ONLY, NO_CREDENTIALS, OrderStatus, OrderType
 from app.domain.schemas import OrderRecord
 from app.execution.paper import OrderIntent
 
@@ -36,11 +36,17 @@ class BinanceExecutionProvider:
         self._sent: dict[str, OrderRecord] = {}
 
     def _endpoint(self) -> str:
+        self._block_margin()
         if self.settings.market_type == "spot":
             return f"{self.settings.binance_spot_rest_url}/api/v3/order"
         return f"{self.settings.binance_futures_rest_url}/fapi/v1/order"
 
+    def _block_margin(self) -> None:
+        if self.settings.market_type == "margin":
+            raise LiveExecutionBlocked(MARGIN_PAPER_ONLY)
+
     async def submit(self, intent: OrderIntent) -> OrderRecord:
+        self._block_margin()
         client_id = intent.decision_id.hex
         existing = self._sent.get(client_id)
         if existing is not None:
@@ -64,6 +70,7 @@ class BinanceExecutionProvider:
 
     async def submit_stop(self, intent: OrderIntent, stop_price: float, tick: float | None = None) -> OrderRecord:
         """Resting protective stop. Futures uses closePosition. Spot uses a stop-limit."""
+        self._block_margin()
         client_id = _suffixed(intent.decision_id, "S")
         existing = self._sent.get(client_id)
         if existing is not None:
@@ -103,6 +110,7 @@ class BinanceExecutionProvider:
 
     async def submit_close(self, intent: OrderIntent) -> OrderRecord:
         """Flatten a position this process opened. Does not require the arm flags."""
+        self._block_margin()
         client_id = _suffixed(intent.decision_id, "C")
         existing = self._sent.get(client_id)
         if existing is not None and existing.status is OrderStatus.FILLED:
@@ -124,6 +132,7 @@ class BinanceExecutionProvider:
         return order
 
     async def cancel(self, symbol: str, client_order_id: str) -> None:
+        self._block_margin()
         self._require_credentials()
         await self._signed("DELETE", {"symbol": symbol, "origClientOrderId": client_order_id})
 

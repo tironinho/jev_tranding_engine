@@ -206,3 +206,96 @@ def size_quantity(
     if per_unit <= 0 or max_loss <= 0:
         return 0.0
     return max_loss / per_unit
+
+
+def target_for_min_net_rr(
+    *,
+    side: Action,
+    entry: float,
+    stop: float,
+    quantity: float,
+    entry_fee_rate: float,
+    exit_fee_rate: float,
+    exit_slippage_per_unit: float,
+    funding_cashflow_total: float,
+    spread_cost: float,
+    slippage_cost: float,
+    min_net_rr: float,
+) -> float | None:
+    """Price at which net reward / net risk equals min_net_rr. None when costs make that impossible."""
+    qty = abs(quantity)
+    if qty <= 0 or entry <= 0 or exit_fee_rate >= 1:
+        return None
+    slip = abs(exit_slippage_per_unit) * qty
+    entry_fee = abs(entry) * qty * entry_fee_rate
+    extra = slip + spread_cost + slippage_cost
+    if side is Action.LONG:
+        gross_risk = max(0.0, entry - stop) * qty
+        exit_fee_stop = abs(stop) * qty * exit_fee_rate
+        net_risk = gross_risk + entry_fee + exit_fee_stop + extra - funding_cashflow_total
+        if net_risk <= 0:
+            return None
+        numerator = min_net_rr * net_risk + entry * qty + entry_fee + extra - funding_cashflow_total
+        denom = qty * (1 - exit_fee_rate)
+        if denom <= 0:
+            return None
+        return numerator / denom
+    gross_risk = max(0.0, stop - entry) * qty
+    exit_fee_stop = abs(stop) * qty * exit_fee_rate
+    net_risk = gross_risk + entry_fee + exit_fee_stop + extra - funding_cashflow_total
+    if net_risk <= 0:
+        return None
+    numerator = entry * qty - entry_fee - extra + funding_cashflow_total - min_net_rr * net_risk
+    denom = qty * (1 + exit_fee_rate)
+    if denom <= 0 or numerator <= 0:
+        return None
+    return numerator / denom
+
+
+def extend_target_for_costs(
+    *,
+    side: Action,
+    entry: float,
+    stop: float,
+    target: float,
+    quantity: float,
+    entry_fee_rate: float,
+    exit_fee_rate: float,
+    exit_slippage_per_unit: float,
+    funding_cashflow_total: float,
+    spread_cost: float,
+    slippage_cost: float,
+    min_net_rr: float,
+) -> tuple[float, bool]:
+    """Move the target only far enough to clear costs, and only by at most one round trip.
+
+    A minimum net RR of 50 is a real rejection. A 2.5R target that lands at 1.4996 is the fee on the winner.
+    """
+    required = target_for_min_net_rr(
+        side=side,
+        entry=entry,
+        stop=stop,
+        quantity=quantity,
+        entry_fee_rate=entry_fee_rate,
+        exit_fee_rate=exit_fee_rate,
+        exit_slippage_per_unit=exit_slippage_per_unit,
+        funding_cashflow_total=funding_cashflow_total,
+        spread_cost=spread_cost,
+        slippage_cost=slippage_cost,
+        min_net_rr=min_net_rr * (1 + 1e-5),
+    )
+    if required is None:
+        return target, False
+    slack = abs(entry) * (entry_fee_rate + exit_fee_rate) + abs(exit_slippage_per_unit)
+    cushion = slack + abs(entry) * 1e-6
+    if side is Action.LONG:
+        if required <= target or required <= entry:
+            return target, False
+        if required - target <= cushion:
+            return required, True
+        return target, False
+    if required >= target or required >= entry or required <= 0:
+        return target, False
+    if target - required <= cushion:
+        return required, True
+    return target, False

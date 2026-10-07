@@ -34,6 +34,9 @@ class MarketFeed:
         self._last_ui: dict[str, float] = {}
         self.geo_blocked = False
 
+    def _futures(self) -> bool:
+        return self.settings.market_type == "futures"
+
     def ws_url(self) -> str:
         streams = []
         for symbol in self.settings.symbol_list:
@@ -48,19 +51,19 @@ class MarketFeed:
                     f"{lower}@depth20@100ms",
                 ]
             )
-            if self.settings.market_type == "futures":
+            if self._futures():
                 streams.append(f"{lower}@markPrice@1s")
-        base = self.settings.binance_futures_ws_url if self.settings.market_type == "futures" else self.settings.binance_spot_ws_url
+        base = self.settings.binance_futures_ws_url if self._futures() else self.settings.binance_spot_ws_url
         return f"{base}?streams={'/'.join(streams)}"
 
     def rest_base(self) -> str:
-        if self.settings.market_type == "futures":
+        if self._futures():
             return self.settings.binance_futures_rest_url
         return self.settings.binance_spot_rest_url
 
     async def start(self) -> None:
         self._tasks.append(asyncio.create_task(self._run(), name="market_data_worker"))
-        if self.settings.market_type == "futures":
+        if self._futures():
             self._tasks.append(asyncio.create_task(self._derivatives_loop(), name="derivatives_worker"))
 
     async def stop(self) -> None:
@@ -182,7 +185,7 @@ class MarketFeed:
                 continue
 
     async def _load_rules(self, client: httpx.AsyncClient) -> None:
-        path = "/fapi/v1/exchangeInfo" if self.settings.market_type == "futures" else "/api/v3/exchangeInfo"
+        path = "/fapi/v1/exchangeInfo" if self._futures() else "/api/v3/exchangeInfo"
         payload = await self._get(client, path, {})
         if isinstance(payload, dict):
             self.rules = parse_exchange_filters(payload, set(self.settings.symbol_list))
@@ -210,13 +213,13 @@ class MarketFeed:
         return response.json()
 
     def _kline_path(self) -> str:
-        return "/fapi/v1/klines" if self.settings.market_type == "futures" else "/api/v3/klines"
+        return "/fapi/v1/klines" if self._futures() else "/api/v3/klines"
 
     def _depth_path(self) -> str:
-        return "/fapi/v1/depth" if self.settings.market_type == "futures" else "/api/v3/depth"
+        return "/fapi/v1/depth" if self._futures() else "/api/v3/depth"
 
     def _book_path(self) -> str:
-        return "/fapi/v1/ticker/bookTicker" if self.settings.market_type == "futures" else "/api/v3/ticker/bookTicker"
+        return "/fapi/v1/ticker/bookTicker" if self._futures() else "/api/v3/ticker/bookTicker"
 
     def _apply_rest_depth(self, symbol: str, payload: dict) -> None:
         from app.market.parse import _levels

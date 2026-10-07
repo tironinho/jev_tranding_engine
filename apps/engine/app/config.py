@@ -7,7 +7,7 @@ import yaml
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.domain.enums import OperatingMode, SlippageModelName, TargetMode
+from app.domain.enums import MarketType, OperatingMode, SlippageModelName, TargetMode
 
 
 def discover_config_dir() -> Path:
@@ -330,6 +330,13 @@ class Settings(BaseSettings):
     @property
     def live_armed(self) -> bool:
         return bool(self.trading_live_enabled and self.allow_real_orders)
+
+
+def as_paper_margin(settings: Settings) -> Settings:
+    """Spot cannot short. The same spot book runs as cross margin, and live orders stay off."""
+    if settings.market_type == MarketType.SPOT.value:
+        return settings.model_copy(update={"market_type": MarketType.MARGIN.value})
+    return settings
 
 
 _cached: Settings | None = None

@@ -11,6 +11,7 @@ from app.analytics.comparison import compare_strategies
 from app.analytics.performance import slice_performance, summarize_trades
 from app.config import (
     Settings,
+    as_paper_margin,
     baseline_from_file,
     combination_from_file,
     fees_from_file,
@@ -112,6 +113,7 @@ class FutureReturnLabeler:
 
 class TradingEngine:
     def __init__(self, settings: Settings) -> None:
+        settings = as_paper_margin(settings)
         files = load_file_config()
         self.settings = settings
         self.weights = baseline_from_file(files["baseline"])

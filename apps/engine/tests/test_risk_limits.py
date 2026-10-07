@@ -7,6 +7,7 @@ from app.domain.enums import (
     MAX_OPEN_POSITIONS,
     NET_RR_TOO_LOW,
     SPOT_SHORT_NOT_SUPPORTED,
+    TARGET_EXTENDED_FOR_FEES,
     Action,
 )
 from app.execution.slippage import SlippageConfig
@@ -199,3 +200,59 @@ def test_entry_throttle():
         book,
     )
     assert ENTRY_THROTTLED in rejected.reject_reasons
+
+
+def _order(snapshot, action: Action):
+    from app.domain.enums import OperatingMode
+    from app.domain.schemas import StrategyDecision
+
+    return StrategyDecision(
+        correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        strategy="baseline",
+        symbol="BTCUSDT",
+        timestamp=snapshot.timestamp,
+        action=action,
+        confidence=0.8,
+        reason_codes=["TREND_UP"],
+        mode=OperatingMode.PAPER,
+    )
+
+
+def test_tight_stop_is_sized_to_the_account_and_clears_fees():
+    eng = engine(max_symbol_exposure=0.02)
+    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, resistance_15m=100.05)
+    accepted = eng.risk.evaluate(
+        _order(snapshot, Action.LONG),
+        snapshot,
+        _context(),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert accepted.accepted, accepted.reject_reasons
+    assert accepted.economics is not None
+    assert accepted.economics.net_rr is not None and accepted.economics.net_rr >= 1.5
+    assert accepted.economics.entry * accepted.economics.quantity <= 10_000 * 0.02 * 1.001
+    assert accepted.details["quantity_capped"] is True
+    assert TARGET_EXTENDED_FOR_FEES in accepted.details["geometry_reasons"]
+
+
+def test_margin_short_opens_and_spot_boot_uses_the_spot_book():
+    eng = engine(max_symbol_exposure=0.4, market_type="spot")
+    assert eng.settings.market_type == "margin"
+    assert eng.feed.rest_base() == eng.settings.binance_spot_rest_url
+    assert "fstream" not in eng.feed.ws_url()
+    snapshot, book = long_snapshot()
+    opened = eng.risk.evaluate(
+        _order(snapshot, Action.SHORT),
+        snapshot,
+        _context(market_type="margin"),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert opened.accepted, opened.reject_reasons
+    assert opened.economics is not None
+    assert opened.economics.entry * opened.economics.quantity <= 10_000 * 0.4 * 1.001
+    futures = engine()
+    assert futures.settings.market_type == "futures"

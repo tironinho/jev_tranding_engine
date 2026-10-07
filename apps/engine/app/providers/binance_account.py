@@ -44,6 +44,8 @@ class BinanceBalanceProvider:
             return {**base, "status": "NO_CREDENTIALS"}
         if self.client is None:
             return {**base, "status": "UNAVAILABLE", "detail": "client not started"}
+        if settings.market_type == "margin":
+            return {**base, "status": "UNAVAILABLE", "detail": "MARGIN_WALLET_NOT_READ"}
         signed = _signed(
             settings.binance_api_secret,
             {"timestamp": int(time.time() * 1000), "recvWindow": 5000},

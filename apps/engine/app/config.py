@@ -105,6 +105,7 @@ class RiskLimits:
     max_symbol_exposure: float = 0.40
     max_open_positions: int = 3
     min_net_rr: float = 1.5
+    min_order_notional: float = 50.0
 
 
 @dataclass(frozen=True)
@@ -185,7 +186,7 @@ def strategies_from_file(payload: dict) -> dict[str, StrategySettings]:
     raw = payload.get("strategies") or {}
     defaults = {
         "baseline": StrategySettings("baseline", True, OperatingMode.PAPER, 2000, False),
-        "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.PAPER, 4000, True),
+        "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.PAPER, 12000, True),
         "baseline_openai_jev": StrategySettings("baseline_openai_jev", True, OperatingMode.PAPER, 20000, True),
     }
     for key, current in defaults.items():
@@ -228,6 +229,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_symbol_exposure=settings.max_symbol_exposure,
         max_open_positions=settings.max_open_positions,
         min_net_rr=settings.min_net_rr,
+        min_order_notional=float(payload.get("min_order_notional", 50)),
     )
 
 

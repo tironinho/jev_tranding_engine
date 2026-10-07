@@ -14,7 +14,7 @@ strategies:
   baseline_jev:
     enabled: true
     mode: paper
-    max_signal_age_ms: 4000
+    max_signal_age_ms: 12000
     call_model: true
 
   baseline_openai_jev:

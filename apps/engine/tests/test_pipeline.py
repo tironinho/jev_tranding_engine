@@ -131,7 +131,7 @@ async def test_each_paper_strategy_opens_its_own_book():
 
 
 @pytest.mark.asyncio
-async def test_a_later_signal_opens_another_position_on_the_same_symbol():
+async def test_a_later_signal_does_not_add_to_the_same_symbol():
     eng = engine()
     snapshot, book = long_snapshot()
     attach_book(eng, book)
@@ -143,8 +143,55 @@ async def test_a_later_signal_opens_another_position_on_the_same_symbol():
     later = snapshot.model_copy(update={"timestamp": snapshot.timestamp + timedelta(seconds=61)})
     await eng.evaluate_snapshot(later)
     opened = [item for item in eng.accounts.accounts["baseline"].positions.values() if item.symbol == "BTCUSDT"]
-    assert len(opened) == 2
-    assert first.position_id in {item.position_id for item in opened}
+    assert len(opened) == 1
+    assert opened[0].position_id == first.position_id
+    assert any("EXISTING_POSITION" in risk["reject_reasons"] for risk in eng.store.risks.values())
+
+
+@pytest.mark.asyncio
+async def test_a_scrap_of_capital_does_not_open():
+    eng = engine(max_symbol_exposure=0.004)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    for key, cfg in eng.strategy_settings.items():
+        cfg.mode = OperatingMode.PAPER if key == "baseline" else OperatingMode.SHADOW
+    await eng.evaluate_snapshot(snapshot)
+    assert eng.accounts.accounts["baseline"].positions == {}
+    assert any("ORDER_BELOW_MIN_NOTIONAL" in risk["reject_reasons"] for risk in eng.store.risks.values())
+
+
+@pytest.mark.asyncio
+async def test_an_expired_vote_blocks_the_order():
+    from app.domain.enums import SignalStatus
+    from app.domain.schemas import StrategyDecision
+
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+
+    class Expired:
+        key = "baseline_jev"
+
+        async def evaluate(self, snapshot, features, context):
+            return StrategyDecision(
+                correlation_id=context.correlation_id,
+                opportunity_id=context.opportunity_id,
+                snapshot_id=snapshot.snapshot_id,
+                strategy=self.key,
+                symbol=snapshot.symbol,
+                timestamp=context.now,
+                action=Action.NO_TRADE,
+                confidence=0,
+                reason_codes=["EXPIRED_SIGNAL"],
+                metadata={},
+                mode=context.mode,
+                signal_status=SignalStatus.EXPIRED,
+            )
+
+    eng.strategies["baseline_jev"] = Expired()
+    await eng.evaluate_snapshot(snapshot)
+    assert eng.accounts.accounts["baseline"].positions == {}
+    assert any("VOTES_NOT_ARRIVED" in risk["reject_reasons"] for risk in eng.store.risks.values())
 
 
 @pytest.mark.asyncio

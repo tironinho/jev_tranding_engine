@@ -8,6 +8,7 @@ from app.config import RiskLimits
 from app.domain.enums import (
     ENGINE_DISABLED,
     ENTRY_THROTTLED,
+    EXISTING_POSITION,
     EXCHANGE_RULES_UNAVAILABLE,
     INSUFFICIENT_LIQUIDITY,
     INSUFFICIENT_MARGIN,
@@ -19,6 +20,7 @@ from app.domain.enums import (
     MAX_SYMBOL_EXPOSURE,
     MAX_TOTAL_EXPOSURE,
     NET_RR_TOO_LOW,
+    ORDER_BELOW_MIN_NOTIONAL,
     PERSISTENCE_UNAVAILABLE,
     RISK_REJECTED,
     SPOT_SHORT_NOT_SUPPORTED,
@@ -106,6 +108,8 @@ class RiskEngine:
             reasons.append(PERSISTENCE_UNAVAILABLE)
         if context.market_type == MarketType.SPOT.value and decision.action is Action.SHORT:
             reasons.append(SPOT_SHORT_NOT_SUPPORTED)
+        if context.has_position_on_symbol and not self.limits.allow_pyramiding:
+            reasons.append(EXISTING_POSITION)
         if context.last_entry_at is not None:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:
@@ -170,6 +174,8 @@ class RiskEngine:
                 return self._reject(decision, [INSUFFICIENT_LIQUIDITY])
             entry = preview.estimated_fill_price
         qty = preview.filled_quantity
+        if entry * abs(qty) < self.limits.min_order_notional:
+            return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL])
         # Re-plan geometry off the actual estimated entry so stop distance matches the fill.
         geometry = plan_geometry(decision.action, entry, snapshot.features, self.limits)
         if isinstance(geometry, str):

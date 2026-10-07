@@ -25,7 +25,9 @@ from app.db.postgres import PostgresMirror
 from app.domain.enums import (
     EXPIRED_SIGNAL,
     QUEUE_SATURATED,
+    RISK_REJECTED,
     STRATEGY_ERROR,
+    VOTES_NOT_ARRIVED,
     Action,
     OperatingMode,
     OrderStatus,
@@ -34,7 +36,7 @@ from app.domain.enums import (
     SlippageModelName,
 )
 from app.domain.mathutil import utcnow
-from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, StrategyDecision
+from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, RiskDecision, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, execution_of
 from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed
@@ -374,6 +376,7 @@ class TradingEngine:
             payload = self.store.add_consensus(consensus)
             if self.postgres and self.postgres.healthy:
                 await self.postgres.save_consensus(payload)
+        await self._execute_decisions(decisions, snapshot)
         return decisions
 
     async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id) -> StrategyDecision:
@@ -394,6 +397,8 @@ class TradingEngine:
                 failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
             )
             budget_ms = cfg.max_signal_age_ms
+            if key == "baseline_jev":
+                budget_ms = max(budget_ms, 12_000)
             if key == "baseline_openai_jev":
                 budget_ms = max(budget_ms, int((self.settings.openai_timeout_s + 4) * 1000))
             if waited_ms > budget_ms:
@@ -437,15 +442,49 @@ class TradingEngine:
             if self.postgres and self.postgres.healthy:
                 await self.postgres.save_decision(stored)
             await self.bus.publish(Event("decision", {"decision_id": stored["decision_id"], "strategy": key, "action": decision.action.value}))
-            if decision.action is Action.NO_TRADE or decision.signal_status is not SignalStatus.VALID:
-                return decision
-            if cfg.mode is OperatingMode.SHADOW:
-                return decision
+            return decision
+
+    def _votes_missing(self, decisions: list[StrategyDecision]) -> bool:
+        by_key = {item.strategy: item for item in decisions}
+        for key in STRATEGY_KEYS:
+            cfg = self.strategy_settings[key]
+            if not cfg.enabled or cfg.mode is OperatingMode.DISABLED:
+                continue
+            decision = by_key.get(key)
+            if decision is None or decision.signal_status is SignalStatus.EXPIRED:
+                return True
+        return False
+
+    def _can_execute(self, decision: StrategyDecision) -> bool:
+        cfg = self.strategy_settings.get(decision.strategy)
+        if cfg is None or not cfg.enabled or cfg.mode not in (OperatingMode.PAPER, OperatingMode.LIVE):
+            return False
+        return decision.action is not Action.NO_TRADE and decision.signal_status is SignalStatus.VALID
+
+    async def _execute_decisions(self, decisions: list[StrategyDecision], snapshot: MarketSnapshot) -> None:
+        if self._votes_missing(decisions):
+            for decision in decisions:
+                if not self._can_execute(decision):
+                    continue
+                await self._record_risk(
+                    RiskDecision(
+                        decision_id=decision.decision_id,
+                        correlation_id=decision.correlation_id,
+                        accepted=False,
+                        reject_reasons=[RISK_REJECTED, VOTES_NOT_ARRIVED],
+                        side=decision.action,
+                        details={"risk_rejected": True},
+                    )
+                )
+            return
+        for decision in decisions:
+            if not self._can_execute(decision):
+                continue
+            cfg = self.strategy_settings[decision.strategy]
             if cfg.mode is OperatingMode.PAPER:
                 await self._execute_paper(decision, snapshot)
             elif cfg.mode is OperatingMode.LIVE:
                 await self._execute_live(decision, snapshot)
-            return decision
 
     async def _execute_paper(self, decision: StrategyDecision, snapshot: MarketSnapshot) -> None:
         fees = await self.fee_provider.get_fees(snapshot.symbol)

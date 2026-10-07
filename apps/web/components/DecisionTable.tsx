@@ -69,7 +69,7 @@ export function DecisionTable({ rows }: { rows: Row[] | null }) {
       <table className="w-full text-left text-[11px]">
         <thead className="text-mute">
           <tr className="border-b border-line">
-            {["TIME", "SYMBOL", "BASELINE", "JEV", "OPENAI+JEV", "CONSENSUS", "RISK"].map((head) => (
+            {["TIME", "SYMBOL", "BASELINE", "JEV", "CONSENSUS", "RISK"].map((head) => (
               <th key={head} className="px-2 py-2 font-normal tracking-[0.12em]">
                 {head}
               </th>
@@ -83,7 +83,6 @@ export function DecisionTable({ rows }: { rows: Row[] | null }) {
               <td className="px-2 py-2">{row.symbol}</td>
               <td className="px-2 py-2">{cell(row.strategies.baseline)}</td>
               <td className="px-2 py-2">{cell(row.strategies.baseline_jev)}</td>
-              <td className="px-2 py-2">{cell(row.strategies.baseline_openai_jev)}</td>
               <td className="px-2 py-2 font-mono">{row.consensus?.label ?? "NO DATA"}</td>
               <td className="px-2 py-2 font-mono">{riskCell(row)}</td>
             </tr>

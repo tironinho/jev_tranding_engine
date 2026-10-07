@@ -19,15 +19,13 @@ async def test_same_snapshot_reaches_every_strategy_and_paper_is_isolated():
         cfg.enabled = True
     decisions = await eng.evaluate_snapshot(snapshot)
     by_strategy = {item.strategy: item for item in decisions}
-    assert set(by_strategy) == {"baseline", "baseline_jev", "baseline_openai_jev"}
+    assert set(by_strategy) == {"baseline", "baseline_jev"}
     assert len({item.snapshot_id for item in decisions}) == 1
     assert len({item.opportunity_id for item in decisions}) == 1
     assert by_strategy["baseline"].action is Action.LONG
-    assert by_strategy["baseline_openai_jev"].signal_status.value == "skipped"
     assert by_strategy["baseline"].metadata["scores"] == by_strategy["baseline_jev"].metadata["scores"]
     assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
     assert eng.accounts.accounts["baseline_jev"].positions == {}
-    assert eng.accounts.accounts["baseline_openai_jev"].positions == {}
     assert len(eng.accounts.accounts["baseline"].trades) == 0
 
 
@@ -57,7 +55,6 @@ async def test_duplicate_client_order_does_not_open_two_positions():
     snapshot, book = long_snapshot()
     attach_book(eng, book)
     eng.strategy_settings["baseline_jev"].enabled = False
-    eng.strategy_settings["baseline_openai_jev"].enabled = False
     first = await eng.evaluate_snapshot(snapshot)
     baseline = next(item for item in first if item.strategy == "baseline")
     qty_before = eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity
@@ -127,7 +124,6 @@ async def test_each_paper_strategy_opens_its_own_book():
     assert by_strategy["baseline_jev"].action is Action.LONG
     assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
     assert eng.accounts.accounts["baseline_jev"].sole("BTCUSDT").quantity > 0
-    assert eng.accounts.accounts["baseline_openai_jev"].positions == {}
 
 
 @pytest.mark.asyncio
@@ -224,7 +220,6 @@ async def test_abstain_still_asks_jev_and_does_not_open():
         breakout=False,
     )
     attach_book(eng, book)
-    eng.strategy_settings["baseline_openai_jev"].call_model = True
     decisions = await eng.evaluate_snapshot(snapshot)
     by_strategy = {item.strategy: item for item in decisions}
     jev = by_strategy["baseline_jev"]
@@ -233,8 +228,6 @@ async def test_abstain_still_asks_jev_and_does_not_open():
     assert jev.metadata["jev_effect"] == "assessed"
     assert jev.metadata["baseline_action"] == "NO_TRADE"
     assert isinstance(jev.metadata["jev_continuation"], float)
-    assert by_strategy["baseline_openai_jev"].signal_status.value == "skipped"
-    assert "OPENAI_NOT_CONFIGURED" in by_strategy["baseline_openai_jev"].reason_codes
     assert eng.accounts.accounts["baseline"].positions == {}
     assert eng.accounts.accounts["baseline_jev"].positions == {}
 

@@ -1,8 +1,7 @@
 # Defaults de boot. O dashboard persiste override no banco.
 # Pesos e limiares NÃO foram otimizados. Calibrar com backtest antes de live.
-# As três contas são paper: fill simulado, nunca ordem na Binance.
-# call_model=true gasta OpenAI só quando OPENAI_API_KEY existe.
-# Sem chave a estratégia fica em standby e não inventa decisão.
+# As duas contas são paper: fill simulado, nunca ordem na Binance.
+# A decisão é baseline mais Jev. A OpenAI não entra na conta.
 
 strategies:
   baseline:
@@ -15,12 +14,6 @@ strategies:
     enabled: true
     mode: paper
     max_signal_age_ms: 12000
-    call_model: true
-
-  baseline_openai_jev:
-    enabled: true
-    mode: paper
-    max_signal_age_ms: 20000
     call_model: true
 
 combination:

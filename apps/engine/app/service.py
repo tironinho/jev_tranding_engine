@@ -52,11 +52,11 @@ from app.providers.jev.factory import build_jev_provider
 from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
 from app.risk.engine import RiskContext, RiskEngine
-from app.strategies.runners import BaselineJevStrategy, BaselineOpenAIJevStrategy, BaselineStrategy, StrategyContext
+from app.strategies.runners import BaselineJevStrategy, BaselineStrategy, StrategyContext
 
 log = logging.getLogger(__name__)
 
-STRATEGY_KEYS = ("baseline", "baseline_jev", "baseline_openai_jev")
+STRATEGY_KEYS = ("baseline", "baseline_jev")
 EDITABLE_RISK = (
     "min_net_rr",
     "risk_per_trade",
@@ -158,7 +158,6 @@ class TradingEngine:
         self.strategies = {
             "baseline": BaselineStrategy(),
             "baseline_jev": BaselineJevStrategy(),
-            "baseline_openai_jev": BaselineOpenAIJevStrategy(),
         }
         self.feed = MarketFeed(
             settings,
@@ -997,7 +996,7 @@ class TradingEngine:
         return compare_strategies(
             baseline=self.accounts.accounts["baseline"].trades,
             baseline_jev=self.accounts.accounts["baseline_jev"].trades,
-            openai_jev=self.accounts.accounts["baseline_openai_jev"].trades,
+            openai_jev=[],
             decisions=self.store.decisions,
             openai_cost=cost,
             starting_equity=self.settings.initial_paper_equity,
@@ -1075,8 +1074,7 @@ class TradingEngine:
         openai_status = "not_configured"
         if self.openai.configured():
             openai_status = "open_circuit" if self.openai.breaker.state == "open" else "configured"
-        if not self.strategy_settings["baseline_openai_jev"].call_model:
-            openai_status = f"{openai_status}|calls_off"
+        openai_status = f"{openai_status}|calls_off"
         return {
             "engine": "online",
             "uptime_s": time.monotonic() - self.started_monotonic,

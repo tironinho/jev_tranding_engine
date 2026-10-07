@@ -4,7 +4,29 @@ from app.market.parse import apply_market_message, parse_rest_klines
 from app.market.state import SymbolMarketState
 
 
-def test_agg_trade_buyer_maker_is_aggressive_sell():
+def test_spot_book_ticker_without_event_name_refreshes_the_book():
+    state = SymbolMarketState("BTCUSDT", "spot")
+    payload = {
+        "stream": "btcusdt@bookTicker",
+        "data": {"u": 1, "s": "BTCUSDT", "b": "100", "B": "1", "a": "100.1", "A": "2"},
+    }
+    when = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+    assert apply_market_message(state, payload, when) == "book"
+    assert state.best_bid == 100
+    assert state.last_book_at == when
+
+
+def test_spot_partial_depth_without_symbol_uses_bids_and_asks():
+    state = SymbolMarketState("ETHUSDT", "spot")
+    payload = {
+        "stream": "ethusdt@depth20@100ms",
+        "data": {"lastUpdateId": 1, "bids": [["200", "1"]], "asks": [["201", "1"]]},
+    }
+    when = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+    assert apply_market_message(state, payload, when) == "depth"
+    assert state.best_ask == 201
+    assert state.last_book_at == when
+
     state = SymbolMarketState("BTCUSDT", "futures")
     payload = {
         "stream": "btcusdt@aggTrade",

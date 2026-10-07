@@ -58,6 +58,17 @@ def parse_combined(message: dict) -> dict | None:
     return message
 
 
+def stream_symbol(payload: dict) -> str | None:
+    data = parse_combined(payload) or {}
+    symbol = data.get("s")
+    if isinstance(symbol, str) and symbol:
+        return symbol.upper()
+    stream = payload.get("stream") if isinstance(payload, dict) else None
+    if isinstance(stream, str) and "@" in stream:
+        return stream.split("@", 1)[0].upper()
+    return None
+
+
 def apply_market_message(state, payload: dict, received_at: datetime) -> str | None:
     """Mutate state from one Binance public event. Returns 'kline_close_1m' when a timing bar closes."""
     data = parse_combined(payload)
@@ -67,6 +78,10 @@ def apply_market_message(state, payload: dict, received_at: datetime) -> str | N
     symbol = data.get("s")
     if symbol and symbol != state.symbol:
         return None
+    if event is None and "b" in data and "a" in data and "bids" not in data:
+        event = "bookTicker"
+    if event is None and "bids" in data and "asks" in data:
+        event = "depthUpdate"
     event_time = data.get("E") or data.get("T")
     if isinstance(event_time, (int, float)):
         state.latency_ms = max(0.0, (received_at - _dt_ms(event_time)).total_seconds() * 1000)
@@ -98,8 +113,8 @@ def apply_market_message(state, payload: dict, received_at: datetime) -> str | N
         state.last_event_at = stamp
         return "book"
     if event == "depthUpdate":
-        bids = _levels(data.get("b"))
-        asks = _levels(data.get("a"))
+        bids = _levels(data.get("b") or data.get("bids"))
+        asks = _levels(data.get("a") or data.get("asks"))
         if not bids or not asks or bids[0].price > asks[0].price:
             return None
         stamp = _dt_ms(data.get("T") or data.get("E") or received_at.timestamp() * 1000)

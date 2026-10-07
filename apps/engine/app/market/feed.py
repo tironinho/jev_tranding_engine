@@ -10,7 +10,7 @@ import httpx
 import websockets
 
 from app.config import Settings
-from app.market.parse import apply_market_message, parse_exchange_filters, parse_rest_klines
+from app.market.parse import apply_market_message, parse_exchange_filters, parse_rest_klines, stream_symbol
 from app.resilience.guards import CircuitBreaker, TokenBucket
 
 log = logging.getLogger(__name__)
@@ -112,10 +112,8 @@ class MarketFeed:
                 except json.JSONDecodeError:
                     continue
                 data = payload.get("data") if isinstance(payload, dict) else None
-                symbol = None
-                if isinstance(data, dict):
-                    symbol = data.get("s")
-                if symbol not in self.states:
+                symbol = stream_symbol(payload) if isinstance(payload, dict) else None
+                if not isinstance(data, dict) or symbol not in self.states:
                     continue
                 kind = apply_market_message(self.states[symbol], payload, received)
                 if kind is None:

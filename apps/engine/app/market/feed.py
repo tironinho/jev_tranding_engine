@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -30,6 +31,8 @@ class MarketFeed:
         self.bucket = TokenBucket(rate=4, capacity=8)
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
+        self._last_ui: dict[str, float] = {}
+        self.geo_blocked = False
 
     def ws_url(self) -> str:
         streams = []
@@ -117,10 +120,14 @@ class MarketFeed:
                 kind = apply_market_message(self.states[symbol], payload, received)
                 if kind is None:
                     continue
-                await self.on_ticker(symbol)
-                await self.on_price(symbol, self.states[symbol].last_price, received)
                 if kind == "kline_close_1m" and self.settings.snapshot_trigger == "1m_close":
+                    log.info("1m candle closed %s", symbol)
                     await self.on_trigger(symbol, received, "kline_close_1m")
+                now_m = time.monotonic()
+                if now_m - self._last_ui.get(symbol, 0.0) >= 0.5:
+                    self._last_ui[symbol] = now_m
+                    await self.on_ticker(symbol)
+                    await self.on_price(symbol, self.states[symbol].last_price, received)
 
     async def _bootstrap(self) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -137,6 +144,9 @@ class MarketFeed:
                 ticker = await self._get(client, self._book_path(), {"symbol": symbol})
                 if isinstance(ticker, dict):
                     self._apply_rest_book(symbol, ticker)
+                if self.states[symbol].last_price:
+                    log.info("bootstrap snapshot %s", symbol)
+                    await self.on_trigger(symbol, datetime.now(timezone.utc), "bootstrap")
 
     async def _derivatives_loop(self) -> None:
         while not self._stop.is_set():
@@ -165,8 +175,9 @@ class MarketFeed:
                 raise
             except Exception as exc:
                 log.info("derivatives poll failed: %s", exc)
+            pause = 900 if self.geo_blocked else 30
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=30)
+                await asyncio.wait_for(self._stop.wait(), timeout=pause)
                 return
             except asyncio.TimeoutError:
                 continue
@@ -183,10 +194,19 @@ class MarketFeed:
             if not self.bucket.take():
                 return None
         response = await client.get(f"{self.rest_base()}{path}", params=params)
+        if response.status_code == 451:
+            if not self.geo_blocked:
+                log.warning(
+                    "Binance HTTP 451 on %s. This server region is blocked for futures REST. Funding and open interest stay empty until the service moves to Frankfurt or Singapore.",
+                    path,
+                )
+                self.geo_blocked = True
+            return None
         if response.status_code in {418, 429}:
             self.breaker.record_failure()
             return None
         if response.status_code >= 400:
+            log.info("binance %s %s -> %s", path, params.get("symbol", ""), response.status_code)
             return None
         return response.json()
 

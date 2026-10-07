@@ -80,9 +80,9 @@ class StrategySettings:
 @dataclass(frozen=True)
 class RiskLimits:
     target_mode: TargetMode = TargetMode.STRUCTURE
-    target_fallback: str = "none"
+    target_fallback: str = "rr"
     fixed_target_pct: float = 0.01
-    rr_target_multiple: float = 3.0
+    rr_target_multiple: float = 2.5
     atr_buffer_mult: float = 0.10
     atr_stop_mult: float = 1.5
     max_stop_pct: float = 0.02
@@ -104,7 +104,7 @@ class RiskLimits:
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
     max_open_positions: int = 3
-    min_net_rr: float = 3.0
+    min_net_rr: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -203,9 +203,9 @@ def strategies_from_file(payload: dict) -> dict[str, StrategySettings]:
 def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
     return RiskLimits(
         target_mode=TargetMode(payload.get("target_mode", "structure")),
-        target_fallback=str(payload.get("target_fallback", "none")),
+        target_fallback=str(payload.get("target_fallback", "rr")),
         fixed_target_pct=float(payload.get("fixed_target_pct", 0.01)),
-        rr_target_multiple=float(payload.get("rr_target_multiple", 3.0)),
+        rr_target_multiple=float(payload.get("rr_target_multiple", 2.5)),
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
         atr_stop_mult=float(payload.get("atr_stop_mult", 1.5)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),
@@ -279,7 +279,7 @@ class Settings(BaseSettings):
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
     max_open_positions: int = 3
-    min_net_rr: float = 3.0
+    min_net_rr: float = 1.5
     initial_paper_equity: float = 10_000
     maker_fee_rate: float = 0.0002
     taker_fee_rate: float = 0.0005

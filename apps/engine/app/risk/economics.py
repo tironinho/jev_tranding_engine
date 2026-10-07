@@ -95,12 +95,16 @@ def _target_long(entry: float, distance: float, features: dict, limits: RiskLimi
         return entry * (1 + limits.fixed_target_pct)
     if limits.target_mode.value == "rr":
         return entry + distance * limits.rr_target_multiple
-    # Alvo vem da estrutura de 15 minutos. A máxima de 1 minuto fica no score, não no preço de saída.
+    # Estrutura de 15 minutos só limita o lucro quando paga pelo menos o múltiplo do stop.
+    # Um nível colado na entrada não serve: o alvo vai para esse múltiplo.
+    rr_target = entry + distance * limits.rr_target_multiple
     resistance = features.get("resistance_15m")
     if isinstance(resistance, (int, float)) and float(resistance) > entry:
+        if limits.target_fallback == "rr" and float(resistance) < rr_target:
+            return rr_target
         return float(resistance)
     if limits.target_fallback == "rr":
-        return entry + distance * limits.rr_target_multiple
+        return rr_target
     return NO_STRUCTURE_TARGET
 
 
@@ -109,11 +113,14 @@ def _target_short(entry: float, distance: float, features: dict, limits: RiskLim
         return entry * (1 - limits.fixed_target_pct)
     if limits.target_mode.value == "rr":
         return entry - distance * limits.rr_target_multiple
+    rr_target = entry - distance * limits.rr_target_multiple
     support = features.get("support_15m")
     if isinstance(support, (int, float)) and float(support) < entry:
+        if limits.target_fallback == "rr" and float(support) > rr_target:
+            return rr_target
         return float(support)
     if limits.target_fallback == "rr":
-        return entry - distance * limits.rr_target_multiple
+        return rr_target
     return NO_STRUCTURE_TARGET
 
 

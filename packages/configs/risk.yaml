@@ -2,9 +2,10 @@
 # Alavancagem não aparece no dashboard de propósito.
 
 target_mode: structure
-target_fallback: none
+# Se o nível de 15 minutos paga menos que o múltiplo do stop, o alvo é o múltiplo.
+target_fallback: rr
 fixed_target_pct: 0.01
-rr_target_multiple: 3.0
+rr_target_multiple: 2.5
 atr_buffer_mult: 0.10
 atr_stop_mult: 1.5
 max_stop_pct: 0.03

@@ -36,6 +36,19 @@ def test_15m_target_is_used_when_the_1m_high_is_already_broken():
     assert geometry.target == 110.0
 
 
+def test_nearby_15m_level_does_not_cap_the_winner_below_the_risk_multiple():
+    limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0001, max_stop_pct=0.05)
+    features = {
+        "atr": 1.0,
+        "recent_swing_low": 100.0,
+        "resistance_15m": 101.2,
+        "support_15m": 90.0,
+    }
+    geometry = plan_geometry(Action.LONG, 101.0, features, limits)
+    stop = 100.0 - 0.1
+    assert geometry.target == 101.0 + (101.0 - stop) * 2.5
+
+
 def test_broken_15m_high_still_has_no_invented_target():
     limits = RiskLimits(target_fallback="none", min_stop_pct=0.0001, max_stop_pct=0.05)
     features = {

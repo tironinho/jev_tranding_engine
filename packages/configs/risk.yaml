@@ -1,0 +1,20 @@
+# Limites iniciais conservadores. Não foram otimizados.
+# Alavancagem não aparece no dashboard de propósito.
+
+target_mode: structure
+target_fallback: none
+fixed_target_pct: 0.01
+rr_target_multiple: 3.0
+atr_buffer_mult: 0.10
+atr_stop_mult: 1.5
+max_stop_pct: 0.03
+min_stop_pct: 0.0008
+min_entry_interval_seconds: 60
+allow_pyramiding: false
+max_leverage: 1
+apply_funding: true
+expected_hold_minutes: 15
+funding_interval_minutes: 480
+order_style: market
+allow_partial_entry: false
+limit_ttl_ms: 60000

@@ -1,0 +1,6 @@
+{
+  "name": "shared-types",
+  "private": true,
+  "types": "./src/index.ts",
+  "version": "0.1.0"
+}

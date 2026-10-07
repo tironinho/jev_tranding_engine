@@ -1,0 +1,47 @@
+# Defaults de boot. O dashboard persiste override no banco.
+# Pesos e limiares NÃO foram otimizados. Calibrar com backtest antes de live.
+# call_model=false evita gasto na OpenAI até você ligar no dashboard.
+
+strategies:
+  baseline:
+    enabled: true
+    mode: paper
+    max_signal_age_ms: 2000
+    call_model: false
+
+  baseline_jev:
+    enabled: true
+    mode: shadow
+    max_signal_age_ms: 4000
+    call_model: true
+
+  baseline_openai_jev:
+    enabled: true
+    mode: shadow
+    max_signal_age_ms: 8000
+    # Permanece false até a chave existir e o custo ser aceito.
+    call_model: false
+
+combination:
+  baseline_version: baseline_score_v1
+  jev_rule_version: jev_veto_only_v1
+  openai_rule_version: openai_jev_veto_only_v1
+  # Jev não cria trade que a baseline recusou e não inverte direção.
+  failure_policy: NO_TRADE
+  min_trend_continuation: 0.55
+  max_reversal: 0.50
+  max_false_breakout: 0.55
+  min_pressure_edge: 0.05
+  max_liquidity_sweep: 0.75
+  baseline_weight: 0.65
+  jev_weight: 0.35
+  max_reversal_risk: 0.65
+  max_anomaly: 0.80
+  min_openai_confidence: 0.45
+  block_long_regimes:
+    - bearish_expansion
+    - bearish_exhaustion
+    - breakdown
+  block_short_regimes:
+    - bullish_expansion
+    - breakout

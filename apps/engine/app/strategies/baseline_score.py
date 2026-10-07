@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.config import BaselineWeightConfig
+from app.domain.enums import (
+    ABOVE_VWAP,
+    BAD_SPREAD,
+    BELOW_THRESHOLD,
+    BELOW_VWAP,
+    BREAKDOWN,
+    BREAKOUT,
+    HIGH_VOLUME,
+    HIGH_VOLATILITY,
+    INSUFFICIENT_HISTORY,
+    LOW_LIQUIDITY,
+    NEGATIVE_CVD,
+    POSITIVE_CVD,
+    STALE_MARKET_DATA,
+    STRONG_ASK_IMBALANCE,
+    STRONG_BID_IMBALANCE,
+    TREND_DOWN,
+    TREND_UP,
+    Action,
+)
+from app.domain.mathutil import clip
+from app.domain.schemas import MarketSnapshot
+
+
+@dataclass(frozen=True)
+class BaselineResult:
+    action: Action
+    confidence: float
+    composite: float
+    scores: dict[str, float]
+    reason_codes: list[str]
+    version: str
+
+
+def _num(features: dict, name: str) -> float | None:
+    value = features.get(name)
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> dict[str, float] | None:
+    """Map explainable features into [-1, 1]. Scale constants are not fitted edges."""
+    features = snapshot.features
+    alignment = _num(features, "ema_alignment")
+    slope = _num(features, "ema_20_slope")
+    price_vs = _num(features, "price_vs_ema20")
+    rsi_value = _num(features, "rsi")
+    roc_value = _num(features, "roc")
+    volume_ratio = _num(features, "volume_ratio")
+    volume_z = _num(features, "volume_zscore")
+    delta_ratio = _num(features, "orderflow_delta_ratio")
+    imbalance = _num(features, "imbalance_10")
+    range_pos = _num(features, "range_position")
+    atr_norm = _num(features, "atr_normalized")
+    spread_bps = _num(features, "spread_bps")
+    if None in (alignment, rsi_value, volume_ratio, spread_bps, atr_norm):
+        return None
+
+    slope_n = clip((slope or 0.0) / config.slope_scale, -1, 1)
+    extension_n = clip((price_vs or 0.0) / config.price_vs_ema_scale, -1, 1)
+    trend = clip(0.5 * alignment + 0.3 * slope_n + 0.2 * extension_n, -1, 1)
+
+    rsi_n = clip((rsi_value - 50) / 20, -1, 1)
+    roc_n = clip((roc_value or 0.0) / config.roc_scale, -1, 1)
+    momentum = clip(0.6 * rsi_n + 0.4 * roc_n, -1, 1)
+
+    flow = delta_ratio if delta_ratio is not None else 0.0
+    volume_mag = clip((volume_ratio - 1) / 1.5, -1, 1)
+    volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
+
+    imb = imbalance if imbalance is not None else 0.0
+    orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)
+
+    structure = 0.0
+    if range_pos is not None:
+        structure = clip((range_pos - 0.5) * 2, -1, 1)
+    if features.get("breakout") is True:
+        structure = clip(structure + 0.25, -1, 1)
+    if features.get("breakdown") is True:
+        structure = clip(structure - 0.25, -1, 1)
+
+    if atr_norm >= config.extreme_atr_normalized:
+        volatility = -1.0
+    elif atr_norm >= config.high_atr_normalized:
+        volatility = -0.4
+    else:
+        volatility = clip(1 - (atr_norm / config.high_atr_normalized), 0, 1)
+
+    if spread_bps >= config.max_spread_bps:
+        liquidity = -1.0
+    else:
+        liquidity = clip(1 - (spread_bps / config.max_spread_bps), -1, 1)
+
+    return {
+        "trend_score": trend,
+        "momentum_score": momentum,
+        "volume_score": volume,
+        "orderflow_score": orderflow,
+        "structure_score": structure,
+        "volatility_score": volatility,
+        "liquidity_score": liquidity,
+    }
+
+
+def combine_scores(scores: dict[str, float], config: BaselineWeightConfig) -> float:
+    return (
+        config.trend * scores["trend_score"]
+        + config.momentum * scores["momentum_score"]
+        + config.volume * scores["volume_score"]
+        + config.orderflow * scores["orderflow_score"]
+        + config.structure * scores["structure_score"]
+        + config.volatility * scores["volatility_score"]
+        + config.liquidity * scores["liquidity_score"]
+    )
+
+
+def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> BaselineResult:
+    reasons: list[str] = []
+    if snapshot.data_quality.stale:
+        return BaselineResult(Action.NO_TRADE, 0.0, 0.0, {}, [STALE_MARKET_DATA], config.version)
+    scores = score_components(snapshot, config)
+    if scores is None:
+        return BaselineResult(Action.NO_TRADE, 0.0, 0.0, {}, [INSUFFICIENT_HISTORY], config.version)
+
+    features = snapshot.features
+    spread_bps = float(features.get("spread_bps") or 0)
+    if spread_bps > config.max_spread_bps:
+        reasons.append(BAD_SPREAD)
+    if scores["liquidity_score"] < 0:
+        reasons.append(LOW_LIQUIDITY)
+    atr_norm = float(features.get("atr_normalized") or 0)
+    if atr_norm >= config.extreme_atr_normalized:
+        reasons.append(HIGH_VOLATILITY)
+    volume_ratio = features.get("volume_ratio")
+    if isinstance(volume_ratio, (int, float)) and volume_ratio < config.min_volume_ratio:
+        reasons.append(LOW_LIQUIDITY)
+
+    composite = clip(combine_scores(scores, config), -1, 1)
+    hard_block = {BAD_SPREAD, HIGH_VOLATILITY}
+    if any(code in hard_block for code in reasons) or abs(composite) < config.min_abs_score:
+        if abs(composite) < config.min_abs_score:
+            reasons.append(BELOW_THRESHOLD)
+        return BaselineResult(Action.NO_TRADE, abs(composite), composite, scores, _unique(reasons), config.version)
+
+    action = Action.LONG if composite > 0 else Action.SHORT
+    reasons.extend(_context_reasons(features, action, config))
+    return BaselineResult(action, abs(composite), composite, scores, _unique(reasons), config.version)
+
+
+def _context_reasons(features: dict, action: Action, config: BaselineWeightConfig) -> list[str]:
+    reasons: list[str] = []
+    if action is Action.LONG:
+        reasons.append(TREND_UP)
+    else:
+        reasons.append(TREND_DOWN)
+    distance = features.get("distance_to_vwap")
+    if isinstance(distance, (int, float)):
+        if distance > 0:
+            reasons.append(ABOVE_VWAP)
+        elif distance < 0:
+            reasons.append(BELOW_VWAP)
+    cvd = features.get("cvd_slope")
+    if isinstance(cvd, (int, float)):
+        reasons.append(POSITIVE_CVD if cvd > 0 else NEGATIVE_CVD)
+    imbalance = features.get("imbalance_10")
+    if isinstance(imbalance, (int, float)) and abs(imbalance) >= config.imbalance_strong:
+        reasons.append(STRONG_BID_IMBALANCE if imbalance > 0 else STRONG_ASK_IMBALANCE)
+    volume_z = features.get("volume_zscore")
+    if isinstance(volume_z, (int, float)) and volume_z >= config.volume_z_strong:
+        reasons.append(HIGH_VOLUME)
+    if features.get("breakout") is True:
+        reasons.append(BREAKOUT)
+    if features.get("breakdown") is True:
+        reasons.append(BREAKDOWN)
+    return reasons
+
+
+def _unique(reasons: list[str]) -> list[str]:
+    seen: list[str] = []
+    for reason in reasons:
+        if reason not in seen:
+            seen.append(reason)
+    return seen

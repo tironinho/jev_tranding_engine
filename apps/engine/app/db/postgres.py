@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import ssl
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -50,6 +52,31 @@ def to_sync_url(url: str) -> str:
     return url
 
 
+def prepare_asyncpg(url: str) -> tuple[str, dict]:
+    """asyncpg rejects libpq parameters such as sslmode and channel_binding."""
+    rewritten = to_async_url(url)
+    parts = urlsplit(rewritten)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    ssl_on = False
+    kept: list[tuple[str, str]] = []
+    for key, value in query:
+        if key in {"sslmode", "ssl"}:
+            if value.lower() not in {"disable", "false", "allow"}:
+                ssl_on = True
+            continue
+        if key == "channel_binding":
+            continue
+        kept.append((key, value))
+    cleaned = urlunsplit(parts._replace(query=urlencode(kept)))
+    connect_args: dict = {}
+    if ssl_on:
+        connect_args["ssl"] = ssl.create_default_context()
+    host = parts.hostname or ""
+    if "-pooler." in host:
+        connect_args["statement_cache_size"] = 0
+    return cleaned, connect_args
+
+
 class PostgresMirror:
     """Best-effort durable copy. Reads stay on the in-memory store for the live API."""
 
@@ -61,7 +88,8 @@ class PostgresMirror:
 
     async def connect(self) -> bool:
         try:
-            engine = create_async_engine(to_async_url(self.url), pool_pre_ping=True)
+            async_url, connect_args = prepare_asyncpg(self.url)
+            engine = create_async_engine(async_url, pool_pre_ping=True, connect_args=connect_args)
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             self.factory = async_sessionmaker(engine, expire_on_commit=False)

@@ -88,6 +88,7 @@ class RiskLimits:
     max_stop_pct: float = 0.02
     min_stop_pct: float = 0.0008
     min_entry_interval_seconds: int = 60
+    max_hold_minutes: int = 60
     allow_pyramiding: bool = False
     max_leverage: float = 1.0
     apply_funding: bool = True
@@ -210,6 +211,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),
         min_stop_pct=float(payload.get("min_stop_pct", 0.0008)),
         min_entry_interval_seconds=int(payload.get("min_entry_interval_seconds", 60)),
+        max_hold_minutes=int(payload.get("max_hold_minutes", 60)),
         allow_pyramiding=bool(payload.get("allow_pyramiding", False)),
         max_leverage=float(payload.get("max_leverage", 1)),
         apply_funding=bool(payload.get("apply_funding", True)),

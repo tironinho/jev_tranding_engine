@@ -34,7 +34,7 @@ from app.domain.mathutil import utcnow
 from app.domain.schemas import AuditRecord, MarketSnapshot, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked
-from app.execution.paper import OrderIntent, PaperExecutionProvider, exit_reason
+from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
@@ -482,7 +482,16 @@ class TradingEngine:
         if position is None or state.last_price is None:
             return
         self.accounts.update_excursion(key, symbol, state.last_price)
-        reason = exit_reason(position.side, state.best_bid, state.best_ask, position.stop, position.target)
+        hold_minutes = (utcnow() - position.opened_at).total_seconds() / 60
+        reason = position_exit(
+            position.side,
+            state.best_bid,
+            state.best_ask,
+            position.stop,
+            position.target,
+            hold_minutes,
+            self.risk.limits.max_hold_minutes,
+        )
         if reason is None:
             return
         side = "SELL" if position.side is Action.LONG else "BUY"

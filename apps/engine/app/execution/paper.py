@@ -173,3 +173,21 @@ def exit_reason(side: Action, bid: float | None, ask: float | None, stop: float,
         if ask <= target:
             return "TARGET"
     return None
+
+
+def position_exit(
+    side: Action,
+    bid: float | None,
+    ask: float | None,
+    stop: float,
+    target: float,
+    hold_minutes: float,
+    max_hold_minutes: int,
+) -> str | None:
+    """Price exits win over the clock. Time exit is an explicit rule, not a kill switch."""
+    reason = exit_reason(side, bid, ask, stop, target)
+    if reason is not None:
+        return reason
+    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
+        return "TIME"
+    return None

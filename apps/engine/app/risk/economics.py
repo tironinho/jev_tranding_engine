@@ -95,7 +95,8 @@ def _target_long(entry: float, distance: float, features: dict, limits: RiskLimi
         return entry * (1 + limits.fixed_target_pct)
     if limits.target_mode.value == "rr":
         return entry + distance * limits.rr_target_multiple
-    resistance = features.get("resistance")
+    # Alvo vem da estrutura de 15 minutos. A máxima de 1 minuto fica no score, não no preço de saída.
+    resistance = features.get("resistance_15m")
     if isinstance(resistance, (int, float)) and float(resistance) > entry:
         return float(resistance)
     if limits.target_fallback == "rr":
@@ -108,7 +109,7 @@ def _target_short(entry: float, distance: float, features: dict, limits: RiskLim
         return entry * (1 - limits.fixed_target_pct)
     if limits.target_mode.value == "rr":
         return entry - distance * limits.rr_target_multiple
-    support = features.get("support")
+    support = features.get("support_15m")
     if isinstance(support, (int, float)) and float(support) < entry:
         return float(support)
     if limits.target_fallback == "rr":

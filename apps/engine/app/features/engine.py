@@ -303,6 +303,15 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["ema_20_5m"] = ema(context_closes_5, 20)
     features["ema_20_15m"] = ema(context_closes_15, 20)
     features["context_15m_slope"] = ema_slope(context_closes_15, 20)
+    highs_15 = [candle.high for candle in candles_15m]
+    lows_15 = [candle.low for candle in candles_15m]
+    if len(highs_15) >= 21:
+        # Prior 20 closed 15m bars, excluding the latest closed bar, so a break of that bar is not its own target.
+        features["resistance_15m"] = max(highs_15[-21:-1])
+        features["support_15m"] = min(lows_15[-21:-1])
+    else:
+        features["resistance_15m"] = None
+        features["support_15m"] = None
     features["setup_5m_return"] = (
         (context_closes_5[-1] / context_closes_5[-2] - 1) if len(context_closes_5) >= 2 and context_closes_5[-2] else None
     )

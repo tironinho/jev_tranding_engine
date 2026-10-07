@@ -86,24 +86,30 @@ async def test_real_jev_calls_only_the_configured_url():
         status_code = 200
 
         def json(self):
-            return {
-                "trend_continuation_probability": 0.8,
-                "reversal_probability": 0.2,
-                "buying_pressure_probability": 0.7,
-                "selling_pressure_probability": 0.3,
-                "false_breakout_probability": 0.1,
-                "volatility_expansion_probability": 0.2,
-                "liquidity_sweep_probability": 0.1,
-            }
+            names = (
+                "trend_continuation_probability",
+                "reversal_probability",
+                "buying_pressure_probability",
+                "selling_pressure_probability",
+                "false_breakout_probability",
+                "volatility_expansion_probability",
+                "liquidity_sweep_probability",
+            )
+            return {"model": "jev-1.13.0", "answers": {name: {"type": "noul", "noul": 0.8 if name.startswith("trend") else 0.2} for name in names}}
 
     class _Client:
         def __init__(self):
             self.urls: list[str] = []
+            self.body: dict | None = None
 
         async def post(self, url, headers=None, json=None, timeout=None):
             self.urls.append(url)
+            self.body = json
             assert headers["Authorization"].startswith("Bearer ")
-            assert json["symbol"] == "BTCUSDT"
+            assert json["model"] == "m"
+            assert json["state"]["symbol"] == "BTCUSDT"
+            assert json["questions"]["trend_continuation_probability"]["type"] == "noul"
+            assert "symbol" not in json
             return _Response()
 
     client = _Client()

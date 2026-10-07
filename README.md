@@ -127,7 +127,7 @@ O cache de market state existe e fica desligado.
 
 `JevProvider.evaluate_market_state` devolve `JevAssessment`. `MockJevProvider` é determinístico, marcado `is_mock=true`, e só existe para testar o encanamento. Não é um modelo de mercado.
 
-`RealJevProvider` envia o `JevMarketRequest` para `JEV_BASE_URL` e exige as probabilidades do `JevAssessment`. URL vazia, HTTP ruim ou JSON inválido caem em `NO_TRADE` (default), não na baseline. `FALLBACK_TO_BASELINE` existe na configuração e não é o default.
+`RealJevProvider` faz `POST` em `JEV_BASE_URL` no formato TypeSafe System One (`model`, `state`, sete perguntas `noul`). Cada `answers.*.noul` alimenta o veto. URL vazia, HTTP ruim ou JSON sem `noul` caem em `NO_TRADE` (default), não na baseline. `FALLBACK_TO_BASELINE` existe na configuração e não é o default.
 
 ## Modos
 

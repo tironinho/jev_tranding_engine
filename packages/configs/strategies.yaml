@@ -31,7 +31,8 @@ combination:
   failure_policy: NO_TRADE
   min_trend_continuation: 0.55
   max_reversal: 0.50
-  max_false_breakout: 0.55
+  # Noul near 0.5 is uncertainty. A false-breakout veto needs a clear yes, and only when a breakout exists.
+  max_false_breakout: 0.80
   min_pressure_edge: 0.05
   max_liquidity_sweep: 0.75
   baseline_weight: 0.65

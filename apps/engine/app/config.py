@@ -52,7 +52,7 @@ class CombinationConfig:
     failure_policy: str = "NO_TRADE"
     min_trend_continuation: float = 0.55
     max_reversal: float = 0.50
-    max_false_breakout: float = 0.55
+    max_false_breakout: float = 0.80
     min_pressure_edge: float = 0.05
     max_liquidity_sweep: float = 0.75
     baseline_weight: float = 0.65
@@ -168,7 +168,7 @@ def combination_from_file(payload: dict) -> CombinationConfig:
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
         max_reversal=float(payload.get("max_reversal", 0.50)),
-        max_false_breakout=float(payload.get("max_false_breakout", 0.55)),
+        max_false_breakout=float(payload.get("max_false_breakout", 0.80)),
         min_pressure_edge=float(payload.get("min_pressure_edge", 0.05)),
         max_liquidity_sweep=float(payload.get("max_liquidity_sweep", 0.75)),
         baseline_weight=float(payload.get("baseline_weight", 0.65)),

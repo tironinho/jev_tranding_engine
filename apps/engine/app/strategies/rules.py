@@ -30,7 +30,7 @@ def apply_jev_veto(
         reasons.append(JEV_LOW_CONTINUATION)
     if assessment.reversal_probability > config.max_reversal:
         reasons.append(JEV_HIGH_REVERSAL)
-    if assessment.false_breakout_probability > config.max_false_breakout:
+    if breakout and assessment.false_breakout_probability > config.max_false_breakout:
         reasons.append(JEV_FALSE_BREAKOUT)
     if action is Action.LONG:
         edge = assessment.buying_pressure_probability - assessment.selling_pressure_probability

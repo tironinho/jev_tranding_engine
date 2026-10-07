@@ -172,6 +172,13 @@ def test_jev_veto_is_explicit():
     action, _confidence, reasons = apply_jev_veto(Action.LONG, 0.8, assessment, CombinationConfig(), False)
     assert action is Action.NO_TRADE
     assert reasons
+    unsure = assessment.model_copy(update={"trend_continuation_probability": 0.9, "reversal_probability": 0.2, "buying_pressure_probability": 0.8, "selling_pressure_probability": 0.1, "false_breakout_probability": 0.6})
+    kept, _, kept_reasons = apply_jev_veto(Action.LONG, 0.8, unsure, CombinationConfig(), False)
+    assert kept is Action.LONG
+    assert "JEV_FALSE_BREAKOUT" not in kept_reasons
+    vetoed, _, veto_reasons = apply_jev_veto(Action.LONG, 0.8, unsure.model_copy(update={"false_breakout_probability": 0.9}), CombinationConfig(), True)
+    assert vetoed is Action.NO_TRADE
+    assert "JEV_FALSE_BREAKOUT" in veto_reasons
 
 
 @pytest.mark.asyncio

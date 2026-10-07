@@ -103,7 +103,7 @@ docker compose up -d postgres
 docker compose --profile full up --build engine
 ```
 
-O Dockerfile está em `infra/docker/engine.Dockerfile`.
+O Dockerfile do engine fica na raiz do repositório (`Dockerfile`), que é o caminho que a Render usa por padrão. O contexto de build também é a raiz.
 
 ## Binance
 
@@ -162,7 +162,7 @@ Cobrem fees, RR líquido, sizing, slippage, limites, drawdown, staleness, isolam
 ## Deploy
 
 - Frontend: Vercel, root `apps/web`. Defina `ENGINE_API_URL` e `ENGINE_API_SECRET` como variáveis de servidor, nunca públicas.
-- Engine: imagem em `infra/docker/engine.Dockerfile`, processo contínuo. Filesystem de PaaS é efêmero; o estado que importa está no Postgres.
+- Engine: `Dockerfile` na raiz, processo contínuo. Filesystem de PaaS é efêmero; o estado que importa está no Postgres.
 - Um tier que dorme depois de inatividade não serve para o websocket de mercado.
 
 ## Segurança

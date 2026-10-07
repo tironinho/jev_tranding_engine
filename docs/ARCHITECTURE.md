@@ -203,7 +203,7 @@ Autenticação: `Authorization: Bearer $ENGINE_API_SECRET` em tudo que não é h
 ## Deployment
 
 - Frontend: `apps/web`, Next.js, variável de servidor `ENGINE_API_URL` + `ENGINE_API_SECRET`.
-- Engine: `infra/docker/engine.Dockerfile`, `docker compose up -d postgres`, processo `python main.py`.
+- Engine: `Dockerfile` na raiz do repositório, `docker compose up -d postgres`, processo `python main.py`.
 - Filesystem do engine em PaaS é efêmero. Estado que importa está em Postgres, não em disco local.
 - Free tier que dorme não serve para o coletor websocket. O engine precisa de processo contínuo.
 

@@ -19,7 +19,7 @@ services:
     profiles: ["full"]
     build:
       context: .
-      dockerfile: infra/docker/engine.Dockerfile
+      dockerfile: Dockerfile
     env_file:
       - .env
     environment:

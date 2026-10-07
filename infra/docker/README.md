@@ -1,6 +1,6 @@
 # Docker
 
-O Dockerfile do engine é `engine.Dockerfile`. O contexto de build é a raiz do repositório.
+O Dockerfile que a Render e o Compose usam é o da raiz do repositório, `Dockerfile`. O contexto de build é a raiz. `engine.Dockerfile` permanece como cópia do mesmo arquivo.
 
 Postgres apenas:
 

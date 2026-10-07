@@ -1,6 +1,6 @@
 import { Empty, Panel } from "@/components/Shell";
 import { engineFetch } from "@/lib/engine";
-import { money, num, shortTime, sidePnl, signedClass } from "@/lib/utils";
+import { money, num, pct, shortTime, sidePnl, signedClass } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -46,10 +46,25 @@ export default async function TradesPage({
       sum.notional += trade.entry_price * qty;
       sum.target += sidePnl(trade.side, trade.entry_price, trade.target, qty);
       sum.stop += sidePnl(trade.side, trade.entry_price, trade.stop, qty);
+      if (trade.net_pnl > 0) {
+        sum.wins += 1;
+        sum.winNet += trade.net_pnl;
+      } else if (trade.net_pnl < 0) {
+        sum.losses += 1;
+        sum.lossNet += trade.net_pnl;
+      }
+      if (trade.r_multiple != null) {
+        sum.rSum += trade.r_multiple;
+        sum.rCount += 1;
+      }
       return sum;
     },
-    { net: 0, gross: 0, notional: 0, target: 0, stop: 0 },
+    { net: 0, gross: 0, notional: 0, target: 0, stop: 0, wins: 0, losses: 0, winNet: 0, lossNet: 0, rSum: 0, rCount: 0 },
   );
+  const count = rows?.length ?? 0;
+  const winRate = totals && count ? totals.wins / count : null;
+  const profitFactor = totals && Math.abs(totals.lossNet) > 0 ? totals.winNet / Math.abs(totals.lossNet) : null;
+  const expectancyR = totals && totals.rCount ? totals.rSum / totals.rCount : null;
   return (
     <div className="grid gap-3">
       <form className="flex flex-wrap gap-2 text-xs">
@@ -63,6 +78,32 @@ export default async function TradesPage({
       <Panel title="TRADES — DINHEIRO SIMULADO">
         {!rows ? <Empty /> : !rows.length ? <Empty /> : (
           <div className="overflow-x-auto">
+            <dl className="mb-3 grid grid-cols-2 gap-3 text-[11px] md:grid-cols-6">
+              <div>
+                <dt className="text-mute">TRADES</dt>
+                <dd className="font-mono">{count}</dd>
+              </div>
+              <div>
+                <dt className="text-mute">WINS</dt>
+                <dd className="font-mono">{totals?.wins ?? 0}</dd>
+              </div>
+              <div>
+                <dt className="text-mute">LOSSES</dt>
+                <dd className="font-mono">{totals?.losses ?? 0}</dd>
+              </div>
+              <div>
+                <dt className="text-mute">WIN RATE</dt>
+                <dd className="font-mono">{pct(winRate)}</dd>
+              </div>
+              <div>
+                <dt className="text-mute">PROFIT FACTOR</dt>
+                <dd className="font-mono">{profitFactor == null ? "NO DATA" : num(profitFactor, 2)}</dd>
+              </div>
+              <div>
+                <dt className="text-mute">EXPECTANCY</dt>
+                <dd className={`font-mono ${signedClass(expectancyR)}`}>{expectancyR == null ? "NO DATA" : `${num(expectancyR, 2)} R`}</dd>
+              </div>
+            </dl>
             <dl className="mb-3 grid grid-cols-2 gap-3 text-[11px] md:grid-cols-5">
               <div>
                 <dt className="text-mute">REALIZED NET</dt>

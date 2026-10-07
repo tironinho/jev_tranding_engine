@@ -49,6 +49,16 @@ def test_nearby_15m_level_does_not_cap_the_winner_below_the_risk_multiple():
     assert geometry.target == 101.0 + (101.0 - stop) * 2.5
 
 
+def test_a_stop_tighter_than_the_minimum_is_widened_instead_of_rejected():
+    from app.domain.enums import STOP_WIDENED_TO_MIN
+
+    limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0025, max_stop_pct=0.05)
+    features = {"atr": 0.01, "recent_swing_low": 99.99, "resistance_15m": 100.05}
+    geometry = plan_geometry(Action.LONG, 100.0, features, limits)
+    assert geometry.stop == 100.0 * (1 - 0.0025)
+    assert STOP_WIDENED_TO_MIN in geometry.reasons
+
+
 def test_broken_15m_high_still_has_no_invented_target():
     limits = RiskLimits(target_fallback="none", min_stop_pct=0.0001, max_stop_pct=0.05)
     features = {

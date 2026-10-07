@@ -7,6 +7,7 @@ from app.domain.enums import (
     NO_STRUCTURE_TARGET,
     STOP_ATR_FALLBACK,
     STOP_TOO_TIGHT,
+    STOP_WIDENED_TO_MIN,
     STOP_TOO_WIDE,
     Action,
 )
@@ -66,7 +67,9 @@ def plan_geometry(
         if distance / entry > limits.max_stop_pct:
             return STOP_TOO_WIDE
         if distance / entry < limits.min_stop_pct:
-            return STOP_TOO_TIGHT
+            structural = entry * (1 - limits.min_stop_pct)
+            distance = entry - structural
+            reasons.append(STOP_WIDENED_TO_MIN)
         target = _target_long(entry, distance, features, limits)
         if isinstance(target, str):
             return target
@@ -83,7 +86,9 @@ def plan_geometry(
     if distance / entry > limits.max_stop_pct:
         return STOP_TOO_WIDE
     if distance / entry < limits.min_stop_pct:
-        return STOP_TOO_TIGHT
+        structural = entry * (1 + limits.min_stop_pct)
+        distance = structural - entry
+        reasons.append(STOP_WIDENED_TO_MIN)
     target = _target_short(entry, distance, features, limits)
     if isinstance(target, str):
         return target

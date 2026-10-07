@@ -9,7 +9,8 @@ rr_target_multiple: 2.5
 atr_buffer_mult: 0.10
 atr_stop_mult: 1.5
 max_stop_pct: 0.03
-min_stop_pct: 0.0008
+# Stop mais curto que a taxa não paga. 0,25% deixa o múltiplo de 2,5 cobrir o custo.
+min_stop_pct: 0.0025
 min_entry_interval_seconds: 60
 # Saída explícita por tempo. Sinal de 1 minuto mirando nível de 15 minutos não fica aberto por horas.
 max_hold_minutes: 60

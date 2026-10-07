@@ -86,7 +86,7 @@ class RiskLimits:
     atr_buffer_mult: float = 0.10
     atr_stop_mult: float = 1.5
     max_stop_pct: float = 0.02
-    min_stop_pct: float = 0.0008
+    min_stop_pct: float = 0.0025
     min_entry_interval_seconds: int = 60
     max_hold_minutes: int = 60
     allow_pyramiding: bool = False
@@ -209,7 +209,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
         atr_stop_mult=float(payload.get("atr_stop_mult", 1.5)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),
-        min_stop_pct=float(payload.get("min_stop_pct", 0.0008)),
+        min_stop_pct=float(payload.get("min_stop_pct", 0.0025)),
         min_entry_interval_seconds=int(payload.get("min_entry_interval_seconds", 60)),
         max_hold_minutes=int(payload.get("max_hold_minutes", 60)),
         allow_pyramiding=bool(payload.get("allow_pyramiding", False)),

@@ -121,11 +121,12 @@ class MarketFeed:
                 if kind == "kline_close_1m" and self.settings.snapshot_trigger == "1m_close":
                     log.info("1m candle closed %s", symbol)
                     await self.on_trigger(symbol, received, "kline_close_1m")
+                if kind in {"book", "depth", "trade", "kline", "kline_close_1m"}:
+                    await self.on_price(symbol, self.states[symbol].last_price, received)
                 now_m = time.monotonic()
                 if now_m - self._last_ui.get(symbol, 0.0) >= 0.5:
                     self._last_ui[symbol] = now_m
                     await self.on_ticker(symbol)
-                    await self.on_price(symbol, self.states[symbol].last_price, received)
 
     async def _bootstrap(self) -> None:
         async with httpx.AsyncClient(timeout=10) as client:

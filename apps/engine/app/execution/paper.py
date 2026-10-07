@@ -191,3 +191,31 @@ def position_exit(
     if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
         return "TIME"
     return None
+
+
+def position_exit_observed(
+    side: Action,
+    *,
+    min_bid: float | None,
+    max_bid: float | None,
+    min_ask: float | None,
+    max_ask: float | None,
+    stop: float,
+    target: float,
+    hold_minutes: float,
+    max_hold_minutes: int,
+) -> str | None:
+    """Stop uses the worst touch since the last check. Target uses the best. Clock is last."""
+    if side is Action.LONG:
+        if min_bid is not None and min_bid <= stop:
+            return "STOP"
+        if max_bid is not None and max_bid >= target:
+            return "TARGET"
+    if side is Action.SHORT:
+        if max_ask is not None and max_ask >= stop:
+            return "STOP"
+        if min_ask is not None and min_ask <= target:
+            return "TARGET"
+    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
+        return "TIME"
+    return None

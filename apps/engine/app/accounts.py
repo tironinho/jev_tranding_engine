@@ -87,6 +87,12 @@ class AccountBook:
         entry_fee: float,
         initial_net_risk: float,
         margin: float,
+        exit_fee_rate: float = 0,
+        fee_source: str = "config",
+        quantitative_regime: str | None = None,
+        market_regime: str | None = None,
+        mode: str = "paper",
+        stop_client_order_id: str | None = None,
     ) -> PositionRecord:
         account = self.accounts[strategy]
         account.cash -= entry_fee
@@ -105,6 +111,12 @@ class AccountBook:
             decision_id=decision_id,
             entry_fee=entry_fee,
             initial_net_risk=initial_net_risk,
+            exit_fee_rate=exit_fee_rate,
+            fee_source=fee_source,
+            quantitative_regime=quantitative_regime,
+            market_regime=market_regime,
+            mode=mode,  # type: ignore[arg-type]
+            stop_client_order_id=stop_client_order_id,
         )
         account.positions[symbol] = position
         account.last_entry_at = opened_at
@@ -181,3 +193,63 @@ class AccountBook:
         equity = account.equity({})
         account.equity_points.append({"t": closed_at.isoformat(), "equity": equity, "mark": False})
         return trade
+
+    def export_state(self, marks: dict[str, float] | None = None) -> dict[str, dict]:
+        marked = marks or {}
+        return {key: self.export_strategy(key, marked) for key in self.accounts}
+
+    def export_strategy(self, strategy: str, marks: dict[str, float] | None = None) -> dict:
+        account = self.accounts[strategy]
+        marked = marks or {}
+        return {
+            "strategy": strategy,
+            "cash": account.cash,
+            "day_start_equity": account.day_start_equity,
+            "day_key": account.day_key,
+            "realized_pnl_today": account.realized_pnl_today,
+            "last_entry_at": account.last_entry_at.isoformat() if account.last_entry_at else None,
+            "margin_locked": dict(account.margin_locked),
+            "equity_points": list(account.equity_points[-2000:]),
+            "equity": account.equity(marked),
+            "positions": [position.model_dump(mode="json") for position in account.positions.values()],
+            "trades": [trade.model_dump(mode="json") for trade in account.trades],
+        }
+
+    def restore_state(self, payload: dict[str, dict]) -> None:
+        for key, item in payload.items():
+            if key in self.accounts and isinstance(item, dict):
+                self._restore_strategy(item)
+
+    def _restore_strategy(self, payload: dict) -> None:
+        account = self.accounts[payload["strategy"]]
+        account.cash = float(payload["cash"])
+        account.day_start_equity = float(payload["day_start_equity"])
+        account.day_key = str(payload["day_key"])
+        account.realized_pnl_today = float(payload.get("realized_pnl_today") or 0)
+        last_entry = payload.get("last_entry_at")
+        account.last_entry_at = datetime.fromisoformat(last_entry) if last_entry else None
+        account.margin_locked = {symbol: float(amount) for symbol, amount in (payload.get("margin_locked") or {}).items()}
+        account.equity_points = list(payload.get("equity_points") or [])
+        account.positions = {}
+        for raw in payload.get("positions") or []:
+            if raw.get("status") not in (None, "OPEN"):
+                continue
+            position = PositionRecord.model_validate(raw)
+            if position.status is not PositionStatus.OPEN:
+                continue
+            account.positions[position.symbol] = position
+        account.trades = [TradeRecord.model_validate(raw) for raw in payload.get("trades") or []]
+
+    def adopt_trades(self, strategy: str, rows: list[dict]) -> None:
+        """Closed trades written before the account snapshot existed. Cash follows their net sum."""
+        account = self.accounts[strategy]
+        if account.trades or account.positions:
+            return
+        trades = [TradeRecord.model_validate(raw) for raw in rows]
+        if not trades:
+            return
+        account.trades = trades
+        account.cash = self.initial_equity + sum(trade.net_pnl for trade in trades)
+        account.realized_pnl_today = 0.0
+        last = max(trade.closed_at for trade in trades)
+        account.equity_points.append({"t": last.isoformat(), "equity": account.cash, "mark": False})

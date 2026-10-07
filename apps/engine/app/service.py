@@ -23,18 +23,20 @@ from app.db.memory import MemoryStore
 from app.db.postgres import PostgresMirror
 from app.domain.enums import (
     EXPIRED_SIGNAL,
+    QUEUE_SATURATED,
     STRATEGY_ERROR,
     Action,
     OperatingMode,
+    OrderStatus,
     OrderType,
     SignalStatus,
     SlippageModelName,
 )
 from app.domain.mathutil import utcnow
-from app.domain.schemas import AuditRecord, MarketSnapshot, StrategyDecision
+from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
-from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked
-from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit
+from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, execution_of
+from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
@@ -51,6 +53,16 @@ from app.strategies.runners import BaselineJevStrategy, BaselineOpenAIJevStrateg
 log = logging.getLogger(__name__)
 
 STRATEGY_KEYS = ("baseline", "baseline_jev", "baseline_openai_jev")
+EDITABLE_RISK = (
+    "min_net_rr",
+    "risk_per_trade",
+    "max_risk_per_trade",
+    "max_daily_loss",
+    "max_daily_drawdown",
+    "max_open_positions",
+    "max_symbol_exposure",
+    "max_total_exposure",
+)
 
 
 class FutureReturnLabeler:
@@ -155,6 +167,10 @@ class TradingEngine:
         self.openai_cost_known = False
         self.evolution = EvolutionService(settings)
         self.evolution.bind_trades(self._all_trades)
+        self._evaluating: set[str] = set()
+        self._quotes: dict[str, list[dict]] = {}
+        self._quotes_dirty: set[str] = set()
+        self._quote_tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
         import httpx
@@ -172,6 +188,13 @@ class TradingEngine:
             self.persistence_mode = "postgres" if ok else "postgres_error"
             self.db_healthy = ok
             self.db_error = None if ok else self.postgres.last_error
+            if ok:
+                runtime = await self.postgres.load_runtime()
+                self.db_healthy = self.postgres.healthy
+                self.db_error = self.postgres.last_error
+                if self.db_healthy:
+                    self.apply_runtime(runtime)
+                    self._log("restore", "book restored from postgres")
         await self.feed.start()
         await self.evolution.start()
         self._log("engine", "engine started")
@@ -234,51 +257,83 @@ class TradingEngine:
             await self.postgres.save_strategy_config(key, current.enabled, current.mode.value, payload)
         return payload
 
-    def update_risk(self, changes: dict, actor: str) -> None:
-        allowed = {
-            "min_net_rr",
-            "risk_per_trade",
-            "max_risk_per_trade",
-            "max_daily_loss",
-            "max_daily_drawdown",
-            "max_open_positions",
-            "max_symbol_exposure",
-            "max_total_exposure",
-        }
-        unknown = set(changes) - allowed
+    async def update_risk(self, changes: dict, actor: str) -> None:
+        unknown = set(changes) - set(EDITABLE_RISK)
         if unknown:
             raise KeyError(",".join(sorted(unknown)))
-        self.risk.update_limits(**changes)
+        cleaned = _coerce_risk(changes)
+        self.risk.update_limits(**cleaned)
         self.risk_limits = self.risk.limits
+        if self.postgres and self.postgres.healthy:
+            payload = {key: getattr(self.risk.limits, key) for key in EDITABLE_RISK}
+            await self.postgres.save_risk_limits(payload)
 
     async def on_ticker(self, symbol: str) -> None:
         await self.bus.publish(Event("market_update", self.ticker(symbol)))
 
     async def on_price(self, symbol: str, price: float | None, timestamp: datetime) -> None:
-        finished = self.labeler.on_price(symbol, timestamp, price)
-        for item in finished:
-            labels = {"snapshot_id": str(item["snapshot_id"]), **item["labels"]}
-            self.store.add_label(item["snapshot_id"], labels)
-            if self.postgres and self.postgres.healthy:
-                await self.postgres.save_label(str(item["snapshot_id"]), labels)
-        await self.manage_positions(symbol)
+        """Schedule label and exit work. The market socket does not wait for it."""
+        state = self.states.get(symbol)
+        bucket = self._quotes.setdefault(symbol, [])
+        bucket.append(
+            {
+                "price": price,
+                "timestamp": timestamp,
+                "bid": None if state is None else state.best_bid,
+                "ask": None if state is None else state.best_ask,
+            }
+        )
+        if len(bucket) > 500:
+            del bucket[:-500]
+        self._quotes_dirty.add(symbol)
+        current = self._quote_tasks.get(symbol)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(self._drain_quotes(symbol))
+        self._quote_tasks[symbol] = task
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _drain_quotes(self, symbol: str) -> None:
+        while symbol in self._quotes_dirty:
+            self._quotes_dirty.discard(symbol)
+            batch = self._quotes.pop(symbol, [])
+            if not batch:
+                continue
+            for point in batch:
+                finished = self.labeler.on_price(symbol, point["timestamp"], point["price"])
+                for item in finished:
+                    labels = {"snapshot_id": str(item["snapshot_id"]), **item["labels"]}
+                    self.store.add_label(item["snapshot_id"], labels)
+                    if self.postgres and self.postgres.healthy:
+                        await self.postgres.save_label(str(item["snapshot_id"]), labels)
+            last = batch[-1]
+            await self.manage_positions(symbol, as_of=last["timestamp"], extreme=_extreme(batch))
 
     async def on_snapshot_trigger(self, symbol: str, as_of: datetime, trigger: str) -> None:
+        if symbol in self._evaluating:
+            self.store.add_event("queue", QUEUE_SATURATED, {"symbol": symbol, "trigger": trigger})
+            self._log("queue", f"{symbol} {QUEUE_SATURATED}")
+            return
+        self._evaluating.add(symbol)
         task = asyncio.create_task(self.evaluate_symbol(symbol, as_of, trigger))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
 
     async def evaluate_symbol(self, symbol: str, as_of: datetime, trigger: str) -> list[StrategyDecision]:
-        state = self.states[symbol]
-        snapshot = build_snapshot(
-            state,
-            as_of=as_of,
-            trigger=trigger,
-            stale_after_ms=self.settings.stale_after_ms,
-        )
-        if snapshot is None:
-            return []
-        return await self.evaluate_snapshot(snapshot)
+        try:
+            state = self.states[symbol]
+            snapshot = build_snapshot(
+                state,
+                as_of=as_of,
+                trigger=trigger,
+                stale_after_ms=self.settings.stale_after_ms,
+            )
+            if snapshot is None:
+                return []
+            return await self.evaluate_snapshot(snapshot)
+        finally:
+            self._evaluating.discard(symbol)
 
     async def evaluate_snapshot(self, snapshot: MarketSnapshot) -> list[StrategyDecision]:
         self.store.add_snapshot(snapshot)
@@ -388,10 +443,7 @@ class TradingEngine:
         fees = await self.fee_provider.get_fees(snapshot.symbol)
         context = self._risk_context(decision.strategy, snapshot, live=False)
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book)
-        payload = self.store.add_risk(risk)
-        if self.postgres and self.postgres.healthy:
-            await self.postgres.save_risk(payload)
-        await self.bus.publish(Event("risk", {"decision_id": str(decision.decision_id), "accepted": risk.accepted}))
+        await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:
             return
         econ = risk.economics
@@ -399,46 +451,16 @@ class TradingEngine:
         client_id = self.paper.client_order_id(decision.decision_id)
         if self.paper.get(client_id) is not None:
             return
-        intent = OrderIntent(
-            decision_id=decision.decision_id,
-            risk_id=risk.risk_id,
-            strategy=decision.strategy,
-            symbol=snapshot.symbol,
-            side=side,
-            order_type=OrderType.MARKET,
-            quantity=econ.quantity,
-            limit_price=None,
-            mode="paper",
-            created_at=snapshot.timestamp,
-            best_bid=snapshot.best_bid,
-            best_ask=snapshot.best_ask,
-            book=self.states[snapshot.symbol].book,
-            fee_rate=econ.costs.fee_rate_entry,
-        )
+        intent = self._intent(decision, snapshot, risk, side, "paper")
         order, fills = self.paper.submit_market(intent, self.slippage)
         order_payload = self.store.add_order(order)
-        if self.postgres and self.postgres.healthy:
-            await self.postgres.save_order(order_payload)
-        for fill in fills:
-            self.store.add_fill(fill)
+        fill_payloads = [self.store.add_fill(fill) for fill in fills]
         if not fills:
+            await self._checkpoint(decision.strategy, positions=[], orders=[order_payload], fills=[])
             return
         fill = fills[0]
-        margin = (fill.price * fill.quantity) / max(self.risk.limits.max_leverage, 1e-9)
-        self.accounts.open_position(
-            strategy=decision.strategy,
-            symbol=snapshot.symbol,
-            side=decision.action,
-            quantity=fill.quantity,
-            entry_price=fill.price,
-            stop=econ.stop,
-            target=econ.target,
-            opened_at=snapshot.timestamp,
-            decision_id=decision.decision_id,
-            entry_fee=fill.fee,
-            initial_net_risk=econ.net_risk,
-            margin=margin,
-        )
+        position = self._open_from_fill(decision, snapshot, econ, fill.price, fill.quantity, fill.fee, "paper", None)
+        await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=fill_payloads)
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
     async def _execute_live(self, decision: StrategyDecision, snapshot: MarketSnapshot) -> None:
@@ -449,103 +471,371 @@ class TradingEngine:
         fees = await self.fee_provider.get_fees(snapshot.symbol)
         context = self._risk_context(decision.strategy, snapshot, live=True)
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book)
-        self.store.add_risk(risk)
+        await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:
             return
-        intent = OrderIntent(
-            decision_id=decision.decision_id,
-            risk_id=risk.risk_id,
-            strategy=decision.strategy,
-            symbol=snapshot.symbol,
-            side="BUY" if decision.action is Action.LONG else "SELL",
-            order_type=OrderType.MARKET,
-            quantity=risk.economics.quantity,
-            limit_price=None,
-            mode="live",
-            created_at=snapshot.timestamp,
-            best_bid=snapshot.best_bid,
-            best_ask=snapshot.best_ask,
-            book=self.states[snapshot.symbol].book,
-            fee_rate=risk.economics.costs.fee_rate_entry,
-        )
+        econ = risk.economics
+        side = "BUY" if decision.action is Action.LONG else "SELL"
+        intent = self._intent(decision, snapshot, risk, side, "live")
         try:
             order = await self.live.submit(intent)
         except LiveExecutionBlocked as exc:
             self._log("live_blocked", exc.reason)
             return
-        self.store.add_order(order)
+        except Exception as exc:
+            self._log("live_error", str(exc))
+            return
+        order_payload = self.store.add_order(order)
+        if order.filled_quantity <= 0 or not order.average_fill_price:
+            self._log("live_unfilled", order.client_order_id)
+            await self._checkpoint(decision.strategy, positions=[], orders=[order_payload], fills=[])
+            return
+        fee = order.average_fill_price * order.filled_quantity * econ.costs.fee_rate_entry
+        position = self._open_from_fill(
+            decision,
+            snapshot,
+            econ,
+            order.average_fill_price,
+            order.filled_quantity,
+            fee,
+            "live",
+            None,
+        )
+        fill = FillRecord(
+            order_id=order.order_id,
+            decision_id=decision.decision_id,
+            price=order.average_fill_price,
+            quantity=order.filled_quantity,
+            fee=fee,
+            slippage_bps=0,
+            liquidity="taker",
+            filled_at=snapshot.timestamp,
+        )
+        fill_payload = self.store.add_fill(fill)
+        tick = self.feed.rules.get(snapshot.symbol, {}).get("tick_size")
+        intent.quantity = order.filled_quantity
+        try:
+            stop = await self.live.submit_stop(intent, position.stop, tick=tick)
+        except Exception as exc:
+            self._log("live_stop", str(exc))
+            stop = None
+        orders = [order_payload]
+        if stop is not None:
+            position.stop_client_order_id = stop.client_order_id
+            orders.append(self.store.add_order(stop))
+        await self._checkpoint(decision.strategy, positions=[position], orders=orders, fills=[fill_payload])
+        await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
-    async def manage_positions(self, symbol: str) -> None:
+    async def manage_positions(self, symbol: str, as_of: datetime | None = None, extreme: dict | None = None) -> None:
         state = self.states.get(symbol)
         if state is None or state.last_price is None:
             return
+        moment = as_of or utcnow()
         for key in STRATEGY_KEYS:
             async with self._locks[key]:
-                await self._manage_one(key, symbol, state)
+                await self._manage_one(key, symbol, state, moment, extreme)
 
-    async def _manage_one(self, key: str, symbol: str, state) -> None:
+    async def _manage_one(self, key: str, symbol: str, state, as_of: datetime, extreme: dict | None) -> None:
         account = self.accounts.accounts[key]
         position = account.positions.get(symbol)
         if position is None or state.last_price is None:
             return
-        self.accounts.update_excursion(key, symbol, state.last_price)
-        hold_minutes = (utcnow() - position.opened_at).total_seconds() / 60
-        reason = position_exit(
+        observed = _observed_quotes(state, extreme)
+        self.accounts.update_excursion(key, symbol, observed["min_bid"] or state.last_price)
+        self.accounts.update_excursion(key, symbol, observed["max_bid"] or state.last_price)
+        if position.side is Action.SHORT:
+            self.accounts.update_excursion(key, symbol, observed["min_ask"] or state.last_price)
+            self.accounts.update_excursion(key, symbol, observed["max_ask"] or state.last_price)
+        hold_minutes = max(0.0, (as_of - position.opened_at).total_seconds() / 60)
+        reason = position_exit_observed(
             position.side,
-            state.best_bid,
-            state.best_ask,
-            position.stop,
-            position.target,
-            hold_minutes,
-            self.risk.limits.max_hold_minutes,
+            min_bid=observed["min_bid"],
+            max_bid=observed["max_bid"],
+            min_ask=observed["min_ask"],
+            max_ask=observed["max_ask"],
+            stop=position.stop,
+            target=position.target,
+            hold_minutes=hold_minutes,
+            max_hold_minutes=self.risk.limits.max_hold_minutes,
         )
         if reason is None:
             return
-        side = "SELL" if position.side is Action.LONG else "BUY"
+        if position.mode == "live":
+            await self._exit_live(key, symbol, position, reason, as_of, state)
+            return
         from app.execution.slippage import simulate_fill
 
+        side = "SELL" if position.side is Action.LONG else "BUY"
+        bid, ask, book = _exit_touch(position, reason, state)
         preview = simulate_fill(
             side=side,
             quantity=position.quantity,
-            best_bid=state.best_bid,
-            best_ask=state.best_ask,
-            book=state.book,
+            best_bid=bid,
+            best_ask=ask,
+            book=book,
             config=self.slippage,
         )
         if preview.filled_quantity <= 0:
             return
-        exit_rate = rate_for("taker", self.fee_config.maker_fee_rate, self.fee_config.taker_fee_rate)
-        exit_fee = preview.estimated_fill_price * preview.filled_quantity * exit_rate
-        hold_minutes = (utcnow() - position.opened_at).total_seconds() / 60
+        exit_price = preview.estimated_fill_price
+        exit_fee = _exit_fee(position, exit_price, preview.filled_quantity, self.fee_config)
+        order = OrderRecord(
+            client_order_id=position.decision_id.hex[:31] + "X",
+            decision_id=position.decision_id,
+            strategy=position.strategy,
+            symbol=symbol,
+            side=side,  # type: ignore[arg-type]
+            order_type=OrderType.MARKET,
+            status=OrderStatus.FILLED,
+            mode="paper",
+            quantity=position.quantity,
+            filled_quantity=preview.filled_quantity,
+            average_fill_price=exit_price,
+            expected_price=preview.expected_price,
+            created_at=as_of,
+        )
+        fill = FillRecord(
+            order_id=order.order_id,
+            decision_id=position.decision_id,
+            price=exit_price,
+            quantity=preview.filled_quantity,
+            fee=exit_fee,
+            slippage_bps=preview.slippage_bps,
+            liquidity="taker",
+            filled_at=as_of,
+        )
+        touch = preview.expected_price or exit_price
+        slippage_quote = abs(exit_price - touch) * preview.filled_quantity
+        await self._finish_exit(
+            key,
+            symbol,
+            position,
+            reason,
+            as_of,
+            state,
+            exit_price,
+            preview.filled_quantity,
+            exit_fee,
+            slippage_quote,
+            order,
+            fill,
+        )
+
+    async def _exit_live(self, key: str, symbol: str, position, reason: str, as_of: datetime, state) -> None:
+        if reason == "STOP" and position.stop_client_order_id:
+            found = await self.live.fetch(symbol, position.stop_client_order_id)
+            if found and str(found.get("status")) == "FILLED":
+                qty, price = execution_of(found)
+                if qty > 0 and price > 0:
+                    exit_fee = _exit_fee(position, price, qty, self.fee_config)
+                    await self._finish_exit(key, symbol, position, reason, as_of, state, price, qty, exit_fee, 0.0, None, None)
+                    return
+        if position.stop_client_order_id:
+            try:
+                await self.live.cancel(symbol, position.stop_client_order_id)
+            except Exception as exc:
+                self._log("live_stop_cancel", str(exc))
+        side = "SELL" if position.side is Action.LONG else "BUY"
+        intent = OrderIntent(
+            decision_id=position.decision_id,
+            risk_id=None,
+            strategy=position.strategy,
+            symbol=symbol,
+            side=side,
+            order_type=OrderType.MARKET,
+            quantity=position.quantity,
+            limit_price=None,
+            mode="live",
+            created_at=as_of,
+            best_bid=state.best_bid,
+            best_ask=state.best_ask,
+            book=state.book,
+            fee_rate=position.exit_fee_rate,
+        )
+        try:
+            order = await self.live.submit_close(intent)
+        except Exception as exc:
+            self._log("live_exit", str(exc))
+            return
+        if order.filled_quantity <= 0 or not order.average_fill_price:
+            self.store.add_order(order)
+            self._log("live_exit", "unfilled")
+            return
+        exit_price = order.average_fill_price
+        exit_fee = _exit_fee(position, exit_price, order.filled_quantity, self.fee_config)
+        fill = FillRecord(
+            order_id=order.order_id,
+            decision_id=position.decision_id,
+            price=exit_price,
+            quantity=order.filled_quantity,
+            fee=exit_fee,
+            slippage_bps=0,
+            liquidity="taker",
+            filled_at=as_of,
+        )
+        touch = position.stop if reason == "STOP" else position.target if reason == "TARGET" else exit_price
+        slippage_quote = abs(exit_price - touch) * order.filled_quantity
+        await self._finish_exit(
+            key,
+            symbol,
+            position,
+            reason,
+            as_of,
+            state,
+            exit_price,
+            order.filled_quantity,
+            exit_fee,
+            slippage_quote,
+            order,
+            fill,
+        )
+
+    async def _finish_exit(
+        self,
+        key: str,
+        symbol: str,
+        position,
+        reason: str,
+        as_of: datetime,
+        state,
+        exit_price: float,
+        quantity: float,
+        exit_fee: float,
+        slippage_quote: float,
+        order,
+        fill,
+    ) -> None:
+        hold_minutes = max(0.0, (as_of - position.opened_at).total_seconds() / 60)
         periods = 0.0
         if self.risk.limits.apply_funding and hold_minutes >= self.risk.limits.funding_interval_minutes:
             periods = hold_minutes / self.risk.limits.funding_interval_minutes
-        funding_rate = state.funding_rate
-        funding = funding_cashflow(
-            position.side,
-            funding_rate,
-            preview.estimated_fill_price * preview.filled_quantity,
-            periods,
-        )
-        touch = preview.expected_price or preview.estimated_fill_price
-        slippage_quote = abs(preview.estimated_fill_price - touch) * preview.filled_quantity
+        funding = funding_cashflow(position.side, state.funding_rate, exit_price * quantity, periods)
         trade = self.accounts.close_position(
             strategy=key,
             symbol=symbol,
-            exit_price=preview.estimated_fill_price,
-            closed_at=utcnow(),
+            exit_price=exit_price,
+            closed_at=as_of,
             exit_fee=exit_fee,
             slippage=slippage_quote,
             funding=funding,
             exit_reason=reason,
-            quantitative_regime=None,
-            market_regime=None,
+            quantitative_regime=position.quantitative_regime,
+            market_regime=position.market_regime,
         )
-        payload = self.store.add_trade(trade)
-        if self.postgres and self.postgres.healthy:
-            await self.postgres.save_trade(payload)
-        await self.bus.publish(Event("trade", payload))
+        trade_payload = self.store.add_trade(trade)
+        orders = []
+        fills = []
+        if order is not None:
+            orders.append(self.store.add_order(order))
+        if fill is not None:
+            fills.append(self.store.add_fill(fill))
+        await self._checkpoint(key, positions=[position], orders=orders, fills=fills, trade=trade_payload)
+        await self.bus.publish(Event("trade", trade_payload))
         self._log("trade", f"{key} {symbol} {reason} net {trade.net_pnl:.4f}")
+
+    def _intent(self, decision: StrategyDecision, snapshot: MarketSnapshot, risk, side: str, mode: str) -> OrderIntent:
+        econ = risk.economics
+        return OrderIntent(
+            decision_id=decision.decision_id,
+            risk_id=risk.risk_id,
+            strategy=decision.strategy,
+            symbol=snapshot.symbol,
+            side=side,
+            order_type=OrderType.MARKET,
+            quantity=econ.quantity,
+            limit_price=None,
+            mode=mode,
+            created_at=snapshot.timestamp,
+            best_bid=snapshot.best_bid,
+            best_ask=snapshot.best_ask,
+            book=self.states[snapshot.symbol].book,
+            fee_rate=econ.costs.fee_rate_entry,
+        )
+
+    def _open_from_fill(self, decision, snapshot, econ, price: float, quantity: float, fee: float, mode: str, stop_client_order_id: str | None):
+        margin = (price * quantity) / max(self.risk.limits.max_leverage, 1e-9)
+        regime = decision.metadata.get("openai_regime")
+        return self.accounts.open_position(
+            strategy=decision.strategy,
+            symbol=snapshot.symbol,
+            side=decision.action,
+            quantity=quantity,
+            entry_price=price,
+            stop=econ.stop,
+            target=econ.target,
+            opened_at=snapshot.timestamp,
+            decision_id=decision.decision_id,
+            entry_fee=fee,
+            initial_net_risk=econ.net_risk,
+            margin=margin,
+            exit_fee_rate=econ.costs.fee_rate_exit,
+            fee_source=econ.costs.fee_source,
+            quantitative_regime=snapshot.quantitative_regime,
+            market_regime=regime if isinstance(regime, str) else None,
+            mode=mode,
+            stop_client_order_id=stop_client_order_id,
+        )
+
+    async def _record_risk(self, risk) -> None:
+        payload = self.store.add_risk(risk)
+        if self.postgres and self.postgres.healthy:
+            await self.postgres.save_risk(payload)
+        await self.bus.publish(Event("risk", {"decision_id": str(risk.decision_id), "accepted": risk.accepted}))
+
+    async def _checkpoint(
+        self,
+        strategy: str,
+        positions: list,
+        orders: list[dict],
+        fills: list[dict],
+        trade: dict | None = None,
+    ) -> None:
+        if self.postgres is None or not self.postgres.healthy:
+            return
+        dumped = [item if isinstance(item, dict) else item.model_dump(mode="json") for item in positions]
+        await self.postgres.save_checkpoint(
+            strategy,
+            self.accounts.export_strategy(strategy, self._marks()),
+            dumped,
+            orders,
+            fills,
+            trade,
+        )
+
+    def apply_runtime(self, runtime: dict) -> None:
+        saved_accounts = set()
+        accounts = runtime.get("accounts") or {}
+        if accounts:
+            self.accounts.restore_state(accounts)
+            saved_accounts = set(accounts)
+        for strategy, rows in (runtime.get("orphan_trades") or {}).items():
+            if strategy in saved_accounts or strategy not in self.accounts.accounts:
+                continue
+            self.accounts.adopt_trades(strategy, rows)
+        self.store.trades = []
+        for account in self.accounts.accounts.values():
+            for trade in account.trades:
+                self.store.add_trade(trade)
+        for item in runtime.get("strategies") or []:
+            current = self.strategy_settings.get(item.get("strategy_key"))
+            if current is None:
+                continue
+            current.enabled = bool(item.get("enabled", current.enabled))
+            config = item.get("config") or {}
+            if "call_model" in config:
+                current.call_model = bool(config["call_model"])
+            if "max_signal_age_ms" in config:
+                current.max_signal_age_ms = int(config["max_signal_age_ms"])
+            mode = item.get("mode")
+            if mode == "live" and not self.settings.live_armed:
+                self._log("restore", f"{current.key} live config left disarmed")
+            elif mode:
+                current.mode = OperatingMode(mode)
+        risk = runtime.get("risk") or {}
+        editable = {key: risk[key] for key in EDITABLE_RISK if key in risk}
+        if editable:
+            self.risk.update_limits(**_coerce_risk(editable))
+            self.risk_limits = self.risk.limits
 
     def _risk_context(self, strategy: str, snapshot: MarketSnapshot, live: bool) -> RiskContext:
         account = self.accounts.accounts[strategy]
@@ -758,3 +1048,56 @@ class TradingEngine:
         self.logs.add(item)
         self.store.add_event(kind, message)
         log.info("%s %s", kind, message)
+
+
+def _extreme(batch: list[dict]) -> dict:
+    bids = [point["bid"] for point in batch if point.get("bid") is not None]
+    asks = [point["ask"] for point in batch if point.get("ask") is not None]
+    return {
+        "min_bid": min(bids) if bids else None,
+        "max_bid": max(bids) if bids else None,
+        "min_ask": min(asks) if asks else None,
+        "max_ask": max(asks) if asks else None,
+    }
+
+
+def _observed_quotes(state, extreme: dict | None) -> dict:
+    if not extreme:
+        return {
+            "min_bid": state.best_bid,
+            "max_bid": state.best_bid,
+            "min_ask": state.best_ask,
+            "max_ask": state.best_ask,
+        }
+    return {
+        "min_bid": extreme["min_bid"] if extreme.get("min_bid") is not None else state.best_bid,
+        "max_bid": extreme["max_bid"] if extreme.get("max_bid") is not None else state.best_bid,
+        "min_ask": extreme["min_ask"] if extreme.get("min_ask") is not None else state.best_ask,
+        "max_ask": extreme["max_ask"] if extreme.get("max_ask") is not None else state.best_ask,
+    }
+
+
+def _exit_touch(position, reason: str, state) -> tuple[float | None, float | None, object | None]:
+    if reason == "STOP" and position.side is Action.LONG:
+        return position.stop, state.best_ask, None
+    if reason == "TARGET" and position.side is Action.LONG:
+        return position.target, state.best_ask, None
+    if reason == "STOP" and position.side is Action.SHORT:
+        return state.best_bid, position.stop, None
+    if reason == "TARGET" and position.side is Action.SHORT:
+        return state.best_bid, position.target, None
+    return state.best_bid, state.best_ask, state.book
+
+
+def _exit_fee(position, exit_price: float, quantity: float, fee_config) -> float:
+    rate = position.exit_fee_rate
+    if rate <= 0:
+        rate = rate_for("taker", fee_config.maker_fee_rate, fee_config.taker_fee_rate)
+    return exit_price * quantity * rate
+
+
+def _coerce_risk(changes: dict) -> dict:
+    cleaned = dict(changes)
+    if "max_open_positions" in cleaned:
+        cleaned["max_open_positions"] = int(cleaned["max_open_positions"])
+    return cleaned

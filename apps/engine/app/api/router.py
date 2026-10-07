@@ -328,7 +328,7 @@ async def patch_risk(body: RiskPatch, request: Request) -> dict:
     changes = body.model_dump(exclude_none=True)
     changes.pop("confirm", None)
     try:
-        engine.update_risk(changes, actor)
+        await engine.update_risk(changes, actor)
     except KeyError as exc:
         raise HTTPException(400, f"field not editable: {exc}") from exc
     await engine._audit(actor, "risk_update", changes)

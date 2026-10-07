@@ -41,7 +41,7 @@ async def replay_candles(engine: TradingEngine, symbol: str, candles: list[Candl
         if snapshot.market_type is not MarketType(engine.settings.market_type):
             raise RuntimeError("market type drifted")
         await engine.evaluate_snapshot(snapshot)
-        await engine.manage_positions(symbol)
+        await engine.manage_positions(symbol, as_of=candle.close_time)
     return engine
 
 

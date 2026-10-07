@@ -15,12 +15,15 @@ from app.db.models import (
     ConsensusRow,
     EngineEventRow,
     FeatureSnapshotRow,
+    FillRow,
     FutureLabelRow,
     JevCallRow,
     MarketSnapshotRow,
     OpenAICallRow,
     OrderRow,
     PaperAccountRow,
+    PaperBalanceRow,
+    PositionRow,
     RiskDecisionRow,
     StrategyConfigRow,
     StrategyDecisionRow,
@@ -246,6 +249,96 @@ class PostgresMirror:
             )
         )
 
+    async def save_checkpoint(
+        self,
+        strategy: str,
+        account: dict,
+        positions: list[dict],
+        orders: list[dict],
+        fills: list[dict],
+        trade: dict | None = None,
+    ) -> None:
+        """One commit for the book. The account payload is what boot reloads."""
+        if not self.factory or not self.healthy:
+            return
+        try:
+            async with self.factory() as session:
+                await _upsert_account(session, strategy, account)
+                for position in positions:
+                    await _upsert_position(session, position)
+                for order in orders:
+                    await _upsert_order(session, order)
+                await session.flush()
+                for fill in fills:
+                    await _upsert_fill(session, fill)
+                if trade is not None:
+                    await _upsert_trade(session, trade)
+                session.add(
+                    PaperBalanceRow(
+                        strategy=strategy,
+                        equity=float(account.get("equity") or 0),
+                        timestamp=datetime.now(timezone.utc),
+                        payload={"cash": account.get("cash"), "equity": account.get("equity")},
+                    )
+                )
+                await session.commit()
+        except Exception as exc:
+            self.healthy = False
+            self.last_error = str(exc)
+            log.warning("postgres checkpoint failed: %s", exc)
+
+    async def save_risk_limits(self, payload: dict) -> None:
+        await self._write(
+            EngineEventRow(
+                kind="risk_limits",
+                message="risk limits updated",
+                timestamp=datetime.now(timezone.utc),
+                payload=payload,
+            )
+        )
+
+    async def load_runtime(self) -> dict:
+        empty = {"accounts": {}, "strategies": [], "risk": None, "orphan_trades": {}}
+        if not self.factory or not self.healthy:
+            return empty
+        try:
+            async with self.factory() as session:
+                accounts = (await session.execute(select(PaperAccountRow))).scalars().all()
+                configs = (await session.execute(select(StrategyConfigRow))).scalars().all()
+                risk = (
+                    await session.execute(
+                        select(EngineEventRow)
+                        .where(EngineEventRow.kind == "risk_limits")
+                        .order_by(EngineEventRow.timestamp.desc())
+                        .limit(1)
+                    )
+                ).scalars().first()
+                trades = (await session.execute(select(TradeRow))).scalars().all()
+            saved = {row.strategy: row.payload for row in accounts}
+            grouped: dict[str, list] = {}
+            for row in trades:
+                grouped.setdefault(row.strategy, []).append(row.payload)
+            orphans = {key: value for key, value in grouped.items() if key not in saved}
+            return {
+                "accounts": saved,
+                "strategies": [
+                    {
+                        "strategy_key": row.strategy_key,
+                        "enabled": row.enabled,
+                        "mode": row.mode,
+                        "config": row.config or {},
+                    }
+                    for row in configs
+                ],
+                "risk": None if risk is None else risk.payload,
+                "orphan_trades": orphans,
+            }
+        except Exception as exc:
+            self.healthy = False
+            self.last_error = str(exc)
+            log.warning("postgres load failed: %s", exc)
+            return empty
+
     async def save_strategy_config(self, key: str, enabled: bool, mode: str, config: dict) -> None:
         if not self.factory or not self.healthy:
             return
@@ -279,3 +372,95 @@ def _dt(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+async def _upsert_account(session: AsyncSession, strategy: str, account: dict) -> None:
+    result = await session.execute(select(PaperAccountRow).where(PaperAccountRow.strategy == strategy))
+    row = result.scalar_one_or_none()
+    cash = float(account.get("cash") or 0)
+    day_start = float(account.get("day_start_equity") or 0)
+    if row is None:
+        session.add(PaperAccountRow(strategy=strategy, cash=cash, day_start_equity=day_start, payload=account))
+    else:
+        row.cash = cash
+        row.day_start_equity = day_start
+        row.payload = account
+
+
+async def _upsert_position(session: AsyncSession, position: dict) -> None:
+    position_id = uuid.UUID(str(position["position_id"]))
+    result = await session.execute(select(PositionRow).where(PositionRow.id == position_id))
+    row = result.scalar_one_or_none()
+    status = str(position.get("status") or "OPEN")
+    if row is None:
+        session.add(
+            PositionRow(
+                id=position_id,
+                strategy=position["strategy"],
+                symbol=position["symbol"],
+                status=status,
+                payload=position,
+            )
+        )
+    else:
+        row.status = status
+        row.payload = position
+
+
+async def _upsert_order(session: AsyncSession, order: dict) -> None:
+    result = await session.execute(select(OrderRow).where(OrderRow.client_order_id == order["client_order_id"]))
+    row = result.scalar_one_or_none()
+    if row is None:
+        session.add(
+            OrderRow(
+                id=uuid.UUID(str(order["order_id"])),
+                client_order_id=order["client_order_id"],
+                decision_id=uuid.UUID(str(order["decision_id"])),
+                strategy=order["strategy"],
+                symbol=order["symbol"],
+                status=order["status"],
+                mode=order["mode"],
+                payload=order,
+            )
+        )
+    else:
+        row.status = order["status"]
+        row.payload = order
+
+
+async def _upsert_fill(session: AsyncSession, fill: dict) -> None:
+    fill_id = uuid.UUID(str(fill["fill_id"]))
+    result = await session.execute(select(FillRow).where(FillRow.id == fill_id))
+    if result.scalar_one_or_none() is not None:
+        return
+    session.add(
+        FillRow(
+            id=fill_id,
+            order_id=uuid.UUID(str(fill["order_id"])),
+            decision_id=uuid.UUID(str(fill["decision_id"])),
+            price=float(fill["price"]),
+            quantity=float(fill["quantity"]),
+            fee=float(fill["fee"]),
+            payload=fill,
+        )
+    )
+
+
+async def _upsert_trade(session: AsyncSession, trade: dict) -> None:
+    trade_id = uuid.UUID(str(trade["trade_id"]))
+    result = await session.execute(select(TradeRow).where(TradeRow.id == trade_id))
+    if result.scalar_one_or_none() is not None:
+        return
+    session.add(
+        TradeRow(
+            id=trade_id,
+            strategy=trade["strategy"],
+            symbol=trade["symbol"],
+            side=trade["side"],
+            net_pnl=float(trade["net_pnl"]),
+            gross_pnl=float(trade["gross_pnl"]),
+            closed_at=_dt(trade["closed_at"]),
+            quantitative_regime=trade.get("quantitative_regime"),
+            payload=trade,
+        )
+    )

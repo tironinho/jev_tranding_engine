@@ -174,6 +174,12 @@ class PositionRecord(BaseModel):
     mae: float = 0
     entry_fee: float = 0
     initial_net_risk: float = 0
+    exit_fee_rate: float = 0
+    fee_source: str = "config"
+    quantitative_regime: str | None = None
+    market_regime: str | None = None
+    mode: Literal["paper", "live"] = "paper"
+    stop_client_order_id: str | None = None
 
 
 class TradeRecord(BaseModel):

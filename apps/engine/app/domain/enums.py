@@ -30,6 +30,7 @@ class SignalStatus(StrEnum):
 class OrderType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
+    STOP_MARKET = "STOP_MARKET"
 
 
 class OrderStatus(StrEnum):

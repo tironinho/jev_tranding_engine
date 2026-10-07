@@ -1,3 +1,4 @@
+import { BinanceBalancePanel, PaperBookPanel, type BinanceBalance, type PaperBook } from "@/components/Balances";
 import { DecisionTable, PositionTable } from "@/components/DecisionTable";
 import { EngineStatus, Panel } from "@/components/Shell";
 import { StrategyCard, type StrategyCardData } from "@/components/StrategyCard";
@@ -19,7 +20,9 @@ type Overview = {
   };
   strategies: StrategyCardData[];
   tickers: Array<{ symbol: string; price: number | null; spread_bps?: number | null; funding_rate?: number | null; open_interest?: number | null; status?: string; stale?: boolean }>;
-  positions: Array<{ strategy: string; symbol: string; side: string; quantity: number; entry: number; stop: number; target: number; unrealized: number }>;
+  positions: Array<{ strategy: string; symbol: string; side: string; quantity: number; entry: number; stop: number; target: number; notional?: number; unrealized: number; target_pnl?: number; stop_pnl?: number }>;
+  binance_balance?: BinanceBalance;
+  paper?: PaperBook;
 };
 
 export default async function OverviewPage() {
@@ -41,6 +44,10 @@ export default async function OverviewPage() {
   return (
     <div className="grid gap-4">
       <EngineStatus status={data.status} />
+      <div className="grid gap-3 lg:grid-cols-2">
+        <BinanceBalancePanel balance={data.binance_balance} />
+        <PaperBookPanel book={data.paper} />
+      </div>
       <div className="grid gap-3 md:grid-cols-3">
         {data.tickers.map((ticker) => (
           <SymbolTicker key={ticker.symbol} ticker={ticker} />

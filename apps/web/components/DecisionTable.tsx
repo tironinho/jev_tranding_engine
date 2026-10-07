@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Empty } from "@/components/Shell";
-import { pct, shortTime } from "@/lib/utils";
+import { money, num, pct, shortTime, signedClass } from "@/lib/utils";
 
 type Decision = {
   decision_id: string;
@@ -82,7 +82,10 @@ export function PositionTable({
     entry: number;
     stop: number;
     target: number;
+    notional?: number;
     unrealized: number;
+    target_pnl?: number;
+    stop_pnl?: number;
   }> | null;
 }) {
   if (!rows?.length) return <Empty label="NO DATA" />;
@@ -91,7 +94,7 @@ export function PositionTable({
       <table className="w-full text-left text-[11px]">
         <thead className="text-mute">
           <tr className="border-b border-line">
-            {["STRATEGY", "SYMBOL", "SIDE", "QTY", "ENTRY", "STOP", "TARGET", "UNREAL"].map((head) => (
+            {["STRATEGY", "SYMBOL", "SIDE", "QTY", "NOTIONAL", "ENTRY", "UNREAL", "TARGET $", "STOP $"].map((head) => (
               <th key={head} className="px-2 py-2 font-normal tracking-[0.12em]">
                 {head}
               </th>
@@ -105,14 +108,16 @@ export function PositionTable({
               <td className="px-2 py-2">{row.symbol}</td>
               <td className="px-2 py-2">{row.side}</td>
               <td className="px-2 py-2">{row.quantity.toFixed(4)}</td>
+              <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
               <td className="px-2 py-2">{row.entry.toFixed(4)}</td>
-              <td className="px-2 py-2">{row.stop.toFixed(4)}</td>
-              <td className="px-2 py-2">{row.target.toFixed(4)}</td>
-              <td className="px-2 py-2">{row.unrealized.toFixed(2)}</td>
+              <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{money(row.unrealized)}</td>
+              <td className={`px-2 py-2 ${signedClass(row.target_pnl)}`}>{row.target_pnl == null ? "NO DATA" : money(row.target_pnl)}</td>
+              <td className={`px-2 py-2 ${signedClass(row.stop_pnl)}`}>{row.stop_pnl == null ? "NO DATA" : money(row.stop_pnl)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      <div className="px-2 pt-2 text-[10px] text-mute">TARGET $ e STOP $ são o bruto do plano, sem taxa de saída. UNREAL é o dinheiro marcado agora.</div>
     </div>
   );
 }

@@ -33,7 +33,7 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="DRAWDOWN" value={hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
       <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">
-        equity {num(card.equity, 2)}
+        simulado {num(card.equity, 2)} USDT
       </div>
     </article>
   );

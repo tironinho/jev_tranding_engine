@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from app.accounts import AccountBook
+from app.accounts import AccountBook, unrealized
 from app.analytics.comparison import compare_strategies
 from app.analytics.performance import slice_performance, summarize_trades
 from app.config import (
@@ -40,6 +40,7 @@ from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
 from app.market.feed import MarketFeed
 from app.market.state import SymbolMarketState
+from app.providers.binance_account import BinanceBalanceProvider
 from app.providers.fees import BinanceFeeProvider, ConfigFeeProvider
 from app.providers.jev.factory import build_jev_provider
 from app.providers.openai.provider import OpenAIProvider
@@ -135,6 +136,7 @@ class TradingEngine:
         self.openai = OpenAIProvider(settings)
         self.jev = build_jev_provider(settings)
         self.fee_provider = BinanceFeeProvider(settings, self.fee_config) if settings.binance_api_key else ConfigFeeProvider(self.fee_config)
+        self.balance = BinanceBalanceProvider(settings)
         self._locks = {key: asyncio.Lock() for key in STRATEGY_KEYS}
         self.strategies = {
             "baseline": BaselineStrategy(),
@@ -164,6 +166,7 @@ class TradingEngine:
             self.jev.client = self._http
         if isinstance(self.fee_provider, BinanceFeeProvider):
             self.fee_provider.client = self._http
+        self.balance.client = self._http
         if self.postgres is not None:
             ok = await self.postgres.connect()
             self.persistence_mode = "postgres" if ok else "postgres_error"
@@ -665,15 +668,40 @@ class TradingEngine:
                         "entry": position.entry_price,
                         "stop": position.stop,
                         "target": position.target,
-                        "unrealized": (mark - position.entry_price) * position.quantity
-                        if position.side is Action.LONG
-                        else (position.entry_price - mark) * position.quantity,
+                        "mark": mark,
+                        "notional": abs(mark * position.quantity),
+                        "unrealized": unrealized(position, mark),
+                        "target_pnl": unrealized(position, position.target),
+                        "stop_pnl": unrealized(position, position.stop),
                         "mfe": position.mfe,
                         "mae": position.mae,
                         "opened_at": position.opened_at.isoformat(),
                     }
                 )
         return rows
+
+    def paper_book(self) -> dict:
+        marks = self._marks()
+        start = self.settings.initial_paper_equity
+        accounts = []
+        for key in STRATEGY_KEYS:
+            account = self.accounts.accounts[key]
+            locked = sum(account.margin_locked.values())
+            equity = account.equity(marks)
+            accounts.append(
+                {
+                    "strategy": key,
+                    "starting_equity": start,
+                    "cash": account.cash,
+                    "margin": locked,
+                    "equity": equity,
+                    "unrealized": equity - account.cash - locked,
+                    "realized_today": account.realized_pnl_today,
+                    "net_pnl": equity - start,
+                    "open_positions": len(account.positions),
+                }
+            )
+        return {"starting_equity": start, "quote": "USDT", "accounts": accounts}
 
     def status(self) -> dict:
         jev_name = getattr(self.jev, "provider_name", "unknown")

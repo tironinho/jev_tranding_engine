@@ -146,6 +146,8 @@ async def overview(request: Request) -> dict:
         "strategies": cards,
         "tickers": [engine.ticker(symbol) for symbol in engine.settings.symbol_list],
         "positions": engine.positions_payload(),
+        "binance_balance": await engine.balance.snapshot(),
+        "paper": engine.paper_book(),
     }
 
 

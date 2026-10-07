@@ -23,6 +23,11 @@ export function money(value: number | null | undefined): string {
   return formatted;
 }
 
+export function sidePnl(side: string, entry: number, price: number, quantity: number): number {
+  if (side === "LONG" || side === "BUY") return (price - entry) * quantity;
+  return (entry - price) * quantity;
+}
+
 export function signedClass(value: number | null | undefined): string {
   if (value === null || value === undefined || value === 0) return "text-paper";
   return value > 0 ? "text-[#9aab9c]" : "text-[#b08989]";

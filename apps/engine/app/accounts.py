@@ -25,6 +25,7 @@ class VirtualAccount:
     trades: list[TradeRecord] = field(default_factory=list)
     equity_points: list[dict] = field(default_factory=list)
     last_entry_at: datetime | None = None
+    last_entry_by_symbol: dict[str, datetime] = field(default_factory=dict)
     margin_locked: dict[str, float] = field(default_factory=dict)
 
     def equity(self, marks: dict[str, float]) -> float:
@@ -120,6 +121,7 @@ class AccountBook:
         )
         account.positions[symbol] = position
         account.last_entry_at = opened_at
+        account.last_entry_by_symbol[symbol] = opened_at
         return position
 
     def update_excursion(self, strategy: str, symbol: str, mark: float) -> None:
@@ -208,6 +210,9 @@ class AccountBook:
             "day_key": account.day_key,
             "realized_pnl_today": account.realized_pnl_today,
             "last_entry_at": account.last_entry_at.isoformat() if account.last_entry_at else None,
+            "last_entry_by_symbol": {
+                symbol: moment.isoformat() for symbol, moment in account.last_entry_by_symbol.items()
+            },
             "margin_locked": dict(account.margin_locked),
             "equity_points": list(account.equity_points[-2000:]),
             "equity": account.equity(marked),
@@ -228,6 +233,11 @@ class AccountBook:
         account.realized_pnl_today = float(payload.get("realized_pnl_today") or 0)
         last_entry = payload.get("last_entry_at")
         account.last_entry_at = datetime.fromisoformat(last_entry) if last_entry else None
+        account.last_entry_by_symbol = {
+            symbol: datetime.fromisoformat(moment)
+            for symbol, moment in (payload.get("last_entry_by_symbol") or {}).items()
+            if moment
+        }
         account.margin_locked = {symbol: float(amount) for symbol, amount in (payload.get("margin_locked") or {}).items()}
         account.equity_points = list(payload.get("equity_points") or [])
         account.positions = {}
@@ -239,6 +249,10 @@ class AccountBook:
                 continue
             account.positions[position.symbol] = position
         account.trades = [TradeRecord.model_validate(raw) for raw in payload.get("trades") or []]
+        for position in account.positions.values():
+            account.last_entry_by_symbol.setdefault(position.symbol, position.opened_at)
+        for trade in account.trades:
+            account.last_entry_by_symbol.setdefault(trade.symbol, trade.opened_at)
 
     def adopt_trades(self, strategy: str, rows: list[dict]) -> None:
         """Closed trades written before the account snapshot existed. Cash follows their net sum."""

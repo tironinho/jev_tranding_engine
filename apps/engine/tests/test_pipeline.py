@@ -1,5 +1,7 @@
 import pytest
 
+from datetime import timedelta
+
 from app.domain.enums import Action, OperatingMode, OrderStatus, OrderType
 from app.execution.paper import OrderIntent
 from app.execution.slippage import SlippageConfig
@@ -109,6 +111,20 @@ def test_limit_below_the_market_is_not_filled():
     order, fills = eng.paper.submit_limit(intent, clock())
     assert order.status is OrderStatus.MISSED
     assert fills == []
+
+
+@pytest.mark.asyncio
+async def test_baseline_opens_a_new_symbol_while_another_entry_is_fresh():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    for key, cfg in eng.strategy_settings.items():
+        cfg.mode = OperatingMode.PAPER if key == "baseline" else OperatingMode.SHADOW
+    account = eng.accounts.accounts["baseline"]
+    account.last_entry_at = snapshot.timestamp - timedelta(seconds=5)
+    account.last_entry_by_symbol["ETHUSDT"] = account.last_entry_at
+    await eng.evaluate_snapshot(snapshot)
+    assert account.positions["BTCUSDT"].quantity > 0
 
 
 @pytest.mark.asyncio

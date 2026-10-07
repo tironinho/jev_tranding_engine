@@ -859,7 +859,7 @@ class TradingEngine:
             symbol_exposure_notional=account.symbol_exposure(snapshot.symbol, marks),
             total_exposure_notional=account.exposure(marks),
             has_position_on_symbol=snapshot.symbol in account.positions,
-            last_entry_at=account.last_entry_at,
+            last_entry_at=account.last_entry_by_symbol.get(snapshot.symbol),
             now=snapshot.timestamp,
             trading_enabled=self.trading_enabled,
             persistence_ok=self.allows_new_live() if live else self.allows_new_paper(),

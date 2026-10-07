@@ -114,6 +114,23 @@ def test_limit_below_the_market_is_not_filled():
 
 
 @pytest.mark.asyncio
+async def test_agreed_signal_opens_only_the_baseline_book():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    for cfg in eng.strategy_settings.values():
+        cfg.mode = OperatingMode.PAPER
+        cfg.enabled = True
+    decisions = await eng.evaluate_snapshot(snapshot)
+    by_strategy = {item.strategy: item for item in decisions}
+    assert by_strategy["baseline"].action is Action.LONG
+    assert by_strategy["baseline_jev"].action is Action.LONG
+    assert eng.accounts.accounts["baseline"].positions["BTCUSDT"].quantity > 0
+    assert eng.accounts.accounts["baseline_jev"].positions == {}
+    assert eng.accounts.accounts["baseline_openai_jev"].positions == {}
+
+
+@pytest.mark.asyncio
 async def test_baseline_opens_a_new_symbol_while_another_entry_is_fresh():
     eng = engine()
     snapshot, book = long_snapshot()

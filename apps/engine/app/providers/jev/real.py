@@ -16,7 +16,7 @@ _NOULS = (
 )
 
 _INSTRUCTIONS = {
-    "trend_continuation_probability": "The move implied by `baseline_action` and `features` is likely to continue.",
+    "trend_continuation_probability": "The `baseline_action` side hits its profit target before its stop.",
     "reversal_probability": "A reversal against `baseline_action` is likely on this snapshot.",
     "buying_pressure_probability": "Aggressive buying pressure dominates `features` right now.",
     "selling_pressure_probability": "Aggressive selling pressure dominates `features` right now.",

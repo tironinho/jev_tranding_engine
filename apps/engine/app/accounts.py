@@ -26,6 +26,7 @@ class VirtualAccount:
     equity_points: list[dict] = field(default_factory=list)
     last_entry_at: datetime | None = None
     last_entry_by_symbol: dict[str, datetime] = field(default_factory=dict)
+    last_stop_at: dict[str, datetime] = field(default_factory=dict)
     margin_locked: dict[str, float] = field(default_factory=dict)
 
     def equity(self, marks: dict[str, float]) -> float:
@@ -174,6 +175,8 @@ class AccountBook:
         net = gross - position.entry_fee - exit_fee + funding
         account.cash += margin
         account.cash += gross - exit_fee + funding
+        if exit_reason == "STOP":
+            account.last_stop_at[position.symbol] = closed_at
         account.realized_pnl_today += gross - exit_fee + funding
         r_multiple = (net / position.initial_net_risk) if position.initial_net_risk else None
         trade = TradeRecord(
@@ -226,6 +229,7 @@ class AccountBook:
             "last_entry_by_symbol": {
                 symbol: moment.isoformat() for symbol, moment in account.last_entry_by_symbol.items()
             },
+            "last_stop_at": {symbol: moment.isoformat() for symbol, moment in account.last_stop_at.items()},
             "margin_locked": dict(account.margin_locked),
             "equity_points": list(account.equity_points[-2000:]),
             "equity": account.equity(marked),
@@ -249,6 +253,11 @@ class AccountBook:
         account.last_entry_by_symbol = {
             symbol: datetime.fromisoformat(moment)
             for symbol, moment in (payload.get("last_entry_by_symbol") or {}).items()
+            if moment
+        }
+        account.last_stop_at = {
+            symbol: datetime.fromisoformat(moment)
+            for symbol, moment in (payload.get("last_stop_at") or {}).items()
             if moment
         }
         account.margin_locked = {symbol: float(amount) for symbol, amount in (payload.get("margin_locked") or {}).items()}

@@ -84,10 +84,11 @@ class RiskLimits:
     fixed_target_pct: float = 0.01
     rr_target_multiple: float = 2.5
     atr_buffer_mult: float = 0.10
-    atr_stop_mult: float = 1.5
+    atr_stop_mult: float = 2.0
     max_stop_pct: float = 0.02
     min_stop_pct: float = 0.0025
     min_entry_interval_seconds: int = 60
+    stop_cooldown_minutes: int = 15
     max_hold_minutes: int = 60
     allow_pyramiding: bool = False
     max_leverage: float = 1.0
@@ -208,10 +209,11 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         fixed_target_pct=float(payload.get("fixed_target_pct", 0.01)),
         rr_target_multiple=float(payload.get("rr_target_multiple", 2.5)),
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
-        atr_stop_mult=float(payload.get("atr_stop_mult", 1.5)),
+        atr_stop_mult=float(payload.get("atr_stop_mult", 2.0)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),
         min_stop_pct=float(payload.get("min_stop_pct", 0.0025)),
         min_entry_interval_seconds=int(payload.get("min_entry_interval_seconds", 60)),
+        stop_cooldown_minutes=int(payload.get("stop_cooldown_minutes", 15)),
         max_hold_minutes=int(payload.get("max_hold_minutes", 60)),
         allow_pyramiding=bool(payload.get("allow_pyramiding", False)),
         max_leverage=float(payload.get("max_leverage", 1)),
@@ -274,6 +276,7 @@ class Settings(BaseSettings):
     market_type: str = "futures"
     symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT"
     snapshot_trigger: str = "1m_close"
+    cusum_atr_multiple: float = 1.0
     default_risk_per_trade: float = 0.005
     max_risk_per_trade: float = 0.01
     max_daily_loss: float = 0.03

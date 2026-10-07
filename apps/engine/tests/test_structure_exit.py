@@ -39,7 +39,7 @@ def test_15m_target_is_used_when_the_1m_high_is_already_broken():
 
 
 def test_nearby_15m_level_does_not_cap_the_winner_below_the_risk_multiple():
-    limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0001, max_stop_pct=0.05)
+    limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
         "recent_swing_low": 100.0,
@@ -49,6 +49,13 @@ def test_nearby_15m_level_does_not_cap_the_winner_below_the_risk_multiple():
     geometry = plan_geometry(Action.LONG, 101.0, features, limits)
     stop = 100.0 - 0.1
     assert geometry.target == 101.0 + (101.0 - stop) * 2.5
+
+
+def test_an_atr_wider_than_the_fee_floor_sets_the_stop():
+    limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
+    features = {"atr": 1.0, "recent_swing_low": 99.9, "resistance_15m": 110.0}
+    geometry = plan_geometry(Action.LONG, 100.0, features, limits)
+    assert geometry.stop == 98.0
 
 
 def test_a_stop_tighter_than_the_minimum_is_widened_instead_of_rejected():
@@ -85,6 +92,25 @@ def _position(**overrides):
     )
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_cusum_ignores_noise_and_fires_on_an_atr_move():
+    from app.market.cusum import CusumFilter
+
+    filt = CusumFilter(1.0)
+    assert filt.event("BTCUSDT", 100.0, 1.0) is False
+    assert filt.event("BTCUSDT", 100.2, 1.0) is False
+    assert filt.event("BTCUSDT", 101.3, 1.0) is True
+    assert filt.event("BTCUSDT", 101.4, 1.0) is False
+
+
+def test_meta_hit_probability_rises_when_the_stop_is_tight():
+    from app.strategies.rules import meta_hit_probability
+
+    wide = meta_hit_probability(2.5, 0.001, 0.01)
+    tight = meta_hit_probability(2.5, 0.001, 0.0025)
+    assert wide < tight
+    assert tight == (1 + 0.001 / 0.0025) / 3.5
 
 
 def test_stop_stays_put_inside_the_first_r():

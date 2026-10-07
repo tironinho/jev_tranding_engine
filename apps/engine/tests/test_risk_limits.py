@@ -174,6 +174,34 @@ def test_low_net_rr_rejects_without_moving_the_target():
     assert rejected.economics.target == 108
 
 
+def test_a_fresh_stop_blocks_the_same_symbol():
+    from app.domain.enums import STOP_COOLDOWN, OperatingMode
+    from app.domain.schemas import StrategyDecision
+
+    eng = engine()
+    snapshot, _book = long_snapshot()
+    decision = StrategyDecision(
+        correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        strategy="baseline",
+        symbol="BTCUSDT",
+        timestamp=snapshot.timestamp,
+        action=Action.LONG,
+        confidence=0.8,
+        reason_codes=[],
+        mode=OperatingMode.PAPER,
+    )
+    rejected = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(last_stop_at=clock() - timedelta(minutes=5)),
+        FeeQuote(0.0002, 0.0005, "config"),
+        None,
+    )
+    assert STOP_COOLDOWN in rejected.reject_reasons
+
+
 def test_entry_throttle():
     from app.domain.enums import ENTRY_THROTTLED, OperatingMode
     from app.domain.schemas import StrategyDecision

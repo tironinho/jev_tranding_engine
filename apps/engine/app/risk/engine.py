@@ -8,6 +8,7 @@ from app.config import RiskLimits
 from app.domain.enums import (
     ENGINE_DISABLED,
     ENTRY_THROTTLED,
+    STOP_COOLDOWN,
     EXISTING_POSITION,
     EXCHANGE_RULES_UNAVAILABLE,
     INSUFFICIENT_LIQUIDITY,
@@ -62,6 +63,7 @@ class RiskContext:
     market_type: str
     step_size: float | None = None
     rules_required: bool = False
+    last_stop_at: datetime | None = None
 
 
 @dataclass
@@ -114,6 +116,10 @@ class RiskEngine:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:
                 reasons.append(ENTRY_THROTTLED)
+        if context.last_stop_at is not None:
+            since_stop = (context.now - context.last_stop_at).total_seconds()
+            if since_stop < self.limits.stop_cooldown_minutes * 60:
+                reasons.append(STOP_COOLDOWN)
         if context.day_start_equity > 0:
             drawdown = (context.day_start_equity - context.equity) / context.day_start_equity
             if drawdown >= self.limits.max_daily_drawdown:

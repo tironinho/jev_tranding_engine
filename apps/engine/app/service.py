@@ -43,6 +43,7 @@ from app.execution.paper import OrderIntent, PaperExecutionProvider, position_ex
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
+from app.market.cusum import CusumFilter
 from app.market.feed import MarketFeed
 from app.market.state import SymbolMarketState
 from app.providers.binance_account import BinanceBalanceProvider
@@ -175,6 +176,7 @@ class TradingEngine:
         self._quotes: dict[str, list[dict]] = {}
         self._quotes_dirty: set[str] = set()
         self._quote_tasks: dict[str, asyncio.Task] = {}
+        self.cusum = CusumFilter(settings.cusum_atr_multiple)
 
     async def start(self) -> None:
         import httpx
@@ -338,6 +340,10 @@ class TradingEngine:
             )
             if snapshot is None:
                 return []
+            atr = snapshot.features.get("atr")
+            if not self.cusum.event(symbol, snapshot.price, atr if isinstance(atr, (int, float)) else None):
+                self._log("cusum", f"{symbol} quiet")
+                return []
             return await self.evaluate_snapshot(snapshot)
         finally:
             self._evaluating.discard(symbol)
@@ -395,6 +401,8 @@ class TradingEngine:
                 jev=self.jev,
                 openai=self.openai,
                 failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
+                risk=self.risk.limits,
+                round_trip_fee=self.fee_config.taker_fee_rate * 2,
             )
             budget_ms = cfg.max_signal_age_ms
             if key == "baseline_jev":
@@ -916,6 +924,7 @@ class TradingEngine:
             total_exposure_notional=account.exposure(marks),
             has_position_on_symbol=any(position.symbol == snapshot.symbol for position in account.positions.values()),
             last_entry_at=account.last_entry_by_symbol.get(snapshot.symbol),
+            last_stop_at=account.last_stop_at.get(snapshot.symbol),
             now=snapshot.timestamp,
             trading_enabled=self.trading_enabled,
             persistence_ok=self.allows_new_live() if live else self.allows_new_paper(),

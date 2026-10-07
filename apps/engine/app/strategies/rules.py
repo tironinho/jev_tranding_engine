@@ -17,16 +17,29 @@ from app.providers.jev.schemas import JevAssessment
 from app.providers.openai.schemas import MarketState
 
 
+def meta_hit_probability(rr: float, round_trip_fee: float, stop_pct: float) -> float:
+    """Chance the target must have, before costs, for the bet to be worth taking.
+
+    p > (loss + cost) / (gain + loss), with gain and loss measured in R.
+    """
+    if rr <= 0 or stop_pct <= 0:
+        return 1.0
+    cost_r = max(round_trip_fee, 0.0) / stop_pct
+    return (1.0 + cost_r) / (rr + 1.0)
+
+
 def apply_jev_veto(
     action: Action,
     confidence: float,
     assessment: JevAssessment,
     config: CombinationConfig,
     breakout: bool,
+    min_continuation: float | None = None,
 ) -> tuple[Action, float, list[str]]:
     """Veto-only v1. Jev cannot create or flip a trade."""
     reasons: list[str] = []
-    if assessment.trend_continuation_probability < config.min_trend_continuation:
+    required = config.min_trend_continuation if min_continuation is None else min_continuation
+    if assessment.trend_continuation_probability < required:
         reasons.append(JEV_LOW_CONTINUATION)
     if assessment.reversal_probability > config.max_reversal:
         reasons.append(JEV_HIGH_REVERSAL)

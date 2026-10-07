@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from app.config import BaselineWeightConfig, CombinationConfig
+from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import (
     BASELINE_NO_TRADE,
     JEV_FALLBACK,
@@ -25,7 +25,7 @@ from app.domain.schemas import MarketSnapshot, StrategyDecision
 from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import score_baseline
-from app.strategies.rules import apply_jev_veto, apply_openai_veto
+from app.strategies.rules import apply_jev_veto, apply_openai_veto, meta_hit_probability
 
 
 @dataclass
@@ -40,6 +40,8 @@ class StrategyContext:
     jev: Any = None
     openai: Any = None
     failure_policy: str = "NO_TRADE"
+    risk: RiskLimits | None = None
+    round_trip_fee: float = 0.001
     artifacts: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -178,12 +180,15 @@ class BaselineJevStrategy:
                 prompt_version=assessment.prompt_version,
                 started=started,
             )
+        required = _continuation_floor(snapshot, context)
+        metadata["jev_required_continuation"] = required
         action, confidence, vetoes = apply_jev_veto(
             result.action,
             result.confidence,
             assessment,
             context.combination,
             breakout=bool(snapshot.features.get("breakout") or snapshot.features.get("breakdown")),
+            min_continuation=required,
         )
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
         return _decision(
@@ -358,12 +363,15 @@ class BaselineOpenAIJevStrategy:
                 prompt_version=record.prompt_version,
                 started=started,
             )
+        required = _continuation_floor(snapshot, context)
+        metadata["jev_required_continuation"] = required
         action, confidence, vetoes = apply_jev_veto(
             result.action,
             result.confidence,
             assessment,
             context.combination,
             breakout=bool(snapshot.features.get("breakout") or snapshot.features.get("breakdown")),
+            min_continuation=required,
         )
         metadata["openai_effect"] = "confirm"
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
@@ -379,6 +387,16 @@ class BaselineOpenAIJevStrategy:
             prompt_version=record.prompt_version,
             started=started,
         )
+
+
+def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext) -> float:
+    if context.risk is None or snapshot.price <= 0:
+        return context.combination.min_trend_continuation
+    atr = snapshot.features.get("atr")
+    if not isinstance(atr, (int, float)) or atr <= 0:
+        return context.combination.min_trend_continuation
+    stop_pct = max(context.risk.min_stop_pct, context.risk.atr_stop_mult * float(atr) / snapshot.price)
+    return meta_hit_probability(context.risk.rr_target_multiple, context.round_trip_fee, stop_pct)
 
 
 def _remember_jev(metadata: dict, assessment, effect: str) -> None:

@@ -66,9 +66,10 @@ def plan_geometry(
         distance = entry - structural
         if distance / entry > limits.max_stop_pct:
             return STOP_TOO_WIDE
-        if distance / entry < limits.min_stop_pct:
-            structural = entry * (1 - limits.min_stop_pct)
-            distance = entry - structural
+        floor = _stop_floor(entry, float(atr), limits)
+        if distance < floor:
+            structural = entry - floor
+            distance = floor
             reasons.append(STOP_WIDENED_TO_MIN)
         target = _target_long(entry, distance, features, limits)
         if isinstance(target, str):
@@ -85,14 +86,20 @@ def plan_geometry(
     distance = structural - entry
     if distance / entry > limits.max_stop_pct:
         return STOP_TOO_WIDE
-    if distance / entry < limits.min_stop_pct:
-        structural = entry * (1 + limits.min_stop_pct)
-        distance = structural - entry
+    floor = _stop_floor(entry, float(atr), limits)
+    if distance < floor:
+        structural = entry + floor
+        distance = floor
         reasons.append(STOP_WIDENED_TO_MIN)
     target = _target_short(entry, distance, features, limits)
     if isinstance(target, str):
         return target
     return Geometry(stop=structural, target=target, reasons=tuple(reasons))
+
+
+def _stop_floor(entry: float, atr: float, limits: RiskLimits) -> float:
+    """The stop has to clear both the fee minimum and a multiple of recent range."""
+    return max(limits.min_stop_pct * entry, limits.atr_stop_mult * atr)
 
 
 def _target_long(entry: float, distance: float, features: dict, limits: RiskLimits) -> float | str:

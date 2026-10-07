@@ -112,6 +112,37 @@ def test_limit_below_the_market_is_not_filled():
 
 
 @pytest.mark.asyncio
+async def test_abstain_still_asks_jev_and_does_not_open():
+    eng = engine()
+    snapshot, book = long_snapshot(
+        ema_alignment=0,
+        ema_20_slope=0,
+        price_vs_ema20=0,
+        rsi=50,
+        roc=0,
+        volume_ratio=1,
+        orderflow_delta_ratio=0,
+        imbalance_10=0,
+        range_position=0.5,
+        breakout=False,
+    )
+    attach_book(eng, book)
+    eng.strategy_settings["baseline_openai_jev"].call_model = True
+    decisions = await eng.evaluate_snapshot(snapshot)
+    by_strategy = {item.strategy: item for item in decisions}
+    jev = by_strategy["baseline_jev"]
+    assert by_strategy["baseline"].action is Action.NO_TRADE
+    assert jev.action is Action.NO_TRADE
+    assert jev.metadata["jev_effect"] == "assessed"
+    assert jev.metadata["baseline_action"] == "NO_TRADE"
+    assert isinstance(jev.metadata["jev_continuation"], float)
+    assert by_strategy["baseline_openai_jev"].signal_status.value == "skipped"
+    assert "OPENAI_NOT_CONFIGURED" in by_strategy["baseline_openai_jev"].reason_codes
+    assert eng.accounts.accounts["baseline"].positions == {}
+    assert eng.accounts.accounts["baseline_jev"].positions == {}
+
+
+@pytest.mark.asyncio
 async def test_kill_switch_blocks_entries_and_resume_is_audited():
     eng = engine()
     snapshot, book = long_snapshot()

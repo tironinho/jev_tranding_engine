@@ -144,7 +144,7 @@ Versões gravadas em toda decisão:
 
 `score_baseline` produz scores em `[-1, +1]`, um composto e `LONG` / `SHORT` / `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
 
-`baseline_jev` parte dessa ação. O Jev pode vetar para `NO_TRADE` ou ajustar confiança. Não vira uma direção que a baseline recusou e não inverte LONG/SHORT. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
+`baseline_jev` parte dessa ação. O Jev pode vetar para `NO_TRADE` ou ajustar confiança. Não vira uma direção que a baseline recusou e não inverte LONG/SHORT. Quando a baseline fica em `NO_TRADE`, o Jev e a OpenAI ainda leem o snapshot e gravam a leitura. A ação continua `NO_TRADE`. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
 
 `baseline_openai_jev` faz o mesmo, com um passo anterior: a OpenAI devolve `MarketState` validado por Pydantic. Schema inválido rejeita. A interpretação pode vetar por regime/anomalia. Sem chave, ou com chamadas desligadas, a estratégia fica em standby e não finge decisão. Cache de estado de mercado existe como interface e nasce desligado.
 

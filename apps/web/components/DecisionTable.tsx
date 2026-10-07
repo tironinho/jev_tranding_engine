@@ -8,6 +8,12 @@ type Decision = {
   confidence: number;
   signal_status: string;
   reason_codes?: string[];
+  metadata?: {
+    baseline_action?: string;
+    jev_continuation?: number;
+    openai_regime?: string;
+    openai_confidence?: number;
+  };
 };
 
 type Row = {
@@ -21,7 +27,24 @@ type Row = {
 
 function cell(decision?: Decision) {
   if (!decision) return <span className="text-mute">—</span>;
-  const label = decision.signal_status === "skipped" ? "STANDBY" : `${decision.action} ${Math.round(decision.confidence * 100)}%`;
+  if (decision.signal_status === "skipped") {
+    return (
+      <Link href={`/decisions/${decision.decision_id}`} className="font-mono hover:underline">
+        STANDBY
+      </Link>
+    );
+  }
+  const score = `${decision.action} ${Math.round(decision.confidence * 100)}%`;
+  const meta = decision.metadata;
+  const notes: string[] = [];
+  if (meta?.baseline_action === "NO_TRADE" && typeof meta.openai_regime === "string") {
+    const confidence = typeof meta.openai_confidence === "number" ? ` ${Math.round(meta.openai_confidence * 100)}%` : "";
+    notes.push(`${meta.openai_regime}${confidence}`);
+  }
+  if (meta?.baseline_action === "NO_TRADE" && typeof meta.jev_continuation === "number") {
+    notes.push(`cont ${Math.round(meta.jev_continuation * 100)}%`);
+  }
+  const label = notes.length ? `${score} · ${notes.join(" · ")}` : score;
   return (
     <Link href={`/decisions/${decision.decision_id}`} className="font-mono hover:underline">
       {label}

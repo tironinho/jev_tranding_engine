@@ -112,19 +112,7 @@ class BaselineJevStrategy:
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.jev_rule_version,
         }
-        if result.action is Action.NO_TRADE:
-            return _decision(
-                context=context,
-                snapshot=snapshot,
-                strategy=self.key,
-                action=Action.NO_TRADE,
-                confidence=result.confidence,
-                reasons=[BASELINE_NO_TRADE, *result.reason_codes],
-                metadata=metadata,
-                model_version=result.version,
-                prompt_version=context.combination.jev_rule_version,
-                started=started,
-            )
+        abstained = result.action is Action.NO_TRADE
         request = JevMarketRequest(
             prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
             symbol=snapshot.symbol,
@@ -176,6 +164,20 @@ class BaselineJevStrategy:
                 "error": assessment.error,
             }
         )
+        if abstained:
+            _remember_jev(metadata, assessment, "assessed")
+            return _decision(
+                context=context,
+                snapshot=snapshot,
+                strategy=self.key,
+                action=Action.NO_TRADE,
+                confidence=result.confidence,
+                reasons=[BASELINE_NO_TRADE, *result.reason_codes],
+                metadata=metadata,
+                model_version=assessment.provider_version,
+                prompt_version=assessment.prompt_version,
+                started=started,
+            )
         action, confidence, vetoes = apply_jev_veto(
             result.action,
             result.confidence,
@@ -183,8 +185,7 @@ class BaselineJevStrategy:
             context.combination,
             breakout=bool(snapshot.features.get("breakout") or snapshot.features.get("breakdown")),
         )
-        metadata["jev_effect"] = "veto" if action is Action.NO_TRADE else "confirm"
-        metadata["jev_is_mock"] = assessment.is_mock
+        _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
         return _decision(
             context=context,
             snapshot=snapshot,
@@ -225,19 +226,7 @@ class BaselineOpenAIJevStrategy:
                 started=started,
                 status=SignalStatus.SKIPPED,
             )
-        if result.action is Action.NO_TRADE:
-            return _decision(
-                context=context,
-                snapshot=snapshot,
-                strategy=self.key,
-                action=Action.NO_TRADE,
-                confidence=result.confidence,
-                reasons=[BASELINE_NO_TRADE, *result.reason_codes],
-                metadata=metadata,
-                model_version=result.version,
-                prompt_version=None,
-                started=started,
-            )
+        abstained = result.action is Action.NO_TRADE
         context_payload = {
             "timeframe_context": "15m",
             "timeframe_setup": "5m",
@@ -282,8 +271,11 @@ class BaselineOpenAIJevStrategy:
         metadata["openai_latency_ms"] = record.latency_ms
         if state is None:
             return _no_ai(context, snapshot, metadata, OPENAI_INVALID_SCHEMA, started, SignalStatus.VALID)
+        metadata["openai_regime"] = state.market_regime
+        metadata["openai_confidence"] = state.confidence
+        metadata["openai_reversal_risk"] = state.reversal_risk
         blocks = apply_openai_veto(result.action, state, context.combination)
-        if blocks:
+        if blocks and not abstained:
             metadata["openai_effect"] = "veto"
             return _decision(
                 context=context,
@@ -349,6 +341,22 @@ class BaselineOpenAIJevStrategy:
                 "error": assessment.error,
             }
         )
+        if abstained:
+            _remember_jev(metadata, assessment, "assessed")
+            metadata["openai_effect"] = "assessed"
+            reasons = [BASELINE_NO_TRADE, *result.reason_codes, *blocks]
+            return _decision(
+                context=context,
+                snapshot=snapshot,
+                strategy=self.key,
+                action=Action.NO_TRADE,
+                confidence=result.confidence,
+                reasons=reasons,
+                metadata=metadata,
+                model_version=record.model,
+                prompt_version=record.prompt_version,
+                started=started,
+            )
         action, confidence, vetoes = apply_jev_veto(
             result.action,
             result.confidence,
@@ -357,8 +365,7 @@ class BaselineOpenAIJevStrategy:
             breakout=bool(snapshot.features.get("breakout") or snapshot.features.get("breakdown")),
         )
         metadata["openai_effect"] = "confirm"
-        metadata["jev_effect"] = "veto" if action is Action.NO_TRADE else "confirm"
-        metadata["jev_is_mock"] = assessment.is_mock
+        _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
         return _decision(
             context=context,
             snapshot=snapshot,
@@ -371,6 +378,13 @@ class BaselineOpenAIJevStrategy:
             prompt_version=record.prompt_version,
             started=started,
         )
+
+
+def _remember_jev(metadata: dict, assessment, effect: str) -> None:
+    metadata["jev_effect"] = effect
+    metadata["jev_is_mock"] = assessment.is_mock
+    metadata["jev_continuation"] = assessment.trend_continuation_probability
+    metadata["jev_reversal"] = assessment.reversal_probability
 
 
 def _no_ai(context, snapshot, metadata, reason, started, status):

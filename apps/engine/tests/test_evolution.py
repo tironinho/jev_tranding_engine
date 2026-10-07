@@ -11,7 +11,7 @@ from app.evolution.experiment_memory import hypothesis_fingerprint, text_similar
 from app.evolution.hypothesis_generator import accept_hypothesis
 from app.evolution.paths import is_allowed, is_protected
 from app.evolution.promotion_engine import promotion_decision
-from app.evolution.schemas import REJECTION_LIVE, StrategyFamily
+from app.evolution.schemas import REJECTION_LIVE, ResearchReport, StrategyFamily
 from tests.conftest import engine
 
 
@@ -122,6 +122,171 @@ def test_duplicate_hypothesis_is_remembered():
     )
     assert again == "DUPLICATE_EXPERIMENT"
     assert hypothesis_fingerprint("baseline", text) == hypothesis_fingerprint("baseline", "  " + text.upper() + "  ") or text_similarity(text, text) == 1
+
+
+@pytest.mark.asyncio
+async def test_propose_creates_a_persisted_challenger_and_no_action_does_not():
+    eng = engine()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    trades = [_trade("baseline", -0.3, now + timedelta(minutes=index)) for index in range(120)]
+    eng.evolution.bind_trades(lambda: trades)
+
+    async def no_action(anomaly, memory):
+        return ResearchReport(
+            created_at=now,
+            prompt_version="evolution_researcher_v1",
+            decision="NO_ACTION",
+            reason="NO_ACTION",
+            anomaly_id=None if anomaly is None else str(anomaly.id),
+        )
+
+    eng.evolution.researcher.analyze = no_action
+    skipped = await eng.evolution.run_analysis("tester")
+    assert skipped["experiments_created"] == 0
+    assert eng.evolution.experiments.experiments == {}
+
+    async def propose(anomaly, memory):
+        from app.evolution.schemas import RecommendedExperiment
+
+        return ResearchReport(
+            created_at=now,
+            prompt_version="evolution_researcher_v1",
+            decision="PROPOSE_EXPERIMENT",
+            anomaly_id=None if anomaly is None else str(anomaly.id),
+            recommended_experiment=RecommendedExperiment(
+                hypothesis="Filter SOLUSDT when volatility_percentile is above 0.85 and spread is wide.",
+                target_component="apps/engine/app/strategies/baseline_score.py",
+                expected_effect="fewer negative-expectancy entries",
+                allowed_changes=["apps/engine/app/strategies/baseline_score.py"],
+            ),
+            confidence=0.8,
+        )
+
+    eng.evolution.researcher.analyze = propose
+    made = await eng.evolution.run_analysis("tester")
+    assert made["experiments_created"] == 1
+    experiment = next(iter(eng.evolution.experiments.experiments.values()))
+    assert experiment.challenger_version == "B-002"
+    assert experiment.parent_version == "B-001"
+    assert eng.evolution.versions["B-002"].experiment_id == experiment.public_id
+    assert eng.evolution.versions["B-002"].status.value == "draft"
+
+
+@pytest.mark.asyncio
+async def test_restart_reloads_experiment_and_still_blocks_the_duplicate():
+    from app.evolution.repository import MemoryEvolutionRepository
+
+    first = engine()
+    created = first.evolution.experiments.create(
+        family=StrategyFamily.BASELINE,
+        parent_version="B-001",
+        hypothesis="Filter SOLUSDT when volatility_percentile is above 0.85 and spread is wide.",
+        problem="negative expectancy",
+        dataset_version="dataset-test",
+        seed=1,
+        challenger_version="B-002",
+    )
+    repo = MemoryEvolutionRepository()
+    await repo.save_experiment(created)
+    for version in first.evolution.versions.values():
+        await repo.save_version(version)
+    second = engine()
+    await second.evolution.restore(repo)
+    assert created.public_id in second.evolution.experiments.experiments
+    assert second.evolution.versions["B-001"].status.value == "champion"
+    again = second.evolution.experiments.create(
+        family=StrategyFamily.BASELINE,
+        parent_version="B-001",
+        hypothesis="Filter SOLUSDT when volatility_percentile is above 0.85 and spread is wide.",
+        problem="same",
+        dataset_version="dataset-test",
+        seed=1,
+    )
+    assert again == "DUPLICATE_EXPERIMENT"
+
+
+@pytest.mark.asyncio
+async def test_auto_build_records_a_mock_task_without_touching_files():
+    eng = engine()
+    eng.evolution.controls["auto_build"] = True
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    eng.evolution.bind_trades(lambda: [_trade("baseline", -0.3, now + timedelta(minutes=index)) for index in range(120)])
+
+    async def propose(anomaly, memory):
+        from app.evolution.schemas import RecommendedExperiment
+
+        return ResearchReport(
+            created_at=now,
+            prompt_version="evolution_researcher_v1",
+            decision="PROPOSE_EXPERIMENT",
+            recommended_experiment=RecommendedExperiment(
+                hypothesis="Filter SOLUSDT when volatility_percentile is above 0.85 and spread is wide.",
+                target_component="apps/engine/app/strategies/baseline_score.py",
+                expected_effect="fewer losses",
+                allowed_changes=["apps/engine/app/strategies/baseline_score.py"],
+            ),
+            confidence=0.7,
+        )
+
+    eng.evolution.researcher.analyze = propose
+    await eng.evolution.run_analysis("tester")
+    assert eng.evolution.tasks
+    assert eng.evolution.tasks[0]["repository_modified"] is False
+
+
+@pytest.mark.asyncio
+async def test_researcher_calls_the_configured_model_and_rejects_free_text():
+    import httpx
+
+    from app.evolution.experiment_memory import ExperimentMemory
+    from app.evolution.researcher import EvolutionResearcher
+    from app.providers.openai.research import EvolutionResearchClient
+    from tests.conftest import settings
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read()
+        assert b"evolution_research" in body
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_research",
+                "model": "gpt-test",
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    '{"decision":"PROPOSE_EXPERIMENT","root_causes":[{"code":"NEGATIVE_EXPECTANCY",'
+                                    '"explanation":"recent R is below zero","evidence":["bootstrap high < 0"]}],'
+                                    '"recommended_experiment":{"hypothesis":"Filter SOLUSDT when volatility_percentile is above 0.85 and spread is wide.",'
+                                    '"target_component":"apps/engine/app/strategies/baseline_score.py","expected_effect":"fewer losses",'
+                                    '"allowed_changes":["apps/engine/app/strategies/baseline_score.py"]},"risks":[],"confidence":0.8}'
+                                ),
+                            }
+                        ]
+                    }
+                ],
+            },
+        )
+
+    cfg = settings(openai_api_key="test-key", openai_research_model="gpt-test")
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = EvolutionResearchClient(cfg, client=http)
+        researcher = EvolutionResearcher(client, model=cfg.openai_research_model, api_key=cfg.openai_api_key)
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        anomaly = detect_anomalies(
+            [_trade("baseline", -0.3, now + timedelta(minutes=index)) for index in range(120)],
+            min_sample=100,
+            starting_equity=10_000,
+        )[0]
+        report = await researcher.analyze(anomaly, ExperimentMemory())
+    assert report.decision == "PROPOSE_EXPERIMENT"
+    assert report.request_id == "resp_research"
+    assert report.model == "gpt-test"
+    assert report.recommended_experiment is not None
 
 
 def test_vague_hypothesis_is_refused():

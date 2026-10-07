@@ -18,7 +18,7 @@ Saídas alternativas: `rejected` ou `failed`.
 
 Cada transição entra na timeline do experimento e em `promotion_events` quando muda versão. O motivo de rejeição fica em `rejection_reason`.
 
-Depois que o estágio OOS começa, `code_locked` deve ser verdadeiro. Mudou o código: outro experimento, outro `dataset_version`. O mesmo OOS não é reutilizado para ajustar de novo.
+O campo `code_locked` existe na entidade. O pipeline ainda não executa backtest, OOS, walk-forward nem Monte Carlo, então esses estágios não são marcados como aprovados. Quando o OOS passar a rodar, o código do challenger trava e uma mudança abre outro experimento.
 
 Reproduzir um experimento exige git commit, dataset, config, fees, slippage, seed, modelo e `prompt_version`. Esses campos existem na entidade. Um backtest histórico não é recalculado com outro dataset sem marcar a versão.
 

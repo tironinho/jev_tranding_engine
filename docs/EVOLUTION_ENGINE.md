@@ -24,7 +24,7 @@ Champions iniciais são o código que já existe: `B-001`, `J-001`, `OJ-001`. M�
 | --- | --- |
 | `observer` | Recorta trades por família e janela. |
 | `anomaly_detector` | Só emite anomalia com amostra mínima e intervalo bootstrap abaixo de zero. |
-| `researcher` | Saída estruturada. Sem modelo de pesquisa, a decisão é `NO_ACTION`. |
+| `researcher` | Chama `OPENAI_RESEARCH_MODEL` com JSON Schema. Sem modelo, sem cliente HTTP ou com resposta inválida, a decisão é `NO_ACTION`. Não inventa hipótese. |
 | `hypothesis_generator` | Recusa pedido vago. |
 | `experiment_memory` | Fingerprint e similaridade textual. Embeddings ficam para depois. |
 | `experiment_manager` | Cria, cancela e rejeita. Branch `experiment/EXP-xxxxxx`, nunca `main`. |
@@ -32,7 +32,9 @@ Champions iniciais são o código que já existe: `B-001`, `J-001`, `OJ-001`. M�
 | `validation_pipeline` | Ordem dos gates e bloqueio de path protegido. |
 | `promotion_engine` | Shadow e paper só com gates. Live sempre recusado. |
 | `metrics_comparator` | Reusa o resumo de performance já existente. |
-| `service` | Champions, análise diária e API. |
+| `ranking` | Ordena anomalias e descarta duplicata da mesma família, código e símbolo. |
+| `repository` | `MemoryEvolutionRepository` nos testes. `PostgresEvolutionRepository` quando o engine sobe com Postgres. |
+| `service` | `run_analysis` persiste experimento e versão challenger. `AUTO_BUILD` grava a task do agente. Live continua desligado. |
 
 Walk-forward, Monte Carlo e o ciclo de shadow/paper estão contratados nos gates. Eles não são aprovados com número inventado: sem artefato de validação, a promoção falha com `GATES_INCOMPLETE`.
 

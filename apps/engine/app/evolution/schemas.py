@@ -81,6 +81,7 @@ REJECTION_LIVE = "LIVE_PROMOTION_DISABLED"
 REJECTION_TESTS = "TESTS_FAILED"
 REJECTION_CANCELLED = "CANCELLED"
 DECISION_NO_ACTION = "NO_ACTION"
+DECISION_PROPOSE = "PROPOSE_EXPERIMENT"
 
 
 class StrategyVersion(BaseModel):
@@ -145,15 +146,37 @@ class Anomaly(BaseModel):
     window: str
 
 
+class RootCause(BaseModel):
+    code: str
+    explanation: str
+    evidence: list[str] = Field(default_factory=list)
+
+
+class RecommendedExperiment(BaseModel):
+    hypothesis: str
+    target_component: str
+    expected_effect: str
+    allowed_changes: list[str] = Field(default_factory=list)
+
+
 class ResearchReport(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     created_at: datetime
     prompt_version: str
     decision: str
     root_cause_hypotheses: list[str] = Field(default_factory=list)
+    root_causes: list[RootCause] = Field(default_factory=list)
     recommended_experiments: list[str] = Field(default_factory=list)
+    recommended_experiment: RecommendedExperiment | None = None
     evidence: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     anomaly_id: str | None = None
     reason: str | None = None
+    model: str | None = None
+    request_id: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    latency_ms: float | None = None
+    estimated_cost: float | None = None
+    error: str | None = None

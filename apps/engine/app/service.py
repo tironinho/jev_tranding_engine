@@ -196,6 +196,9 @@ class TradingEngine:
                     self.apply_runtime(runtime)
                     self._log("restore", "book restored from postgres")
         await self.feed.start()
+        self.evolution.bind_research_client(self._http)
+        if self.postgres is not None and self.postgres.factory is not None and self.db_healthy:
+            await self.evolution.attach_postgres(self.postgres.factory)
         await self.evolution.start()
         self._log("engine", "engine started")
 

@@ -32,6 +32,8 @@ class ExperimentManager:
         problem: str,
         dataset_version: str,
         seed: int,
+        challenger_version: str | None = None,
+        source_analysis_id: str | None = None,
     ) -> Experiment | str:
         if self.memory.find_similar(family.value, hypothesis) is not None:
             return REJECTION_DUPLICATE
@@ -41,7 +43,9 @@ class ExperimentManager:
             public_id=public_id,
             strategy_family=family,
             parent_version=parent_version,
+            challenger_version=challenger_version,
             hypothesis=hypothesis,
+            source_analysis_id=source_analysis_id,
             problem_statement=problem,
             created_at=now,
             status=ExperimentStatus.PROPOSED,

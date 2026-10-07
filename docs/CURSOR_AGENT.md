@@ -14,7 +14,7 @@ Implementações previstas: mock, Cursor, e no futuro Codex ou Claude Code. O n�
 
 `CODING_AGENT_PROVIDER=mock` é o default. O mock grava a tarefa e devolve `repository_modified=false`. Ele não cria branch, não edita arquivo e não abre pull request.
 
-`CursorCodingAgentProvider` existe e recusa a chamada. A documentação oficial de CLI ou Cloud Agent ainda não foi ligada neste repositório, então nenhum comando e nenhum endpoint foram inventados.
+`CursorCodingAgentProvider` recusa a chamada. O SDK oficial existe (`cursor-sdk` / `@cursor/sdk`, `Agent.prompt`, runtime local ou cloud). Ele não está ligado neste processo: uma chamada daqui editaria o checkout da Trading Engine, e a Evolution Engine exige worktree isolada mais `CURSOR_API_KEY`. Até isso existir, o provider fica bloqueado e o mock é o único agente que grava task.
 
 ## Quando a integração existir
 

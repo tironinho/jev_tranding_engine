@@ -16,6 +16,7 @@ type Status = {
   last_decision: string;
   min_sample_size: number;
   live_promotion: string;
+  coding_tasks?: number;
 };
 
 type Champion = {
@@ -70,6 +71,7 @@ export default async function EvolutionPage() {
           <Metric label="MIN SAMPLE" value={String(info.min_sample_size)} />
           <Metric label="CODING AGENT" value={info.coding_agent.toUpperCase()} />
           <Metric label="LIVE PROMOTION" value={info.live_promotion.toUpperCase()} />
+          <Metric label="CODING TASKS" value={String(info.coding_tasks ?? 0)} />
         </dl>
         <div className="mt-3 flex flex-wrap gap-2 text-[10px] tracking-[0.12em] text-mute">
           <span>RESEARCH {info.controls.auto_research ? "ON" : "OFF"}</span>

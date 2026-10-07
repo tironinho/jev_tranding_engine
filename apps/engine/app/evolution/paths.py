@@ -69,8 +69,8 @@ def main() -> None:
     try:
         diff = subprocess.check_output(["git", "diff", "--name-only", f"{base}...HEAD"], text=True, stderr=subprocess.DEVNULL)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("protected-path check skipped: no diff base")
-        return
+        print("VALIDATION ERROR: no diff base")
+        raise SystemExit(1)
     blocked = protected_changes([line for line in diff.splitlines() if line.strip()])
     if blocked:
         print("PROTECTED_CODE_CHANGED")

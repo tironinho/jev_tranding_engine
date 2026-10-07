@@ -9,7 +9,7 @@ A Evolution Engine não altera:
 - kill switch;
 - execução live.
 
-Paths protegidos estão em `app/evolution/paths.py`. Incluem `app/risk/`, `binance_live.py`, `.env` e os prefixos conceituais `core/risk`, `security`, `secrets`, `kill_switch` e `capital_limits`. Qualquer diff nesses paths é `PROTECTED_CODE_CHANGED`.
+Paths protegidos estão em `app/evolution/paths.py`. Incluem `app/risk/`, `binance_live.py`, `.env` e os prefixos conceituais `core/risk`, `security`, `secrets`, `kill_switch` e `capital_limits`. Qualquer diff nesses paths é `PROTECTED_CODE_CHANGED`. Se o `git diff` contra a base não puder ser calculado, o check termina com erro. Ele não passa em silêncio.
 
 Paths permitidos para um experimento futuro: estratégias, features, sinais, filtros, regime e prompts. Peso de baseline e config de estratégia entram. Config de risco não.
 

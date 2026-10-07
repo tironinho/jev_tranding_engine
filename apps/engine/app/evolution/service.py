@@ -12,14 +12,18 @@ from app.domain.mathutil import utcnow
 from app.domain.schemas import TradeRecord
 from app.evolution.agent_dispatcher import CodingAgentNotConfigured, build_provider, build_task_prompt
 from app.evolution.anomaly_detector import detect_anomalies
-from app.evolution.experiment_manager import ExperimentManager
+from app.evolution.experiment_manager import ExperimentManager, new_dataset_version
 from app.evolution.experiment_memory import ExperimentMemory
+from app.evolution.hypothesis_generator import accept_hypothesis
 from app.evolution.metrics_comparator import summarize
 from app.evolution.observer import EvolutionObserver
 from app.evolution.promotion_engine import next_status, promotion_decision
+from app.evolution.ranking import rank_anomalies
+from app.evolution.repository import EvolutionRepository, MemoryEvolutionRepository, PostgresEvolutionRepository
 from app.evolution.researcher import EvolutionResearcher
 from app.evolution.schemas import (
     DECISION_NO_ACTION,
+    DECISION_PROPOSE,
     RUNNING_EXPERIMENT_STATUSES,
     Anomaly,
     ExperimentStatus,
@@ -28,6 +32,7 @@ from app.evolution.schemas import (
     StrategyVersion,
     VersionStatus,
 )
+from app.providers.openai.research import EvolutionResearchClient
 
 
 def _load_policy() -> dict:
@@ -45,15 +50,20 @@ class EvolutionService:
         self.memory = ExperimentMemory()
         self.experiments = ExperimentManager(self.memory)
         self.observer = EvolutionObserver(settings.initial_paper_equity)
+        self.research_client = EvolutionResearchClient(settings)
         self.researcher = EvolutionResearcher(
+            self.research_client,
             model=settings.openai_research_model,
-            enabled=bool(settings.auto_research and settings.openai_api_key and settings.openai_research_model),
+            api_key=settings.openai_api_key,
         )
         self.agent = build_provider(settings.coding_agent_provider)
+        self.repo: EvolutionRepository = MemoryEvolutionRepository()
         self.versions: dict[str, StrategyVersion] = {}
         self.anomalies: list[Anomaly] = []
         self.reports: list[ResearchReport] = []
+        self.tasks: list[dict] = []
         self.promotions: list[dict] = []
+        self._version_lock = asyncio.Lock()
         self.controls = {
             "auto_research": settings.auto_research,
             "auto_build": settings.auto_build,
@@ -87,6 +97,42 @@ class EvolutionService:
                 git_branch="main",
             )
 
+    def bind_research_client(self, client) -> None:
+        self.research_client.client = client
+        self.researcher.client = self.research_client
+
+    async def attach_postgres(self, factory) -> None:
+        self.repo = PostgresEvolutionRepository(factory)
+        snapshot = await self.repo.load()
+        if snapshot.versions or snapshot.experiments:
+            await self.restore(self.repo)
+            return
+        for version in self.versions.values():
+            await self.repo.save_version(version)
+
+    async def restore(self, repo: EvolutionRepository) -> None:
+        """Replace in-memory evolution state with a previously saved snapshot."""
+        self.repo = repo
+        snapshot = await repo.load()
+        if snapshot.versions:
+            self.versions = {item.version: item for item in snapshot.versions}
+        self.experiments.experiments = {item.public_id: item for item in snapshot.experiments}
+        if snapshot.experiments:
+            numbers = []
+            for item in snapshot.experiments:
+                try:
+                    numbers.append(int(item.public_id.split("-", 1)[1]))
+                except (IndexError, ValueError):
+                    continue
+            self.experiments._sequence = max(numbers or [0])
+        self.memory.records = list(snapshot.memory)
+        if snapshot.anomalies:
+            self.anomalies = list(snapshot.anomalies)
+        self.reports = list(snapshot.reports)
+        self.tasks = list(snapshot.tasks)
+        if snapshot.controls:
+            self.controls.update(snapshot.controls)
+
     async def start(self) -> None:
         if not self.settings.evolution_engine_enabled:
             return
@@ -119,14 +165,62 @@ class EvolutionService:
             report = await self.researcher.analyze(None, self.memory)
             self.reports.append(report)
             self.last_decision = report.decision
-            return {"decision": report.decision, "reason": report.reason, "anomalies": 0, "actor": actor, "observation": observation}
+            return {
+                "decision": report.decision,
+                "reason": report.reason,
+                "anomalies": 0,
+                "experiments_created": 0,
+                "actor": actor,
+                "observation": observation,
+            }
         created = 0
-        for anomaly in self.anomalies:
+        for anomaly in rank_anomalies(self.anomalies):
+            if created >= self.settings.max_daily_experiments:
+                break
             report = await self.researcher.analyze(anomaly, self.memory)
             self.reports.append(report)
-            if report.decision != DECISION_NO_ACTION and self.controls["auto_build"] and created < self.settings.max_daily_experiments:
-                created += 1
-        self.last_decision = DECISION_NO_ACTION if not any(item.decision != DECISION_NO_ACTION for item in self.reports[-len(self.anomalies):]) else "PROPOSED"
+            await self.repo.save_anomaly(anomaly)
+            await self.repo.save_report(report)
+            if report.decision != DECISION_PROPOSE or report.recommended_experiment is None:
+                continue
+            hypothesis = report.recommended_experiment.hypothesis
+            if not accept_hypothesis(hypothesis):
+                continue
+            if self.memory.find_similar(anomaly.strategy_family.value, hypothesis) is not None:
+                continue
+            parent = self._champion_version(anomaly.strategy_family)
+            challenger = await self._allocate_challenger(anomaly.strategy_family)
+            made = self.experiments.create(
+                family=anomaly.strategy_family,
+                parent_version=parent,
+                hypothesis=hypothesis,
+                problem=anomaly.code,
+                dataset_version=new_dataset_version(),
+                seed=anomaly.sample_size,
+                challenger_version=challenger,
+                source_analysis_id=str(anomaly.id),
+            )
+            if not hasattr(made, "public_id"):
+                continue
+            version = StrategyVersion(
+                strategy_family=anomaly.strategy_family,
+                version=challenger,
+                parent_version=parent,
+                status=VersionStatus.DRAFT,
+                created_at=utcnow(),
+                created_by=actor,
+                config_hash=self.versions[parent].config_hash if parent in self.versions else "unassigned",
+                experiment_id=made.public_id,
+                prompt_version=report.prompt_version,
+            )
+            self.versions[challenger] = version
+            await self.repo.save_version(version)
+            await self.repo.save_experiment(made)
+            created += 1
+            if self.controls["auto_build"]:
+                await self._dispatch(made)
+        recent = self.reports[-len(self.anomalies) :] if self.anomalies else []
+        self.last_decision = DECISION_PROPOSE if any(item.decision == DECISION_PROPOSE for item in recent) else DECISION_NO_ACTION
         return {
             "decision": self.last_decision,
             "anomalies": len(self.anomalies),
@@ -134,6 +228,45 @@ class EvolutionService:
             "actor": actor,
             "observation": {"trade_count": observation["trade_count"]},
         }
+
+    def _champion_version(self, family: StrategyFamily) -> str:
+        for version in self.versions.values():
+            if version.strategy_family == family and version.status is VersionStatus.CHAMPION:
+                return version.version
+        return {"baseline": "B-001", "baseline_jev": "J-001", "baseline_openai_jev": "OJ-001"}[family.value]
+
+    async def _allocate_challenger(self, family: StrategyFamily) -> str:
+        prefix = {"baseline": "B", "baseline_jev": "J", "baseline_openai_jev": "OJ"}[family.value]
+        async with self._version_lock:
+            numbers = []
+            for code in self.versions:
+                if not code.startswith(prefix + "-"):
+                    continue
+                try:
+                    numbers.append(int(code.split("-", 1)[1]))
+                except ValueError:
+                    continue
+            return f"{prefix}-{max(numbers or [0]) + 1:03d}"
+
+    async def _dispatch(self, experiment) -> dict:
+        prompt = build_task_prompt(experiment)
+        task = {
+            "task_id": experiment.public_id,
+            "experiment_id": experiment.public_id,
+            "strategy_family": experiment.strategy_family.value,
+            "parent_version": experiment.parent_version,
+            "challenger_version": experiment.challenger_version,
+            "prompt": prompt,
+            "branch": experiment.git_branch,
+            "protected_enforced": True,
+        }
+        try:
+            result = await self.agent.create_experiment_task(task)
+        except CodingAgentNotConfigured as exc:
+            result = {**task, "provider": getattr(self.agent, "name", "unknown"), "status": "blocked", "error": str(exc), "repository_modified": False}
+        self.tasks.append(result)
+        await self.repo.save_task(result)
+        return result
 
     def status(self) -> dict:
         running = [item for item in self.experiments.experiments.values() if item.status in RUNNING_EXPERIMENT_STATUSES]
@@ -151,6 +284,8 @@ class EvolutionService:
             "last_decision": self.last_decision,
             "min_sample_size": self.settings.min_experiment_sample_size,
             "live_promotion": "disabled",
+            "coding_tasks": len(self.tasks),
+            "research_model": self.researcher.model or None,
         }
 
     def champion_rows(self) -> list[dict]:

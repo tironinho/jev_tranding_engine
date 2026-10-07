@@ -272,7 +272,7 @@ class Settings(BaseSettings):
     trading_live_enabled: bool = False
     allow_real_orders: bool = False
     market_type: str = "futures"
-    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT"
+    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT"
     snapshot_trigger: str = "1m_close"
     default_risk_per_trade: float = 0.005
     max_risk_per_trade: float = 0.01

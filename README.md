@@ -45,7 +45,7 @@ Segredos ficam só no processo do engine e no servidor Next. Não use prefixo `N
 | `TRADING_ENGINE_ENABLED` | Kill switch de boot. |
 | `TRADING_LIVE_ENABLED` e `ALLOW_REAL_ORDERS` | Os dois precisam ser `true` para existir ordem real. |
 | `MARKET_TYPE` | `futures` ou `spot`. |
-| `SYMBOLS` | Default `BTCUSDT,ETHUSDT,SOLUSDT`. |
+| `SYMBOLS` | Default `BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT`. |
 | `MIN_NET_RR`, risco e exposição | Limites do Risk Engine. |
 
 `exposure ≈ risk_per_trade / distância_do_stop`. Um risco de 0,5% com stop de 2% usa cerca de 25% do capital. Stop curto demais estoura exposição e a ordem é rejeitada, em vez de crescer a quantidade em silêncio.

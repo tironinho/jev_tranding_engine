@@ -2,7 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 from app.config import RiskLimits
 from app.domain.enums import NO_STRUCTURE_TARGET, Action
-from app.execution.paper import position_exit
+from types import SimpleNamespace
+
+from app.execution.paper import position_exit, stepped_stop
 from app.features.engine import compute_features
 from app.market.state import Candle, SymbolMarketState
 from app.risk.economics import plan_geometry
@@ -68,6 +70,46 @@ def test_broken_15m_high_still_has_no_invented_target():
         "resistance_15m": 100.0,
     }
     assert plan_geometry(Action.LONG, 101.0, features, limits) == NO_STRUCTURE_TARGET
+
+
+def _position(**overrides):
+    values = dict(
+        side=Action.LONG,
+        entry_price=100.0,
+        stop=99.0,
+        initial_stop=99.0,
+        target=102.5,
+        quantity=1.0,
+        entry_fee=0.1,
+        exit_fee_rate=0.0005,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_stop_stays_put_inside_the_first_r():
+    assert stepped_stop(_position(), 100.4) is None
+
+
+def test_one_r_moves_a_long_stop_to_fee_breakeven():
+    locked = stepped_stop(_position(), 101.0)
+    assert locked == (100.0 + 0.1) / (1 - 0.0005)
+
+
+def test_two_r_locks_one_r_of_profit():
+    assert stepped_stop(_position(), 102.0) == 101.0
+
+
+def test_short_mirrors_the_same_steps():
+    short = _position(side=Action.SHORT, stop=101.0, initial_stop=101.0, target=97.5)
+    assert stepped_stop(short, 99.5) is None
+    assert stepped_stop(short, 99.0) == (100.0 - 0.1) / (1 + 0.0005)
+    assert stepped_stop(short, 98.0) == 99.0
+
+
+def test_a_tighter_stop_is_not_loosened():
+    position = _position(stop=100.2)
+    assert stepped_stop(position, 101.0) is None
 
 
 def test_time_exit_closes_without_touching_stop_or_target():

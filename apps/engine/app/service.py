@@ -39,7 +39,7 @@ from app.domain.mathutil import utcnow
 from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, RiskDecision, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, execution_of
-from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed
+from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed, stepped_stop
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
@@ -611,6 +611,7 @@ class TradingEngine:
             max_hold_minutes=self.risk.limits.max_hold_minutes,
         )
         if reason is None:
+            await self._step_stop(key, symbol, position, observed)
             return
         if position.mode == "live":
             await self._exit_live(key, symbol, position, reason, as_of, state)
@@ -741,6 +742,17 @@ class TradingEngine:
             order,
             fill,
         )
+
+    async def _step_stop(self, key: str, symbol: str, position, observed: dict) -> None:
+        favorable = observed["max_bid"] if position.side is Action.LONG else observed["min_ask"]
+        updated = stepped_stop(position, favorable)
+        if updated is None:
+            return
+        if position.initial_stop is None:
+            position.initial_stop = position.stop
+        position.stop = updated
+        await self._checkpoint(key, positions=[position], orders=[], fills=[])
+        self._log("stop", f"{key} {symbol} {updated:.8f}")
 
     async def _finish_exit(
         self,

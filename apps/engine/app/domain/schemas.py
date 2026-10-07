@@ -165,6 +165,7 @@ class PositionRecord(BaseModel):
     quantity: float
     entry_price: float
     stop: float
+    initial_stop: float | None = None
     target: float
     opened_at: datetime
     closed_at: datetime | None = None

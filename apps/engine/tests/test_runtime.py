@@ -189,6 +189,47 @@ async def test_exit_uses_event_time_stored_fee_and_regime():
 
 
 @pytest.mark.asyncio
+async def test_one_r_steps_the_stop_and_a_giveback_exits_there():
+    eng = engine()
+    position = _open(
+        eng,
+        entry_price=100,
+        stop=99,
+        target=102.5,
+        quantity=1,
+        entry_fee=0.1,
+        exit_fee_rate=0.0005,
+        initial_net_risk=1,
+    )
+    state = eng.states["BTCUSDT"]
+    state.last_price = 100.4
+    state.best_bid = 100.4
+    state.best_ask = 100.45
+    await eng.on_price("BTCUSDT", 100.4, clock() + timedelta(minutes=1))
+    await asyncio.gather(*list(eng._background))
+    assert position.stop == 99
+
+    state.last_price = 101
+    state.best_bid = 101
+    state.best_ask = 101.05
+    await eng.on_price("BTCUSDT", 101, clock() + timedelta(minutes=2))
+    await asyncio.gather(*list(eng._background))
+    breakeven = (100 + 0.1) / (1 - 0.0005)
+    assert position.stop == pytest.approx(breakeven)
+    assert position.initial_stop == 99
+
+    state.last_price = 100
+    state.best_bid = 100
+    state.best_ask = 100.05
+    await eng.on_price("BTCUSDT", 100, clock() + timedelta(minutes=3))
+    await asyncio.gather(*list(eng._background))
+    trade = eng.accounts.accounts["baseline"].trades[0]
+    assert trade.exit_reason == "STOP"
+    assert trade.exit_price == pytest.approx(breakeven)
+    assert trade.exit_price > 99
+
+
+@pytest.mark.asyncio
 async def test_price_events_do_not_time_exit_on_the_wall_clock():
     eng = engine()
     _open(eng)

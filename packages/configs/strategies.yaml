@@ -1,6 +1,6 @@
 # Defaults de boot. O dashboard persiste override no banco.
 # Pesos e limiares NÃO foram otimizados. Calibrar com backtest antes de live.
-# Só a baseline abre a posição simulada. Jev e OpenAI julgam o mesmo sinal e não clonam a ordem.
+# As três contas são paper: fill simulado, nunca ordem na Binance.
 # call_model=true gasta OpenAI só quando OPENAI_API_KEY existe.
 # Sem chave a estratégia fica em standby e não inventa decisão.
 

@@ -114,7 +114,7 @@ def test_limit_below_the_market_is_not_filled():
 
 
 @pytest.mark.asyncio
-async def test_agreed_signal_opens_only_the_baseline_book():
+async def test_each_paper_strategy_opens_its_own_book():
     eng = engine()
     snapshot, book = long_snapshot()
     attach_book(eng, book)
@@ -126,7 +126,7 @@ async def test_agreed_signal_opens_only_the_baseline_book():
     assert by_strategy["baseline"].action is Action.LONG
     assert by_strategy["baseline_jev"].action is Action.LONG
     assert eng.accounts.accounts["baseline"].positions["BTCUSDT"].quantity > 0
-    assert eng.accounts.accounts["baseline_jev"].positions == {}
+    assert eng.accounts.accounts["baseline_jev"].positions["BTCUSDT"].quantity > 0
     assert eng.accounts.accounts["baseline_openai_jev"].positions == {}
 
 

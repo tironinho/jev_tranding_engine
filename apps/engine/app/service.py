@@ -439,9 +439,6 @@ class TradingEngine:
             await self.bus.publish(Event("decision", {"decision_id": stored["decision_id"], "strategy": key, "action": decision.action.value}))
             if decision.action is Action.NO_TRADE or decision.signal_status is not SignalStatus.VALID:
                 return decision
-            # One fill per signal. Jev and OpenAI stay on the decision row and do not clone the position.
-            if key != "baseline":
-                return decision
             if cfg.mode is OperatingMode.SHADOW:
                 return decision
             if cfg.mode is OperatingMode.PAPER:

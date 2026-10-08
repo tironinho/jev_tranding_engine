@@ -146,7 +146,7 @@ async def test_a_later_signal_does_not_add_to_the_same_symbol():
 
 @pytest.mark.asyncio
 async def test_a_scrap_of_capital_does_not_open():
-    eng = engine(max_symbol_exposure=0.004)
+    eng = engine(max_symbol_exposure=0.0008)
     snapshot, book = long_snapshot()
     attach_book(eng, book)
     for key, cfg in eng.strategy_settings.items():

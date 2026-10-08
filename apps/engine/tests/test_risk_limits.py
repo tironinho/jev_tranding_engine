@@ -6,6 +6,7 @@ from app.domain.enums import (
     MAX_DAILY_LOSS,
     MAX_OPEN_POSITIONS,
     NET_RR_TOO_LOW,
+    MAX_TOTAL_EXPOSURE,
     SPOT_SHORT_NOT_SUPPORTED,
     Action,
 )
@@ -275,7 +276,7 @@ def test_tight_stop_is_sized_to_the_account_and_clears_fees():
     assert accepted.accepted, accepted.reject_reasons
     assert accepted.economics is not None
     assert accepted.economics.net_rr is not None and accepted.economics.net_rr >= 1.5
-    assert accepted.economics.entry * accepted.economics.quantity <= 10_000 * 0.02 * 1.001
+    assert accepted.economics.entry * accepted.economics.quantity <= 10_000 * 0.02 * eng.risk.limits.max_leverage * 1.001
     assert accepted.details["quantity_capped"] is True
 
 
@@ -294,6 +295,57 @@ def test_margin_short_opens_and_spot_boot_uses_the_spot_book():
     )
     assert opened.accepted, opened.reject_reasons
     assert opened.economics is not None
-    assert opened.economics.entry * opened.economics.quantity <= 10_000 * 0.4 * 1.001
+    assert opened.economics.entry * opened.economics.quantity <= 10_000 * 0.4 * eng.risk.limits.max_leverage * 1.001
     futures = engine()
     assert futures.settings.market_type == "futures"
+
+
+def test_paper_margin_can_exceed_equity_up_to_five_times():
+    eng = engine(max_symbol_exposure=1, max_total_exposure=1)
+    assert eng.risk.limits.max_leverage == 5
+    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, range_1m=0.35, range_60m=5)
+    accepted = eng.risk.evaluate(
+        _order(snapshot, Action.LONG),
+        snapshot,
+        _context(equity=2_000, cash=2_000, day_start_equity=2_000),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert accepted.accepted, accepted.reject_reasons
+    economics = accepted.economics
+    assert economics is not None
+    notional = economics.entry * economics.quantity
+    assert notional > 2_000
+    assert notional <= 2_000 * 5 * 1.001
+    position = eng._open_from_fill(
+        _order(snapshot, Action.LONG),
+        snapshot,
+        economics,
+        economics.entry,
+        economics.quantity,
+        1.0,
+        "paper",
+        None,
+    )
+    locked = eng.accounts.accounts["baseline"].margin_locked[str(position.position_id)]
+    assert abs(locked - notional / 5) < 1e-6
+    thin = eng.risk.evaluate(
+        _order(snapshot, Action.LONG),
+        snapshot,
+        _context(equity=2_000, cash=20, day_start_equity=2_000),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert thin.accepted, thin.reject_reasons
+    assert thin.economics is not None
+    thin_notional = thin.economics.entry * thin.economics.quantity
+    assert thin_notional > 20
+    assert thin_notional <= 20 * 5 * 1.001
+    full = eng.risk.evaluate(
+        _order(snapshot, Action.LONG),
+        snapshot,
+        _context(equity=2_000, cash=2_000, day_start_equity=2_000, total_exposure_notional=2_000 * 5),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert MAX_TOTAL_EXPOSURE in full.reject_reasons

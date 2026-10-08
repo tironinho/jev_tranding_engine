@@ -137,4 +137,5 @@ def test_paper_book_and_open_trade_money():
     assert baseline["net_pnl"] == 9
     jev = next(item for item in book["accounts"] if item["strategy"] == "baseline_jev")
     assert jev["net_pnl"] == 0
+    assert book["leverage"] == 5
     assert jev["equity"] == 10_000

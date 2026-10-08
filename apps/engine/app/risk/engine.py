@@ -223,13 +223,13 @@ class RiskEngine:
 
         projected_symbol = context.symbol_exposure_notional + notional
         projected_total = context.total_exposure_notional + notional
-        if context.equity <= 0:
+        if context.equity <= 0 or self._leverage() <= 0:
             return self._reject(decision, [INSUFFICIENT_MARGIN], economics=economics)
-        if projected_symbol / context.equity > self.limits.max_symbol_exposure + 1e-6:
+        if projected_symbol > self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) + 1e-6:
             return self._reject(decision, [MAX_SYMBOL_EXPOSURE], economics=economics)
-        if projected_total / context.equity > self.limits.max_total_exposure + 1e-6:
+        if projected_total > self._notional_ceiling(context.equity, self.limits.max_total_exposure) + 1e-6:
             return self._reject(decision, [MAX_TOTAL_EXPOSURE], economics=economics)
-        if notional > context.cash * self.limits.max_leverage + 1e-6:
+        if notional > context.cash * self._leverage() + 1e-6:
             return self._reject(decision, [INSUFFICIENT_MARGIN], economics=economics)
 
         return RiskDecision(
@@ -265,12 +265,18 @@ class RiskEngine:
             return None
         return preview
 
+    def _leverage(self) -> float:
+        return max(self.limits.max_leverage, 0.0)
+
+    def _notional_ceiling(self, equity: float, fraction: float) -> float:
+        return equity * fraction * self._leverage()
+
     def _capital_room(self, context: RiskContext, entry_fee_rate: float) -> tuple[float, str]:
-        if context.equity <= 0 or context.cash <= 0:
+        if context.equity <= 0 or context.cash <= 0 or self._leverage() <= 0:
             return 0.0, INSUFFICIENT_MARGIN
-        symbol_room = context.equity * self.limits.max_symbol_exposure - context.symbol_exposure_notional
-        total_room = context.equity * self.limits.max_total_exposure - context.total_exposure_notional
-        cash_room = context.cash * max(self.limits.max_leverage, 0.0) / (1 + max(entry_fee_rate, 0.0))
+        symbol_room = self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) - context.symbol_exposure_notional
+        total_room = self._notional_ceiling(context.equity, self.limits.max_total_exposure) - context.total_exposure_notional
+        cash_room = context.cash * self._leverage() / (1 + max(entry_fee_rate, 0.0))
         room, reason = min(
             (
                 (symbol_room, MAX_SYMBOL_EXPOSURE),

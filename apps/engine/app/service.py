@@ -1064,7 +1064,7 @@ class TradingEngine:
                     "open_positions": len(account.positions),
                 }
             )
-        return {"starting_equity": start, "quote": "USDT", "accounts": accounts}
+        return {"starting_equity": start, "quote": "USDT", "leverage": self.risk.limits.max_leverage, "accounts": accounts}
 
     def status(self) -> dict:
         jev_name = getattr(self.jev, "provider_name", "unknown")

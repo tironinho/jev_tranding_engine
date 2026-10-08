@@ -26,6 +26,7 @@ export type PaperAccount = {
 export type PaperBook = {
   starting_equity: number;
   quote: string;
+  leverage?: number;
   accounts: PaperAccount[];
 };
 
@@ -105,7 +106,7 @@ export function PaperBookPanel({ book }: { book: PaperBook | null | undefined })
             </tbody>
           </table>
           <div className="px-2 pt-2 text-[10px] text-mute">
-            USDT simulado. Não some as três contas. OPEN é a posição marcada. VS START é equity menos a banca inicial.
+            USDT simulado, cross margin até {book?.leverage ?? 1}x. A margem travada é o nocional dividido por essa alavancagem. Ordem real continua bloqueada. Não some as contas. OPEN é a posição marcada. VS START é equity menos a banca inicial.
           </div>
         </div>
       )}

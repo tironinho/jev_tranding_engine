@@ -1,5 +1,5 @@
 # Limites iniciais conservadores. Não foram otimizados.
-# Alavancagem não aparece no dashboard de propósito.
+# A alavancagem só vale no livro simulado.
 
 target_mode: structure
 # O alvo cabe na faixa de 60 minutos e não passa de 2,5R. Se depois da taxa não paga 1,5R, a entrada não abre.
@@ -21,7 +21,8 @@ min_order_notional: 50
 max_hold_minutes: 60
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false
-max_leverage: 1
+# Cross margin de papel até 5x. A margem travada é o nocional dividido por 5. Ordem real continua bloqueada.
+max_leverage: 5
 apply_funding: true
 expected_hold_minutes: 15
 funding_interval_minutes: 480

@@ -1079,9 +1079,9 @@ class TradingEngine:
                         "notional": notional,
                         "margin": margin,
                         "leverage": (notional / margin) if margin and margin > 0 else None,
-                        "unrealized": unrealized(position, mark),
-                        "target_pnl": unrealized(position, position.target),
-                        "stop_pnl": unrealized(position, position.stop),
+                        "unrealized": _marked_net(position, mark, self.fee_config),
+                        "target_pnl": _plan_net(position, position.target, self.fee_config),
+                        "stop_pnl": _plan_net(position, position.stop, self.fee_config),
                         "mfe": position.mfe,
                         "mae": position.mae,
                         "opened_at": position.opened_at.isoformat(),
@@ -1240,6 +1240,16 @@ def _exit_touch(position, reason: str, state) -> tuple[float | None, float | Non
     if reason == "TARGET" and position.side is Action.SHORT:
         return state.best_bid, position.target, None
     return state.best_bid, state.best_ask, state.book
+
+
+def _marked_net(position, price: float, fee_config) -> float:
+    """Price result if closed here, after the exit fee still to be paid."""
+    return unrealized(position, price) - _exit_fee(position, price, position.quantity, fee_config)
+
+
+def _plan_net(position, price: float, fee_config) -> float:
+    """Trade result at this price, after the entry fee already paid and the exit fee."""
+    return unrealized(position, price) - position.entry_fee - _exit_fee(position, price, position.quantity, fee_config)
 
 
 def _exit_fee(position, exit_price: float, quantity: float, fee_config) -> float:

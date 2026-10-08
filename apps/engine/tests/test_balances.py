@@ -202,9 +202,9 @@ def test_paper_book_and_open_trade_money():
     row = eng.positions_payload()[0]
     assert row["notional"] == 210
     assert row["leverage"] == 2.1
-    assert row["unrealized"] == 10
-    assert row["target_pnl"] == 20
-    assert row["stop_pnl"] == -10
+    assert row["unrealized"] == 10 - 105 * 2 * 0.0005
+    assert row["target_pnl"] == 20 - 1 - 110 * 2 * 0.0005
+    assert row["stop_pnl"] == -10 - 1 - 95 * 2 * 0.0005
     book = eng.paper_book()
     baseline = book["accounts"][0]
     assert baseline["cash"] == 9899

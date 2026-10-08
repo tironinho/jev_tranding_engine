@@ -144,7 +144,7 @@ export function PositionTable({
           ))}
         </tbody>
       </table>
-      <div className="px-2 pt-2 text-[10px] text-mute">LEV é o nocional marcado dividido pela margem travada. TARGET $ e STOP $ são o bruto do plano, sem taxa de saída. UNREAL é o dinheiro marcado agora.</div>
+      <div className="px-2 pt-2 text-[10px] text-mute">LEV é o nocional marcado dividido pela margem travada. UNREAL é o que entra se fechar agora, já sem a taxa de saída. TARGET $ e STOP $ são o resultado do trade, já com a taxa de entrada e a de saída.</div>
     </div>
   );
 }

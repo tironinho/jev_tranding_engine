@@ -158,6 +158,7 @@ def test_paper_book_and_open_trade_money():
     )
     row = eng.positions_payload()[0]
     assert row["notional"] == 210
+    assert row["leverage"] == 2.1
     assert row["unrealized"] == 10
     assert row["target_pnl"] == 20
     assert row["stop_pnl"] == -10

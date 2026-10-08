@@ -1028,6 +1028,10 @@ class TradingEngine:
         for key, account in self.accounts.accounts.items():
             for position in account.positions.values():
                 mark = marks.get(position.symbol, position.entry_price)
+                notional = abs(mark * position.quantity)
+                margin = account.margin_locked.get(str(position.position_id))
+                if margin is None:
+                    margin = account.margin_locked.get(position.symbol)
                 rows.append(
                     {
                         "position_id": str(position.position_id),
@@ -1039,7 +1043,9 @@ class TradingEngine:
                         "stop": position.stop,
                         "target": position.target,
                         "mark": mark,
-                        "notional": abs(mark * position.quantity),
+                        "notional": notional,
+                        "margin": margin,
+                        "leverage": (notional / margin) if margin and margin > 0 else None,
                         "unrealized": unrealized(position, mark),
                         "target_pnl": unrealized(position, position.target),
                         "stop_pnl": unrealized(position, position.stop),

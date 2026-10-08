@@ -106,6 +106,7 @@ export function PositionTable({
     stop: number;
     target: number;
     notional?: number;
+    leverage?: number | null;
     unrealized: number;
     target_pnl?: number;
     stop_pnl?: number;
@@ -117,7 +118,7 @@ export function PositionTable({
       <table className="w-full text-left text-[11px]">
         <thead className="text-mute">
           <tr className="border-b border-line">
-            {["STRATEGY", "SYMBOL", "SIDE", "QTY", "NOTIONAL", "ENTRY", "UNREAL", "TARGET $", "STOP $"].map((head) => (
+            {["STRATEGY", "SYMBOL", "SIDE", "QTY", "NOTIONAL", "LEV", "ENTRY", "UNREAL", "TARGET $", "STOP $"].map((head) => (
               <th key={head} className="px-2 py-2 font-normal tracking-[0.12em]">
                 {head}
               </th>
@@ -132,6 +133,7 @@ export function PositionTable({
               <td className="px-2 py-2">{row.side}</td>
               <td className="px-2 py-2">{row.quantity.toFixed(4)}</td>
               <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
+              <td className="px-2 py-2">{leverageLabel(row.leverage)}</td>
               <td className="px-2 py-2">{row.entry.toFixed(4)}</td>
               <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{money(row.unrealized)}</td>
               <td className={`px-2 py-2 ${signedClass(row.target_pnl)}`}>{row.target_pnl == null ? "NO DATA" : money(row.target_pnl)}</td>
@@ -140,9 +142,15 @@ export function PositionTable({
           ))}
         </tbody>
       </table>
-      <div className="px-2 pt-2 text-[10px] text-mute">TARGET $ e STOP $ são o bruto do plano, sem taxa de saída. UNREAL é o dinheiro marcado agora.</div>
+      <div className="px-2 pt-2 text-[10px] text-mute">LEV é o nocional marcado dividido pela margem travada. TARGET $ e STOP $ são o bruto do plano, sem taxa de saída. UNREAL é o dinheiro marcado agora.</div>
     </div>
   );
+}
+
+function leverageLabel(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "NO DATA";
+  const rounded = Math.round(value * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}x`;
 }
 
 export function formatConfidence(value: number) {

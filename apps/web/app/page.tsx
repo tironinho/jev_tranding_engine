@@ -20,7 +20,7 @@ type Overview = {
   };
   strategies: StrategyCardData[];
   tickers: Array<{ symbol: string; price: number | null; spread_bps?: number | null; funding_rate?: number | null; open_interest?: number | null; status?: string; stale?: boolean }>;
-  positions: Array<{ position_id?: string; strategy: string; symbol: string; side: string; quantity: number; entry: number; stop: number; target: number; notional?: number; unrealized: number; target_pnl?: number; stop_pnl?: number }>;
+  positions: Array<{ position_id?: string; strategy: string; symbol: string; side: string; quantity: number; entry: number; stop: number; target: number; notional?: number; leverage?: number | null; unrealized: number; target_pnl?: number; stop_pnl?: number }>;
   binance_balance?: BinanceBalance;
   paper?: PaperBook;
 };

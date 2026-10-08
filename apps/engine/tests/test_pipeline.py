@@ -233,6 +233,23 @@ async def test_abstain_still_asks_jev_and_does_not_open():
 
 
 @pytest.mark.asyncio
+async def test_jev_review_shows_the_state_that_was_sent_and_the_answer():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    await eng.evaluate_snapshot(snapshot)
+    rows = eng.jev_reviews(5)
+    assert rows
+    review = rows[0]
+    assert review["symbol"] == "BTCUSDT"
+    assert "price" not in review["state"]
+    assert review["state"]["baseline_action"] in {"LONG", "SHORT", "NO_TRADE"}
+    assert isinstance(review["response"]["trend_continuation_probability"], float)
+    assert isinstance(review["response"]["reversal_probability"], float)
+    assert isinstance(review["response"]["false_breakout_probability"], float)
+
+
+@pytest.mark.asyncio
 async def test_kill_switch_blocks_entries_and_resume_is_audited():
     eng = engine()
     snapshot, book = long_snapshot()

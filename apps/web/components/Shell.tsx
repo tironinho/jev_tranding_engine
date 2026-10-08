@@ -47,6 +47,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     ["/", "Overview"],
     ["/market", "Market"],
     ["/decisions", "Decisions"],
+    ["/jev", "Jev"],
     ["/trades", "Trades"],
     ["/performance", "Performance"],
     ["/evolution", "Evolution"],

@@ -1079,6 +1079,41 @@ class TradingEngine:
             )
         return {"starting_equity": start, "quote": "USDT", "leverage": self.risk.limits.max_leverage, "accounts": accounts}
 
+    def jev_reviews(self, limit: int = 40) -> list[dict]:
+        from app.providers.jev.real import _normalized_state
+
+        rows = []
+        for call in reversed(self.store.jev_calls):
+            decision = self.store.by_decision.get(str(call.get("decision_id"))) or {}
+            request = call.get("request") if isinstance(call.get("request"), dict) else {}
+            response = call.get("response") if isinstance(call.get("response"), dict) else {}
+            meta = decision.get("metadata") or {}
+            rows.append(
+                {
+                    "decision_id": str(call.get("decision_id")),
+                    "symbol": decision.get("symbol") or request.get("symbol"),
+                    "timestamp": decision.get("timestamp"),
+                    "action": decision.get("action"),
+                    "confidence": decision.get("confidence"),
+                    "effect": meta.get("jev_effect"),
+                    "required_continuation": meta.get("jev_required_continuation"),
+                    "reason_codes": decision.get("reason_codes") or [],
+                    "state": _normalized_state(request),
+                    "response": {
+                        "trend_continuation_probability": response.get("trend_continuation_probability"),
+                        "reversal_probability": response.get("reversal_probability"),
+                        "false_breakout_probability": response.get("false_breakout_probability"),
+                        "model": response.get("model"),
+                        "latency_ms": response.get("latency_ms") if response.get("latency_ms") is not None else call.get("latency_ms"),
+                        "is_mock": response.get("is_mock") if response.get("is_mock") is not None else call.get("is_mock"),
+                        "error": response.get("error") or call.get("error"),
+                    },
+                }
+            )
+            if len(rows) >= limit:
+                break
+        return rows
+
     def status(self) -> dict:
         jev_name = getattr(self.jev, "provider_name", "unknown")
         openai_status = "not_configured"

@@ -214,6 +214,12 @@ async def market_symbol(symbol: str, request: Request) -> dict:
     return {"ticker": engine.ticker(symbol), "snapshot": latest}
 
 
+@router.get("/api/jev")
+async def jev_reviews(request: Request, limit: int = 40) -> dict:
+    _actor(request)
+    return {"rows": _engine(request).jev_reviews(min(limit, 80))}
+
+
 @router.get("/api/decisions")
 async def decisions(request: Request, limit: int = 100, symbol: str | None = None) -> dict:
     _actor(request)

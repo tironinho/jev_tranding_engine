@@ -900,7 +900,9 @@ class TradingEngine:
             if "max_signal_age_ms" in config:
                 current.max_signal_age_ms = int(config["max_signal_age_ms"])
             mode = item.get("mode")
-            if mode == "live" and not self.settings.live_armed:
+            if current.key == "baseline" and mode in {"paper", "live"}:
+                self._log("restore", "baseline stays shadow")
+            elif mode == "live" and not self.settings.live_armed:
                 self._log("restore", f"{current.key} live config left disarmed")
             elif mode:
                 current.mode = OperatingMode(mode)

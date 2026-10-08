@@ -1,12 +1,12 @@
 # Defaults de boot. O dashboard persiste override no banco.
 # Pesos e limiares NÃO foram otimizados. Calibrar com backtest antes de live.
 # As duas contas são paper: fill simulado, nunca ordem na Binance.
-# A decisão é baseline mais Jev. A OpenAI não entra na conta.
+# A decisão que abre é a do Jev. A baseline continua calculando o lado, em shadow, sem ordem.
 
 strategies:
   baseline:
     enabled: true
-    mode: paper
+    mode: shadow
     max_signal_age_ms: 2000
     call_model: false
 

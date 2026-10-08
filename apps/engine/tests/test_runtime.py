@@ -135,6 +135,15 @@ def test_disarmed_restart_does_not_restore_live_mode():
     assert fresh.strategy_settings["baseline"].mode is not OperatingMode.LIVE
 
 
+def test_saved_paper_config_does_not_turn_baseline_back_on():
+    fresh = engine()
+    fresh.strategy_settings["baseline"].mode = OperatingMode.SHADOW
+    fresh.apply_runtime(
+        {"strategies": [{"strategy_key": "baseline", "enabled": True, "mode": "paper", "config": {}}]}
+    )
+    assert fresh.strategy_settings["baseline"].mode is OperatingMode.SHADOW
+
+
 def test_orphan_trades_rebuild_performance_when_no_account_snapshot_exists():
     now = clock()
     trade = TradeRecord(

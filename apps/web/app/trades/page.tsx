@@ -154,7 +154,7 @@ export default async function TradesPage({
                       <td className={`px-2 py-2 ${signedClass(trade.net_pnl)}`}>{money(trade.net_pnl)}</td>
                       <td className={`px-2 py-2 ${signedClass(target)}`}>{money(target)}</td>
                       <td className={`px-2 py-2 ${signedClass(stop)}`}>{money(stop)}</td>
-                      <td className="px-2 py-2">{trade.r_multiple == null ? "NO DATA" : num(trade.r_multiple, 2)}</td>
+                      <td className={`px-2 py-2 ${signedClass(trade.r_multiple)}`}>{trade.r_multiple == null ? "NO DATA" : num(trade.r_multiple, 2)}</td>
                     </tr>
                   );
                 })}

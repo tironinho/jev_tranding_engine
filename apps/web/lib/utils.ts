@@ -29,8 +29,8 @@ export function sidePnl(side: string, entry: number, price: number, quantity: nu
 }
 
 export function signedClass(value: number | null | undefined): string {
-  if (value === null || value === undefined || value === 0) return "text-paper";
-  return value > 0 ? "text-[#9aab9c]" : "text-[#b08989]";
+  if (value === null || value === undefined || Number.isNaN(value) || value === 0) return "text-paper";
+  return value > 0 ? "text-[#3ddc97]" : "text-[#ff6b6b]";
 }
 
 export function shortTime(value: string | null | undefined): string {

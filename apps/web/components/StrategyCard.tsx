@@ -1,5 +1,5 @@
 import { ModeBadge } from "@/components/Shell";
-import { money, num, pct, signedClass } from "@/lib/utils";
+import { cn, money, num, pct, signedClass } from "@/lib/utils";
 
 export type StrategyCardData = {
   key: string;
@@ -34,7 +34,7 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="NET PNL" value={hasTrades ? money(result) : "NO DATA"} className={hasTrades ? signedClass(result) : ""} />
         <Stat label="DRAWDOWN" value={hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
-      <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">
+      <div className={cn("mt-3 border-t border-line pt-2 font-mono text-[11px]", signedClass(result))}>
         simulado {num(card.equity, 2)} USDT
       </div>
     </article>
@@ -45,7 +45,7 @@ function Stat({ label, value, className }: { label: string; value: string; class
   return (
     <div>
       <dt className="text-mute">{label}</dt>
-      <dd className={`font-mono text-paper ${className ?? ""}`}>{value}</dd>
+      <dd className={cn("font-mono text-paper", className)}>{value}</dd>
     </div>
   );
 }

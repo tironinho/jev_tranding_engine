@@ -255,6 +255,7 @@ class Settings(BaseSettings):
     binance_api_secret: str = ""
     binance_futures_rest_url: str = "https://fapi.binance.com"
     binance_spot_rest_url: str = "https://api.binance.com"
+    binance_account_rest_url: str = "https://api.binance.com"
     binance_futures_ws_url: str = "wss://fstream.binance.com/stream"
     binance_spot_ws_url: str = "wss://stream.binance.com:9443/stream"
     openai_api_key: str = ""
@@ -317,6 +318,7 @@ class Settings(BaseSettings):
         "database_url",
         "binance_futures_rest_url",
         "binance_spot_rest_url",
+        "binance_account_rest_url",
         "binance_futures_ws_url",
         "binance_spot_ws_url",
         "openai_base_url",

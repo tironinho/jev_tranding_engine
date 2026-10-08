@@ -44,13 +44,13 @@ class BinanceBalanceProvider:
             return {**base, "status": "NO_CREDENTIALS"}
         if self.client is None:
             return {**base, "status": "UNAVAILABLE", "detail": "client not started"}
-        if settings.market_type == "margin":
-            return {**base, "status": "UNAVAILABLE", "detail": "MARGIN_WALLET_NOT_READ"}
         signed = _signed(
             settings.binance_api_secret,
             {"timestamp": int(time.time() * 1000), "recvWindow": 5000},
         )
-        if settings.market_type == "spot":
+        if settings.market_type == "margin":
+            url = f"{settings.binance_account_rest_url.rstrip('/')}/sapi/v1/margin/account"
+        elif settings.market_type == "spot":
             url = f"{settings.binance_spot_rest_url}/api/v3/account"
         else:
             url = f"{settings.binance_futures_rest_url}/fapi/v2/balance"
@@ -69,6 +69,8 @@ class BinanceBalanceProvider:
             body = response.json()
         except Exception:
             return {**base, "status": "ERROR", "detail": "INVALID_JSON"}
+        if settings.market_type == "margin":
+            return _margin(body, settings.market_type)
         if settings.market_type == "spot":
             return _spot(body, settings.market_type)
         return _futures(body, settings.market_type)
@@ -115,6 +117,47 @@ def _spot(body: Any, market_type: str) -> dict:
         "wallet": wallet,
         "available": available,
         "unrealized": None,
+        "assets": assets[:8],
+        "detail": None,
+    }
+
+
+def _margin(body: Any, market_type: str) -> dict:
+    rows = body.get("userAssets") if isinstance(body, dict) else None
+    if not isinstance(rows, list):
+        return {"status": "ERROR", "market_type": market_type, **_EMPTY, "detail": "INVALID_ACCOUNT"}
+    assets = []
+    wallet = 0.0
+    available = 0.0
+    found = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        free = _num(row.get("free"))
+        locked = _num(row.get("locked"))
+        borrowed = _num(row.get("borrowed"))
+        net = _num(row.get("netAsset"))
+        if net == 0 and free == 0 and locked == 0 and borrowed == 0:
+            continue
+        asset = str(row.get("asset") or "")
+        assets.append({"asset": asset, "free": free, "locked": locked, "total": net})
+        if asset == "USDT":
+            found = True
+            wallet = net
+            available = free
+    if not found:
+        wallet = 0.0
+        available = 0.0
+    assets.sort(key=lambda item: abs(item["total"]), reverse=True)
+    level = body.get("marginLevel")
+    return {
+        "status": "ok",
+        "market_type": market_type,
+        "asset": "USDT",
+        "wallet": wallet,
+        "available": available,
+        "unrealized": None,
+        "margin_level": _num(level) if level not in (None, "") else None,
         "assets": assets[:8],
         "detail": None,
     }

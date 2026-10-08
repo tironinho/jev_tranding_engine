@@ -8,6 +8,7 @@ export type BinanceBalance = {
   wallet: number | null;
   available: number | null;
   unrealized: number | null;
+  margin_level?: number | null;
   assets: Array<{ asset: string; total: number; free?: number | null }>;
   detail?: string | null;
 };
@@ -38,7 +39,7 @@ const LABELS: Record<string, string> = {
 
 export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | null | undefined }) {
   const ready = balance?.status === "ok" && balance.wallet != null;
-  const others = (balance?.assets ?? []).filter((item) => item.asset !== "USDT" && item.total > 0);
+  const others = (balance?.assets ?? []).filter((item) => item.asset !== "USDT" && item.total !== 0);
   return (
     <Panel title={`BINANCE ${((balance?.market_type ?? "wallet").toUpperCase())} · USDT`}>
       {!balance ? (
@@ -59,6 +60,12 @@ export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | nul
               <div>
                 <dt className="text-mute">UNREALIZED</dt>
                 <dd className={`font-mono ${signedClass(balance.unrealized)}`}>{money(balance.unrealized)} USDT</dd>
+              </div>
+            ) : null}
+            {balance.margin_level != null ? (
+              <div>
+                <dt className="text-mute">MARGIN LEVEL</dt>
+                <dd className="font-mono">{num(balance.margin_level, 2)}</dd>
               </div>
             ) : null}
           </dl>

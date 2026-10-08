@@ -106,7 +106,7 @@ class RiskLimits:
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
-    max_open_positions: int = 3
+    max_open_positions: int = 10
     min_net_rr: float = 1.5
     min_order_notional: float = 50.0
 
@@ -287,7 +287,7 @@ class Settings(BaseSettings):
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
-    max_open_positions: int = 3
+    max_open_positions: int = 10
     min_net_rr: float = 1.5
     initial_paper_equity: float = 10_000
     maker_fee_rate: float = 0.0002

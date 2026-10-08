@@ -313,6 +313,7 @@ async def test_a_full_book_opens_one_extra_only_when_both_sides_agree():
     attach_book(eng, book)
     for cfg in eng.strategy_settings.values():
         cfg.mode = OperatingMode.PAPER
+    eng.risk.update_limits(max_open_positions=3)
     _fill_book(eng, snapshot, ["ETHUSDT", "SOLUSDT", "BNBUSDT"])
     account = eng.accounts.accounts["baseline"]
     assert len(account.positions) == eng.risk.limits.max_open_positions
@@ -346,6 +347,7 @@ async def test_a_full_book_stays_shut_when_continuation_is_only_the_confirm_floo
     attach_book(eng, book)
     for cfg in eng.strategy_settings.values():
         cfg.mode = OperatingMode.PAPER
+    eng.risk.update_limits(max_open_positions=3)
     _fill_book(eng, snapshot, ["ETHUSDT", "SOLUSDT", "BNBUSDT"])
     account = eng.accounts.accounts["baseline"]
     await eng._execute_decisions(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from app.intelligence.context import jev_view
 from app.providers.jev.schemas import JevAssessment, JevMarketRequest, JevProviderError
 
 _NOULS = (
@@ -11,10 +12,17 @@ _NOULS = (
     "false_breakout_probability",
 )
 
+_ONCHAIN = (
+    " onchain.support is oriented to baseline_action: positive supports that side. "
+    "onchain.class is SUPPORTIVE, NEUTRAL, HOSTILE, or UNKNOWN. "
+    "onchain.evidence is the share of on-chain weight that had data. "
+    "A missing field is unknown, not zero. valuation_stretch and activity are not a side."
+)
+
 _INSTRUCTIONS = {
-    "trend_continuation_probability": "The `baseline_action` side reaches the target before the stop.",
-    "reversal_probability": "Price reverses against `baseline_action`.",
-    "false_breakout_probability": "The `breakout` or `breakdown` flag is a false break.",
+    "trend_continuation_probability": "The `baseline_action` side reaches the target before the stop." + _ONCHAIN,
+    "reversal_probability": "Price reverses against `baseline_action`." + _ONCHAIN,
+    "false_breakout_probability": "The `breakout` or `breakdown` flag is a false break." + _ONCHAIN,
 }
 
 _UNUSED_NOULS = {
@@ -119,8 +127,8 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "breakout": features.get("breakout"),
         "breakdown": features.get("breakdown"),
     }
-    intelligence = payload.get("intelligence")
-    if isinstance(intelligence, dict):
+    intelligence = jev_view(payload.get("intelligence"), payload.get("baseline_action"))
+    if intelligence is not None:
         state["intelligence"] = intelligence
     return state
 

@@ -443,6 +443,334 @@ async def test_oregon_reads_margin_context_through_singapore():
     assert metrics["quote_borrow_hourly_interest"] == 0.00002
 
 
+@pytest.mark.asyncio
+async def test_cryptoquant_reads_only_the_paths_its_catalog_lists():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        assert request.headers["authorization"] == "Bearer cq"
+        if request.url.path == "/v1/discovery/endpoints":
+            return httpx.Response(
+                200,
+                json={"result": ["/btc/exchange-flows/netflow", "/stablecoin/network-data/supply"]},
+            )
+        if request.url.path == "/v1/btc/exchange-flows/netflow":
+            assert request.url.params["exchange"] == "all_exchange"
+            return httpx.Response(
+                200,
+                json={
+                    "status": {"code": 200, "message": "success"},
+                    "result": {
+                        "window": "day",
+                        "data": [
+                            {"date": "2026-10-06", "netflow_total": -100},
+                            {"date": "2026-10-07", "netflow_total": -80},
+                            {"date": "2026-10-08", "netflow_total": -40},
+                        ],
+                    },
+                },
+            )
+        if request.url.path == "/v1/stablecoin/network-data/supply":
+            return httpx.Response(
+                200,
+                json={
+                    "status": {"code": 200},
+                    "result": {
+                        "data": [
+                            {"date": "2026-10-06", "supply_circulating": 100},
+                            {"date": "2026-10-07", "supply_circulating": 105},
+                            {"date": "2026-10-08", "supply_circulating": 110},
+                        ]
+                    },
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(cryptoquant_enabled=True, cryptoquant_api_key="cq", cryptoquant_base_host="api.cryptoquant.com")
+    async with httpx.AsyncClient(transport=transport) as client:
+        from app.intelligence.providers.optional import CryptoQuantProvider
+
+        provider = CryptoQuantProvider(cfg, client)
+        rows = await provider.collect(["BTCUSDT"], _now())
+    assert "/v1/stablecoin/exchange-flows/reserve" not in seen
+    metrics = {row.metric: row.value for row in rows}
+    assert metrics["exchange_netflow"] == -40
+    assert metrics["stablecoin_supply"] == 110
+    context = build_context("ETHUSDT", {}, rows, _now())
+    assert context["onchain"]["exchange_netflow_btc"] == -40
+    assert context["onchain"]["stablecoin_reserve"] == 110
+    assert context["onchain"]["available"] is True
+    assert context["onchain"]["exchange_flow_pressure"] is not None
+
+
+@pytest.mark.asyncio
+async def test_cryptoquant_does_not_guess_a_path_missing_from_the_catalog():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"result": ["/btc/market-data/price-usd"]})
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(cryptoquant_enabled=True, cryptoquant_api_key="cq")
+    async with httpx.AsyncClient(transport=transport) as client:
+        from app.intelligence.providers.optional import CryptoQuantProvider
+
+        provider = CryptoQuantProvider(cfg, client)
+        rows = await provider.collect(["BTCUSDT"], _now())
+    assert rows == []
+    assert seen == ["/v1/discovery/endpoints"]
+    assert (await provider.health()).last_error == "CATALOG_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_coinmetrics_community_reads_exchange_flow_without_a_key():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        assert "api_key" not in request.url.params
+        if request.url.path == "/v4/catalog-v2/asset-metrics":
+            return httpx.Response(200, json=_cm_catalog())
+        if request.url.path == "/v4/timeseries/asset-metrics" and request.url.params["assets"] == "btc":
+            assert request.url.params["metrics"] == "FlowInExUSD,FlowOutExUSD"
+            assert "ReferenceRateUSD" not in request.url.params["metrics"]
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"asset": "btc", "time": "2026-10-06T00:00:00.000000000Z", "FlowInExUSD": "300", "FlowOutExUSD": "100"},
+                        {"asset": "btc", "time": "2026-10-07T00:00:00.000000000Z", "FlowInExUSD": "250", "FlowOutExUSD": "150"},
+                        {"asset": "btc", "time": "2026-10-08T00:00:00.000000000Z", "FlowInExUSD": "220", "FlowOutExUSD": "180"},
+                        {"asset": "btc", "time": "2026-10-09T00:00:00.000000000Z", "FlowInExUSD": None, "FlowOutExUSD": None},
+                    ]
+                },
+            )
+        if request.url.path == "/v4/timeseries/asset-metrics":
+            assert request.url.params["assets"] == "usdc,usdt"
+            assert request.url.params["metrics"] == "SplyCur"
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"asset": "usdt", "time": "2026-10-06T00:00:00.000000000Z", "SplyCur": "100"},
+                        {"asset": "usdc", "time": "2026-10-06T00:00:00.000000000Z", "SplyCur": "40"},
+                        {"asset": "usdt", "time": "2026-10-07T00:00:00.000000000Z", "SplyCur": "110"},
+                        {"asset": "usdc", "time": "2026-10-07T00:00:00.000000000Z", "SplyCur": "40"},
+                        {"asset": "usdt", "time": "2026-10-08T00:00:00.000000000Z", "SplyCur": "120"},
+                        {"asset": "usdc", "time": "2026-10-08T00:00:00.000000000Z", "SplyCur": "50"},
+                        {"asset": "usdt", "time": "2026-10-09T00:00:00.000000000Z", "SplyCur": "130"},
+                    ]
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(coinmetrics_enabled=False, coinmetrics_api_key="", coinmetrics_community=True, coinmetrics_base_host="community-api.coinmetrics.io")
+    async with httpx.AsyncClient(transport=transport) as client:
+        from app.intelligence.providers.optional import CoinMetricsProvider
+
+        provider = CoinMetricsProvider(cfg, client)
+        rows = await provider.collect(["BTCUSDT"], _now())
+        again = await provider.collect(["BTCUSDT"], _now())
+    assert again == []
+    assert seen.count("/v4/timeseries/asset-metrics") == 2
+    metrics = {row.metric: row.value for row in rows}
+    assert metrics["exchange_netflow"] == pytest.approx(40)
+    assert metrics["stablecoin_supply"] == pytest.approx(170)
+    context = build_context("ETHUSDT", {}, rows, _now())
+    assert context["onchain"]["exchange_netflow_btc"] == pytest.approx(40)
+    assert context["onchain"]["stablecoin_reserve"] == pytest.approx(170)
+    assert context["onchain"]["available"] is True
+    assert context["onchain"]["source"] == "coinmetrics"
+    assert context["onchain"]["exchange_flow_pressure"] is not None
+
+
+@pytest.mark.asyncio
+async def test_coinmetrics_skips_a_metric_the_community_catalog_does_not_list():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"data": [{"asset": "btc", "metrics": [{"metric": "ReferenceRateUSD", "frequencies": [{"frequency": "1d", "community": False}]}]}]},
+        )
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(coinmetrics_community=True, coinmetrics_api_key="")
+    async with httpx.AsyncClient(transport=transport) as client:
+        from app.intelligence.providers.optional import CoinMetricsProvider
+
+        provider = CoinMetricsProvider(cfg, client)
+        rows = await provider.collect(["BTCUSDT"], _now())
+    assert rows == []
+    assert seen == ["/v4/catalog-v2/asset-metrics"]
+    assert (await provider.health()).last_error == "CATALOG_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_coinmetrics_reads_eth_flow_supply_and_mvrv_in_one_call():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v4/catalog-v2/asset-metrics":
+            return httpx.Response(200, json=_cm_catalog(chain=True))
+        if request.url.path != "/v4/timeseries/asset-metrics":
+            raise AssertionError(request.url.path)
+        assets = request.url.params["assets"]
+        metrics = request.url.params["metrics"]
+        assert "ReferenceRateUSD" not in metrics
+        assert "PriceUSD" not in metrics
+        if assets == "btc,eth,xrp":
+            assert "CapMVRVCur" in metrics
+            assert "FlowInExUSD" in metrics
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"asset": "btc", "time": "2026-10-06T00:00:00.000000000Z", "FlowInExUSD": "30", "FlowOutExUSD": "10", "SplyExUSD": "5", "CapMVRVCur": "1.5", "AdrActCnt": "10"},
+                        {"asset": "btc", "time": "2026-10-07T00:00:00.000000000Z", "FlowInExUSD": "20", "FlowOutExUSD": "10", "SplyExUSD": "6", "CapMVRVCur": "1.8", "AdrActCnt": "12"},
+                        {"asset": "btc", "time": "2026-10-08T00:00:00.000000000Z", "FlowInExUSD": "50", "FlowOutExUSD": "10", "SplyExUSD": "9", "CapMVRVCur": "3.0", "AdrActCnt": "30"},
+                        {"asset": "eth", "time": "2026-10-06T00:00:00.000000000Z", "FlowInExUSD": "8", "FlowOutExUSD": "4", "CapMVRVCur": "1.0"},
+                        {"asset": "eth", "time": "2026-10-07T00:00:00.000000000Z", "FlowInExUSD": "8", "FlowOutExUSD": "5", "CapMVRVCur": "1.2"},
+                        {"asset": "eth", "time": "2026-10-08T00:00:00.000000000Z", "FlowInExUSD": "20", "FlowOutExUSD": "4", "CapMVRVCur": "2.4"},
+                        {"asset": "xrp", "time": "2026-10-08T00:00:00.000000000Z", "CapMVRVCur": "1.1"},
+                    ]
+                },
+            )
+        assert assets == "usdc,usdt"
+        return httpx.Response(200, json={"data": []})
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(coinmetrics_community=True, coinmetrics_api_key="", coinmetrics_base_host="community-api.coinmetrics.io")
+    async with httpx.AsyncClient(transport=transport) as client:
+        from app.intelligence.providers.optional import CoinMetricsProvider
+
+        provider = CoinMetricsProvider(cfg, client)
+        rows = await provider.collect(["ETHUSDT"], _now())
+    symbols = {(row.metric, row.symbol): row.value for row in rows}
+    assert symbols["exchange_netflow", "ETHUSDT"] == pytest.approx(16)
+    assert symbols["exchange_supply", "BTCUSDT"] == pytest.approx(9)
+    assert symbols["mvrv", "XRPUSDT"] == pytest.approx(1.1)
+    assert symbols["active_addresses", "BTCUSDT"] == pytest.approx(30)
+    assert ("exchange_netflow", "XRPUSDT") not in symbols
+
+
+def _cm_catalog(chain: bool = False) -> dict:
+    def metric(name: str, community: bool = True) -> dict:
+        return {"metric": name, "frequencies": [{"frequency": "1d", "community": community}]}
+
+    if not chain:
+        return {
+            "data": [
+                {"asset": "btc", "metrics": [metric("FlowInExUSD"), metric("FlowOutExUSD"), metric("ReferenceRateUSD", False)]},
+                {"asset": "usdt", "metrics": [metric("SplyCur")]},
+                {"asset": "usdc", "metrics": [metric("SplyCur")]},
+            ]
+        }
+    return {
+        "data": [
+            {"asset": "btc", "metrics": [metric(name) for name in ("FlowInExUSD", "FlowOutExUSD", "SplyExUSD", "CapMVRVCur", "AdrActCnt")]},
+            {"asset": "eth", "metrics": [metric(name) for name in ("FlowInExUSD", "FlowOutExUSD", "CapMVRVCur")]},
+            {"asset": "xrp", "metrics": [metric("CapMVRVCur")]},
+            {"asset": "usdt", "metrics": [metric("SplyCur")]},
+            {"asset": "usdc", "metrics": [metric("SplyCur")]},
+        ]
+    }
+
+
+def test_onchain_support_is_oriented_for_the_jev_veto():
+    now = _now()
+
+    def point(metric: str, symbol: str | None, value: float, day: int) -> RawExternalObservation:
+        return RawExternalObservation(
+            provider="coinmetrics",
+            metric=metric,
+            symbol=symbol,
+            value=value,
+            unit="usd",
+            observed_at=now - timedelta(days=day),
+            received_at=now,
+        )
+
+    rows = []
+    for day, flow, supply, mvrv, addresses, stables in (
+        (2, 0.0, 5.0, 1.0, 10.0, 100.0),
+        (1, 20.0, 6.0, 1.4, 12.0, 101.0),
+        (0, 100.0, 9.0, 3.0, 40.0, 102.0),
+    ):
+        rows.append(point("exchange_netflow", "ETHUSDT", flow, day))
+        rows.append(point("exchange_supply", "ETHUSDT", supply, day))
+        rows.append(point("mvrv", "ETHUSDT", mvrv, day))
+        rows.append(point("active_addresses", "ETHUSDT", addresses, day))
+        rows.append(point("stablecoin_supply", None, stables, day))
+    context = build_context("ETHUSDT", {}, rows, now)
+    onchain = context["onchain"]
+    assert onchain["exchange_flow"] < -0.5
+    assert onchain["valuation_stretch"] > 0.5
+    assert onchain["support_long"] < 0
+    assert onchain["evidence"] == pytest.approx(1.0)
+    from app.providers.jev.real import _normalized_state
+
+    long_state = _normalized_state({"symbol": "ETHUSDT", "features": {}, "baseline_action": "LONG", "intelligence": context})
+    short_state = _normalized_state({"symbol": "ETHUSDT", "features": {}, "baseline_action": "SHORT", "intelligence": context})
+    assert long_state["intelligence"]["onchain"]["class"] == "HOSTILE"
+    assert long_state["intelligence"]["onchain"]["support"] < 0
+    assert short_state["intelligence"]["onchain"]["class"] == "SUPPORTIVE"
+    assert short_state["intelligence"]["onchain"]["support"] > 0
+    assert "exchange_netflow_btc" not in long_state["intelligence"]["onchain"]
+    assert "stablecoin_reserve" not in long_state["intelligence"]["onchain"]
+    assert long_state["intelligence"]["onchain"]["weights"]["exchange_flow"] == pytest.approx(0.35)
+
+
+def test_stale_onchain_does_not_vote():
+    now = _now()
+    old = datetime(2019, 4, 22, tzinfo=timezone.utc)
+    rows = [
+        RawExternalObservation(
+            provider="coinmetrics",
+            metric="mvrv",
+            symbol="BNBUSDT",
+            value=value,
+            unit="ratio",
+            observed_at=old - timedelta(days=day),
+            received_at=now,
+        )
+        for day, value in ((2, 1.0), (1, 1.2), (0, 4.0))
+    ]
+    context = build_context("BNBUSDT", {}, rows, now)
+    assert context["onchain"]["support_long"] is None
+    assert context["onchain"]["valuation_stretch"] is None
+
+
+def test_cryptoquant_onchain_wins_when_coinmetrics_is_also_present():
+    now = _now()
+
+    def row(provider: str, metric: str, value: float, day: int) -> RawExternalObservation:
+        return RawExternalObservation(
+            provider=provider,
+            metric=metric,
+            symbol=None,
+            value=value,
+            unit="usd",
+            observed_at=now - timedelta(days=day),
+            received_at=now,
+        )
+
+    rows = [
+        row("cryptoquant", "exchange_netflow", -40, 0),
+        row("cryptoquant", "exchange_netflow", -80, 1),
+        row("coinmetrics", "exchange_netflow", 999, 0),
+        row("coinmetrics", "stablecoin_supply", 10, 0),
+        row("coinmetrics", "stablecoin_supply", 9, 1),
+    ]
+    context = build_context("ETHUSDT", {}, rows, now)
+    assert context["onchain"]["exchange_netflow_btc"] == -40
+    assert context["onchain"]["stablecoin_reserve"] == 10
+    assert context["onchain"]["source"] == "cryptoquant+coinmetrics"
+
+
 def test_current_funding_stamp_in_milliseconds_stays_readable():
     from app.intelligence.providers.coinalyze import _current, _seconds
 

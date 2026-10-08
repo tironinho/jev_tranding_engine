@@ -7,6 +7,7 @@ from app.domain.mathutil import ensure_utc
 from app.intelligence.asof import asof_backward
 from app.intelligence.freshness import age_seconds, freshness
 from app.intelligence.normalize import (
+    direction_of,
     fear_greed_signed,
     funding_bps,
     liquidation_imbalance,
@@ -21,6 +22,14 @@ from app.intelligence.quality import feature_quality, relative_disagreement
 from app.intelligence.schemas import RawExternalObservation
 
 _SLOW = 24 * 3600
+_STALE_ONCHAIN = 14 * 24 * 3600
+# Fixed priors, not a fitted edge. Positive support favors a long. Activity does not vote.
+_ONCHAIN_WEIGHTS = {
+    "exchange_flow": 0.35,
+    "exchange_supply": 0.25,
+    "valuation": 0.20,
+    "stablecoin_liquidity": 0.20,
+}
 
 
 def build_context(
@@ -38,7 +47,10 @@ def build_context(
     derivatives = _derivatives(symbol, visible, now, remembered)
     sentiment = _sentiment(visible, now)
     global_market = _dominance(visible, now, symbol)
+    onchain = _onchain(symbol, visible, now)
     quality_rows = [micro["quality"], derivatives["quality"], sentiment["quality"]]
+    if onchain["available"]:
+        quality_rows.append(onchain["quality"])
     present = [item for item in quality_rows if item is not None]
     overall = sum(present) / len(present) if present else 0.0
     missing = [
@@ -48,7 +60,8 @@ def build_context(
             "derivatives.funding_crowding": derivatives.get("funding_crowding"),
             "derivatives.liquidation_imbalance": derivatives.get("liquidation_imbalance"),
             "sentiment.fear_greed": sentiment.get("fear_greed"),
-            "onchain.exchange_flow_pressure": None,
+            "onchain.exchange_flow_pressure": onchain.get("exchange_flow_pressure"),
+            "onchain.support": onchain.get("support_long"),
         }.items()
         if value is None
     ]
@@ -60,7 +73,7 @@ def build_context(
         "derivatives": derivatives,
         "sentiment": sentiment,
         "relative_strength": _relative(symbol, visible, remembered),
-        "onchain": {"exchange_flow_pressure": None, "stablecoin_liquidity": None, "available": False, "quality": 0.0},
+        "onchain": onchain,
         "global": global_market,
         "data_quality": {
             "overall": overall,
@@ -68,7 +81,7 @@ def build_context(
                 "microstructure": micro["quality"],
                 "derivatives": derivatives["quality"],
                 "sentiment": sentiment["quality"],
-                "onchain": 0.0,
+                "onchain": onchain["quality"],
             },
             "missing": missing,
             "stale": [],
@@ -222,6 +235,168 @@ def _sentiment(rows: list[RawExternalObservation], now: datetime) -> dict:
         "quality": feature_quality(available=True, fresh=fresh if fresh is not None else 0.0),
         "scope": "BTC_MARKET_SENTIMENT",
     }
+
+
+def _onchain(symbol: str, rows: list[RawExternalObservation], now: datetime) -> dict:
+    btc_flow = _btc_flow(rows, now)
+    cq_stables = _recent(_series(rows, "cryptoquant", "stablecoin_reserve", None), now) or _recent(_series(rows, "cryptoquant", "stablecoin_supply", None), now)
+    cm_stables = _recent(_series(rows, "coinmetrics", "stablecoin_supply", None), now)
+    stables = cq_stables or cm_stables
+    pressure = _signed_latest(btc_flow)
+    liquidity = _signed_latest(stables)
+    own_flow = btc_flow if symbol == "BTCUSDT" else _recent(_series(rows, "coinmetrics", "exchange_netflow", symbol), now)
+    supply = _recent(_series(rows, "coinmetrics", "exchange_supply", symbol), now)
+    mvrv = _recent(_series(rows, "coinmetrics", "mvrv", symbol), now)
+    activity = _recent(_series(rows, "coinmetrics", "active_addresses", symbol), now) or _recent(_series(rows, "coinmetrics", "tx_count", symbol), now)
+    fees = _recent(_series(rows, "coinmetrics", "fee_native", symbol), now)
+    flow_score = _flip(_signed_latest(own_flow))
+    supply_score = _flip(_signed_latest(supply))
+    stretch = _signed_latest(mvrv)
+    activity_score = _signed_latest(activity)
+    stress = _signed_latest(fees)
+    parts = {
+        "exchange_flow": flow_score,
+        "exchange_supply": supply_score,
+        "valuation": _flip(stretch),
+        "stablecoin_liquidity": liquidity,
+    }
+    present = {name: value for name, value in parts.items() if value is not None}
+    weight_total = sum(_ONCHAIN_WEIGHTS.values())
+    evidence = sum(_ONCHAIN_WEIGHTS[name] for name in present) / weight_total if weight_total else 0.0
+    support_long = sum(_ONCHAIN_WEIGHTS[name] * value for name, value in present.items()) / sum(_ONCHAIN_WEIGHTS[name] for name in present) if present else None
+    latest = btc_flow[-1][0] if btc_flow else (stables[-1][0] if stables else None)
+    if own_flow:
+        latest = own_flow[-1][0]
+    fresh = freshness(age_seconds(now, latest), _SLOW) if latest else 0.0
+    available = support_long is not None or activity_score is not None or stress is not None or _latest_value(btc_flow) is not None
+    names = []
+    if _series(rows, "cryptoquant", "exchange_netflow", None) or cq_stables:
+        names.append("cryptoquant")
+    if _has_coinmetrics(rows, symbol) or (cm_stables and not cq_stables):
+        names.append("coinmetrics")
+    return {
+        "exchange_netflow_btc": _latest_value(btc_flow),
+        "exchange_flow_pressure": pressure,
+        "exchange_flow": flow_score,
+        "exchange_supply": supply_score,
+        "valuation_stretch": stretch,
+        "activity": activity_score,
+        "network_stress": stress,
+        "stablecoin_reserve": _latest_value(stables),
+        "stablecoin_liquidity": liquidity,
+        "support_long": support_long,
+        "evidence": evidence if present else 0.0,
+        "weights": dict(_ONCHAIN_WEIGHTS),
+        "available": available,
+        "quality": feature_quality(available=available, fresh=fresh if fresh is not None else 0.0),
+        "source": "+".join(names) if names else None,
+        "source_timestamp": latest.isoformat() if latest else None,
+    }
+
+
+def jev_view(payload: dict | None, baseline_action: str | None) -> dict | None:
+    """Unitless state for the veto. Dollar stocks stay off the request."""
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "microstructure": payload.get("microstructure"),
+        "derivatives": _without(payload.get("derivatives"), {"oi_usd", "margin_price_index"}),
+        "sentiment": _sentiment_view(payload.get("sentiment")),
+        "relative_strength": payload.get("relative_strength"),
+        "global": _without(payload.get("global"), {"btc_dominance_raw", "symbol"}),
+        "onchain": _onchain_view(payload.get("onchain"), baseline_action),
+        "data_quality": payload.get("data_quality"),
+    }
+
+
+def _onchain_view(raw, baseline_action: str | None) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    view = {
+        key: value
+        for key, value in raw.items()
+        if key not in {"exchange_netflow_btc", "exchange_flow_pressure", "stablecoin_reserve", "support_long", "source", "source_timestamp"}
+    }
+    support_long = raw.get("support_long")
+    side = (baseline_action or "").upper()
+    if not isinstance(support_long, (int, float)):
+        view["support"] = None
+        view["class"] = "UNKNOWN"
+        return view
+    support = -float(support_long) if side == "SHORT" else float(support_long)
+    view["support"] = support
+    view["class"] = _class_of(support)
+    return view
+
+
+def _class_of(support: float) -> str:
+    direction = direction_of(support)
+    if direction in {"STRONGLY_POSITIVE", "POSITIVE"}:
+        return "SUPPORTIVE"
+    if direction in {"STRONGLY_NEGATIVE", "NEGATIVE"}:
+        return "HOSTILE"
+    return "NEUTRAL"
+
+
+def _sentiment_view(raw):
+    if not isinstance(raw, dict):
+        return raw
+    fear = raw.get("fear_greed")
+    if not isinstance(fear, dict):
+        return raw
+    return {
+        "fear_greed_signed": fear.get("signed"),
+        "extreme_fear": fear.get("extreme_fear"),
+        "extreme_greed": fear.get("extreme_greed"),
+        "freshness": fear.get("freshness"),
+        "quality": raw.get("quality"),
+    }
+
+
+def _without(raw, dropped: set[str]):
+    if not isinstance(raw, dict):
+        return raw
+    return {key: value for key, value in raw.items() if key not in dropped}
+
+
+def _btc_flow(rows, now: datetime) -> list[tuple[datetime, float]]:
+    return (
+        _recent(_series(rows, "cryptoquant", "exchange_netflow", None), now)
+        or _recent(_series(rows, "coinmetrics", "exchange_netflow", "BTCUSDT"), now)
+        or _recent(_series(rows, "coinmetrics", "exchange_netflow", None), now)
+    )
+
+
+def _has_coinmetrics(rows, symbol: str) -> bool:
+    metrics = {"exchange_netflow", "exchange_supply", "mvrv", "active_addresses", "tx_count", "fee_native"}
+    return any(row.provider == "coinmetrics" and row.metric in metrics and row.symbol in {symbol, "BTCUSDT", None} for row in rows)
+
+
+def _recent(series: list[tuple[datetime, float]], now: datetime) -> list[tuple[datetime, float]]:
+    if not series:
+        return []
+    age = age_seconds(now, series[-1][0])
+    if age is None or age < 0 or age > _STALE_ONCHAIN:
+        return []
+    return series
+
+
+def _flip(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return -value
+
+
+def _latest_value(series: list[tuple[datetime, float]]) -> float | None:
+    return series[-1][1] if series else None
+
+
+def _signed_latest(series: list[tuple[datetime, float]]) -> float | None:
+    if len(series) < 2:
+        return None
+    latest = series[-1][1]
+    history = [value for _, value in series[:-1]]
+    return signed_from_z(robust_zscore(latest, history))
 
 
 def _dominance(rows, now: datetime, symbol: str) -> dict:

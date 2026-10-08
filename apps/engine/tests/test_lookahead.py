@@ -62,3 +62,23 @@ def test_closed_filter_ignores_a_bar_that_has_not_closed():
     state.candles["1m"].append(forming)
     features, _quality = compute_features(state, as_of, known.close)
     assert features["return_1m"] is None or features["current_volume"] == known.volume
+
+
+def test_recursive_indicators_shift_when_older_history_grows():
+    from app.features.recursion import shifted_feature_names
+
+    tail = [_candle(index + 80, 100 + index * 0.4) for index in range(40)]
+    prefix = [_candle(index, 80) for index in range(80)]
+    short = SymbolMarketState(symbol="BTCUSDT", market_type="spot")
+    long = SymbolMarketState(symbol="BTCUSDT", market_type="spot")
+    short.candles["1m"] = list(tail)
+    long.candles["1m"] = prefix + tail
+    as_of = tail[-1].close_time
+    price = tail[-1].close
+    short_features, _quality = compute_features(short, as_of, price)
+    long_features, _quality = compute_features(long, as_of, price)
+    shifted = shifted_feature_names(short_features, long_features)
+    assert "ema_20" in shifted
+    assert "atr" in shifted
+    assert "roc" not in shifted
+    assert "return_1m" not in shifted

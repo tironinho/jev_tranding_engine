@@ -20,29 +20,70 @@ def _book(price: float, timestamp: datetime):
 
 async def replay_candles(engine: TradingEngine, symbol: str, candles: list[Candle]) -> TradingEngine:
     """Push historical closed candles through the same snapshot, strategy, risk and paper path."""
+    return await replay_history(engine, symbol, {"1m": candles})
+
+
+async def replay_history(engine: TradingEngine, symbol: str, series: dict[str, list[Candle]]) -> TradingEngine:
+    """Replay 1-minute closes. A 5m or 15m bar is inserted once its close is known.
+
+    The book is a 1 bp spread around the close. AggTrades are not invented, so
+    order-flow stays empty and the baseline leaves that component out.
+    """
+    minute = sorted(series.get("1m") or [], key=lambda candle: candle.open_time)
+    higher: list[Candle] = []
+    for timeframe, candles in series.items():
+        if timeframe == "1m":
+            continue
+        higher.extend(candles)
+    higher.sort(key=lambda candle: (candle.close_time, candle.open_time))
     state = engine.states.setdefault(symbol, SymbolMarketState(symbol=symbol, market_type=engine.settings.market_type))
-    for candle in candles:
+    cursor = 0
+    for candle in minute:
         if not candle.closed:
             raise ValueError("replay only accepts closed candles")
-        state.upsert_candle(candle)
-        state.last_price = candle.close
-        state.best_bid = candle.close * (1 - 0.0001)
-        state.best_ask = candle.close * (1 + 0.0001)
-        state.last_book_at = candle.close_time
-        state.book = _book(candle.close, candle.close_time)
-        snapshot = build_snapshot(
-            state,
-            as_of=candle.close_time,
-            trigger="replay",
-            stale_after_ms=engine.settings.stale_after_ms,
-        )
-        if snapshot is None:
-            continue
-        if snapshot.market_type is not MarketType(engine.settings.market_type):
-            raise RuntimeError("market type drifted")
-        await engine.evaluate_snapshot(snapshot)
-        await engine.manage_positions(symbol, as_of=candle.close_time)
+        while cursor < len(higher) and higher[cursor].close_time <= candle.close_time:
+            if not higher[cursor].closed:
+                raise ValueError("replay only accepts closed candles")
+            state.upsert_candle(higher[cursor])
+            cursor += 1
+        await _replay_bar(engine, state, candle)
     return engine
+
+
+async def _replay_bar(engine: TradingEngine, state: SymbolMarketState, candle: Candle) -> None:
+    state.upsert_candle(candle)
+    state.last_price = candle.close
+    state.best_bid = candle.close * (1 - 0.0001)
+    state.best_ask = candle.close * (1 + 0.0001)
+    state.last_book_at = candle.close_time
+    state.book = _book(candle.close, candle.close_time)
+    snapshot = build_snapshot(
+        state,
+        as_of=candle.close_time,
+        trigger="replay",
+        stale_after_ms=engine.settings.stale_after_ms,
+    )
+    if snapshot is None:
+        return
+    if snapshot.market_type is not MarketType(engine.settings.market_type):
+        raise RuntimeError("market type drifted")
+    await engine.evaluate_snapshot(snapshot)
+    await engine.manage_positions(state.symbol, as_of=candle.close_time)
+
+
+def paper_scoreboard(engine: TradingEngine) -> dict:
+    """Same closed-trade fields the dashboard prints, one row per paper book."""
+    board = {}
+    for key, row in engine.performance().items():
+        board[key] = {
+            "trades": row["trades"],
+            "wins": row["wins"],
+            "losses": row["losses"],
+            "win_rate": row["win_rate"],
+            "profit_factor": row["profit_factor"],
+            "expectancy_r": row["expectancy_r"],
+        }
+    return board
 
 
 def export_dataset_csv(engine: TradingEngine, path: Path) -> int:

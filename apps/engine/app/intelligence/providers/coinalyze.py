@@ -7,7 +7,22 @@ from app.intelligence.http import fetch_json
 from app.intelligence.schemas import ProviderHealth, RawExternalObservation
 from app.resilience.guards import CircuitBreaker, TokenBucket
 
-_WANTED = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT"}
+_WANTED = {
+    "BTC": "BTCUSDT",
+    "ETH": "ETHUSDT",
+    "SOL": "SOLUSDT",
+    "BNB": "BNBUSDT",
+    "XRP": "XRPUSDT",
+}
+# One Binance perpetual per asset. Six history calls × 5 symbols = 30, plus the catalog, under the 40/minute cap.
+_HISTORY = (
+    ("open-interest-history", "5min", 2, {"convert_to_usd": "true"}, "oi"),
+    ("funding-rate-history", "1hour", 24, {}, "funding"),
+    ("predicted-funding-rate-history", "1hour", 24, {}, "predicted"),
+    ("liquidation-history", "5min", 2, {}, "liquidation"),
+    ("long-short-ratio-history", "5min", 2, {}, "ratio"),
+    ("ohlcv-history", "5min", 2, {}, "ohlcv"),
+)
 
 
 class CoinalyzeProvider:
@@ -52,49 +67,45 @@ class CoinalyzeProvider:
                 self._status = "ERROR" if listed.status == "ERROR" else "DEGRADED"
                 self._error = listed.status
                 return []
-            self._markets = _select_markets(listed.body, symbols)
-        chosen = self._markets[:12]
+            self._markets = _one_per_asset(_select_markets(listed.body, symbols))
+        chosen = self._markets
         if not chosen:
             self._status = "DEGRADED"
             self._error = "NO_MARKET_MAPPING"
             return []
         provider_symbols = ",".join(item["provider_symbol"] for item in chosen)
         rows: list[RawExternalObservation] = []
-        current = (
-            ("open-interest", "aggregate_open_interest_usd", {"symbols": provider_symbols, "convert_to_usd": "true"}),
-            ("funding-rate", "funding_current", {"symbols": provider_symbols}),
-            ("predicted-funding-rate", "predicted_funding", {"symbols": provider_symbols}),
-        )
-        for path, metric, params in current:
-            result = await fetch_json(self.client, self.breaker, self.bucket, f"{base}/{path}", params, headers)
-            if result.status == "RATE_LIMIT":
-                self._status = "DEGRADED"
-                self._error = "429"
-                return rows
-            if result.status != "ok":
-                continue
-            rows.extend(_current_rows(metric, result.body, chosen, now))
-        start = int((now - timedelta(hours=2)).timestamp())
+        budget = max(self.settings.coinalyze_requests_per_minute, 1)
+        spent = 1
         end = int(now.timestamp())
-        history_symbols = ",".join(item["provider_symbol"] for item in chosen if item["exchange"] == "A") or provider_symbols
-        histories = (
-            ("open-interest-history", _oi_history, {"convert_to_usd": "true"}),
-            ("liquidation-history", _liquidation_history, {}),
-            ("long-short-ratio-history", _ratio_history, {}),
-            ("ohlcv-history", _ohlcv_history, {}),
-        )
-        for path, parser, extra in histories:
-            params = {"symbols": history_symbols, "interval": "5min", "from": start, "to": end, **extra}
+        parsers = {
+            "oi": _oi_history,
+            "funding": _rate_history("funding_rate"),
+            "predicted": _rate_history("predicted_funding"),
+            "liquidation": _liquidation_history,
+            "ratio": _ratio_history,
+            "ohlcv": _ohlcv_history,
+        }
+        for path, interval, hours, extra, kind in _HISTORY:
+            cost = len(chosen)
+            if spent + cost > budget:
+                self._status = "DEGRADED"
+                self._error = "BUDGET"
+                break
+            start = int((now - timedelta(hours=hours)).timestamp())
+            params = {"symbols": provider_symbols, "interval": interval, "from": start, "to": end, **extra}
             result = await fetch_json(self.client, self.breaker, self.bucket, f"{base}/{path}", params, headers)
+            spent += cost
             if result.status == "RATE_LIMIT":
                 self._status = "DEGRADED"
                 self._error = "429"
                 return rows
             if result.status != "ok":
                 continue
-            rows.extend(parser(result.body, chosen, now))
-        self._status = "ONLINE" if rows else "DEGRADED"
-        self._error = None if rows else "EMPTY"
+            rows.extend(parsers[kind](result.body, chosen, now))
+        else:
+            self._status = "ONLINE" if rows else "DEGRADED"
+            self._error = None if rows else "EMPTY"
         return rows
 
 
@@ -127,32 +138,37 @@ def _select_markets(body: list, symbols: list[str]) -> list[dict]:
     return chosen
 
 
-def _current_rows(metric: str, body, markets: list[dict], now: datetime) -> list[RawExternalObservation]:
-    if not isinstance(body, list):
-        return []
-    by_symbol = {item["provider_symbol"]: item for item in markets}
-    rows = []
-    totals: dict[str, float] = {}
-    for item in body:
-        if not isinstance(item, dict) or item.get("value") is None:
+def _one_per_asset(markets: list[dict]) -> list[dict]:
+    picked = []
+    seen: set[str] = set()
+    for item in markets:
+        if item["internal_symbol"] in seen:
             continue
-        mapped = by_symbol.get(item.get("symbol"))
-        if mapped is None:
-            continue
-        stamp = _seconds(item.get("update")) or now
-        value = float(item["value"])
-        rows.append(_obs("coinalyze", metric, mapped["internal_symbol"], value, "usd" if "open_interest" in metric else "rate", stamp, now, mapped["provider_symbol"]))
-        if metric == "aggregate_open_interest_usd":
-            totals[mapped["internal_symbol"]] = totals.get(mapped["internal_symbol"], 0.0) + value
-    for symbol, total in totals.items():
-        rows.append(_obs("coinalyze", "aggregate_open_interest_usd_sum", symbol, total, "usd", now, now, None))
-    return rows
+        seen.add(item["internal_symbol"])
+        picked.append(item)
+    return picked
 
 
 def _oi_history(body, markets, now) -> list[RawExternalObservation]:
     return _bars(body, markets, now, lambda bar, mapped: [
         _obs("coinalyze", "open_interest_usd", mapped["internal_symbol"], float(bar["c"]), "usd", _seconds(bar.get("t")) or now, now, mapped["provider_symbol"])
     ] if bar.get("c") is not None else [])
+
+
+def _rate_history(metric: str):
+    def parse(body, markets, now) -> list[RawExternalObservation]:
+        return _bars(
+            body,
+            markets,
+            now,
+            lambda bar, mapped: [
+                _obs("coinalyze", metric, mapped["internal_symbol"], float(bar["c"]), "rate", _seconds(bar.get("t")) or now, now, mapped["provider_symbol"])
+            ]
+            if bar.get("c") is not None
+            else [],
+        )
+
+    return parse
 
 
 def _liquidation_history(body, markets, now) -> list[RawExternalObservation]:

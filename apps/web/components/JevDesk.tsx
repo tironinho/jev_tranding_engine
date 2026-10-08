@@ -203,7 +203,7 @@ function Field({ name, value }: { name: string; value: unknown }) {
         </div>
       );
     }
-    if (name.includes("quality") || name.includes("percentile") || name.includes("freshness") || name.includes("confidence")) {
+    if (name.includes("quality") || name.includes("percentile") || name.includes("freshness") || name.includes("confidence") || name.includes("intensity")) {
       return <ProbRow label={labelOf(name)} value={value} />;
     }
     return <SignedRow label={labelOf(name)} value={value} />;

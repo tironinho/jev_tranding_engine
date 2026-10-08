@@ -19,7 +19,7 @@ from app.intelligence.schemas import RawExternalObservation
 
 log = logging.getLogger(__name__)
 
-_FOCUS = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+_FOCUS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
 
 
 class IntelligenceCache:

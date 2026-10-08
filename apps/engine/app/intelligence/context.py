@@ -27,6 +27,7 @@ def build_context(symbol: str, features: dict, rows: list[RawExternalObservation
     """Normalized jev_feature_set_v1. Missing stays null."""
     visible = [row for row in rows if ensure_utc(row.observed_at) <= ensure_utc(now)]
     micro = _micro(features)
+    _apply_flow(micro, symbol, visible)
     derivatives = _derivatives(symbol, visible, now)
     sentiment = _sentiment(visible, now)
     global_market = _dominance(visible, now, symbol)
@@ -88,6 +89,27 @@ def _micro(features: dict) -> dict:
     }
 
 
+def _apply_flow(micro: dict, symbol: str, rows: list[RawExternalObservation]) -> None:
+    """5-minute taker and cumulative flow from Coinalyze buy/sell volume. Missing stays null."""
+    buys = {stamp: value for stamp, value in _series(rows, "coinalyze", "buy_volume", symbol)}
+    sells = {stamp: value for stamp, value in _series(rows, "coinalyze", "sell_volume", symbol)}
+    common = sorted(set(buys) & set(sells))
+    if not common:
+        return
+    if micro["taker_imbalance_5m"] is None:
+        micro["taker_imbalance_5m"] = taker_imbalance(buys[common[-1]], sells[common[-1]])
+    if micro["cvd_direction"] is None and len(common) >= 2:
+        micro["cvd_direction"] = taker_imbalance(sum(buys[stamp] for stamp in common), sum(sells[stamp] for stamp in common))
+    present = [
+        micro[key]
+        for key in ("taker_imbalance_1m", "taker_imbalance_5m", "book_imbalance_5", "book_imbalance_20", "cvd_direction")
+        if micro.get(key) is not None
+    ]
+    micro["quality"] = feature_quality(available=bool(present), fresh=1.0 if present else 0.0)
+    if micro["taker_imbalance_1m"] is None and micro["book_imbalance_5"] is None and micro["book_imbalance_20"] is None:
+        micro["source"] = "coinalyze"
+
+
 def _derivatives(symbol: str, rows: list[RawExternalObservation], now: datetime) -> dict:
     oi = _series(rows, "coinalyze", "open_interest_usd", symbol)
     if not oi:
@@ -101,19 +123,30 @@ def _derivatives(symbol: str, rows: list[RawExternalObservation], now: datetime)
     latest = history[-1] if history else None
     rank, _signed = percentile_signed(history[:-1], latest) if latest is not None else (None, None)
     z = robust_zscore(latest, history[:-1]) if latest is not None else None
-    funding = _series(rows, "binance", "funding_rate", symbol) or _series(rows, "coinalyze", "funding_current", symbol)
+    funding = _longest(
+        _series(rows, "coinalyze", "funding_rate", symbol),
+        _series(rows, "binance", "funding_rate", symbol),
+        _series(rows, "coinalyze", "funding_current", symbol),
+    )
     funding_latest = funding[-1][1] if funding else None
     funding_z = robust_zscore(funding_latest, [value for _, value in funding[:-1]]) if funding_latest is not None else None
     crowding = signed_from_z(funding_z)
+    predicted = _series(rows, "coinalyze", "predicted_funding", symbol)
+    predicted_latest = predicted[-1][1] if predicted else None
+    predicted_z = robust_zscore(predicted_latest, [value for _, value in predicted[:-1]]) if predicted_latest is not None else None
     long_liq = _latest(rows, "coinalyze", "long_liquidations", symbol)
     short_liq = _latest(rows, "coinalyze", "short_liquidations", symbol)
     imbalance = liquidation_imbalance(long_liq[1] if long_liq else None, short_liq[1] if short_liq else None)
+    intensity = _liquidation_intensity(rows, symbol)
     ratio = _latest(rows, "coinalyze", "long_short_ratio", symbol)
     ratio_z = None
     if ratio is not None:
         past = [log_ratio(value) for _, value in _series(rows, "coinalyze", "long_short_ratio", symbol)[:-1]]
         past = [item for item in past if item is not None]
         ratio_z = signed_from_z(robust_zscore(log_ratio(ratio[1]), past))
+    borrow = _latest(rows, "binance", "borrow_hourly_interest", symbol)
+    quote_borrow = _latest(rows, "binance", "quote_borrow_hourly_interest", symbol)
+    price_index = _latest(rows, "binance", "margin_price_index", symbol)
     binance_oi = _latest(rows, "binance", "open_interest_value", symbol)
     coinalyze_oi = _latest(rows, "coinalyze", "open_interest_usd", symbol)
     disagreement = None
@@ -122,18 +155,24 @@ def _derivatives(symbol: str, rows: list[RawExternalObservation], now: datetime)
     price = _series(rows, "coinalyze", "close", symbol)
     state, confidence = _position_state(_log_shift(price, 300), changes["oi_change_5m"])
     fresh = freshness(age_seconds(now, oi[-1][0] if oi else None), 900) if oi else 0.0
-    available = any(item is not None for item in (*changes.values(), crowding, imbalance))
+    available = any(item is not None for item in (*changes.values(), crowding, imbalance, borrow, quote_borrow, price_index))
     return {
         "oi_usd": latest,
         "oi_change_5m": _signed_change(changes["oi_change_5m"], oi),
         "oi_change_15m": _signed_change(changes["oi_change_15m"], oi),
+        "oi_change_1h": _signed_change(changes["oi_change_1h"], oi),
         "oi_percentile": rank,
         "funding_raw": funding_latest,
+        "borrow_hourly_interest": borrow[1] if borrow else None,
+        "quote_borrow_hourly_interest": quote_borrow[1] if quote_borrow else None,
+        "margin_price_index": price_index[1] if price_index else None,
         "funding_bps": funding_bps(funding_latest),
         "funding_crowding": crowding,
+        "predicted_funding_bps": funding_bps(predicted_latest),
+        "predicted_funding_crowding": signed_from_z(predicted_z),
         "long_short_crowding": ratio_z,
         "liquidation_imbalance": imbalance,
-        "liquidation_intensity": None,
+        "liquidation_intensity": intensity,
         "position_building_state": state,
         "position_building_confidence": confidence,
         "provider_disagreement": disagreement,
@@ -193,12 +232,14 @@ def _dominance(rows, now: datetime, symbol: str) -> dict:
 def _relative(symbol: str, rows, now: datetime) -> dict:
     closes = {
         name: _series(rows, "coinalyze", "close", name)
-        for name in ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+        for name in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
     }
     return {
         "eth_vs_btc": _spread(closes["ETHUSDT"], closes["BTCUSDT"]) if symbol != "BTCUSDT" else None,
         "sol_vs_btc": _spread(closes["SOLUSDT"], closes["BTCUSDT"]) if symbol != "BTCUSDT" else None,
         "sol_vs_eth": _spread(closes["SOLUSDT"], closes["ETHUSDT"]) if symbol == "SOLUSDT" else None,
+        "bnb_vs_btc": _spread(closes["BNBUSDT"], closes["BTCUSDT"]) if symbol == "BNBUSDT" else None,
+        "xrp_vs_btc": _spread(closes["XRPUSDT"], closes["BTCUSDT"]) if symbol == "XRPUSDT" else None,
         "btc_relative_strength": _spread(closes["BTCUSDT"], closes["ETHUSDT"]) if symbol == "BTCUSDT" else None,
     }
 
@@ -223,6 +264,25 @@ def _series(rows, provider: str, metric: str, symbol: str | None) -> list[tuple[
     ]
     found.sort(key=lambda item: item[0])
     return found
+
+
+def _liquidation_intensity(rows, symbol: str) -> float | None:
+    """How large the latest liquidation bar is versus the recent window. Not a side."""
+    longs = {stamp: value for stamp, value in _series(rows, "coinalyze", "long_liquidations", symbol)}
+    shorts = {stamp: value for stamp, value in _series(rows, "coinalyze", "short_liquidations", symbol)}
+    stamps = sorted(set(longs) & set(shorts))
+    if len(stamps) < 4:
+        return None
+    totals = [longs[stamp] + shorts[stamp] for stamp in stamps]
+    rank, _signed = percentile_signed(totals[:-1], totals[-1])
+    return rank
+
+
+def _longest(*series: list[tuple[datetime, float]]) -> list[tuple[datetime, float]]:
+    present = [item for item in series if item]
+    if not present:
+        return []
+    return max(present, key=len)
 
 
 def _latest(rows, provider, metric, symbol):

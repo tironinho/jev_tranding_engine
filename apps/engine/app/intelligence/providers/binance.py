@@ -5,13 +5,17 @@ from datetime import datetime, timezone
 from app.config import Settings
 from app.intelligence.http import fetch_json
 from app.intelligence.schemas import ProviderHealth, RawExternalObservation
+from app.providers.binance_account import _signed
 from app.resilience.guards import CircuitBreaker, TokenBucket
 
 _ASSETS = {"BTCUSDT": "BTC", "ETHUSDT": "ETH", "SOLUSDT": "SOL"}
 
 
 class BinanceIntelligenceProvider:
-    """Futures derivatives only. The spot book already feeds price, depth and trades."""
+    """Margin borrow and price index, or futures derivatives when the book is futures.
+
+    The spot book already feeds price, depth and trades. A margin book never calls fapi.
+    """
 
     name = "binance"
 
@@ -36,6 +40,11 @@ class BinanceIntelligenceProvider:
         headers = {}
         if self.settings.binance_api_key:
             headers["X-MBX-APIKEY"] = self.settings.binance_api_key
+        if self.settings.market_type != "futures":
+            rows, blocked = await self._margin(wanted, now, headers)
+            self._status = "DEGRADED" if blocked and not rows else "ONLINE" if rows or not wanted else "DEGRADED"
+            self._error = "HTTP 451" if blocked and not rows else None
+            return rows
         base = self.settings.binance_futures_rest_url.rstrip("/")
         blocked = False
         for symbol in wanted:
@@ -92,6 +101,98 @@ class BinanceIntelligenceProvider:
                 continue
             rows.extend(parser(symbol, result.body, now))
         return rows, blocked
+
+    async def _margin(self, symbols: list[str], now: datetime, headers: dict) -> tuple[list[RawExternalObservation], bool]:
+        """Cross-margin price index and borrow interest. No futures host."""
+        base = self.settings.binance_account_rest_url.rstrip("/")
+        rows: list[RawExternalObservation] = []
+        blocked = False
+        for symbol in symbols:
+            index = await fetch_json(
+                self.client,
+                self.breaker,
+                self.bucket,
+                f"{base}/sapi/v1/margin/priceIndex",
+                {"symbol": symbol},
+                headers,
+            )
+            if index.status == "GEO_BLOCKED":
+                blocked = True
+                continue
+            if index.status == "ok" and isinstance(index.body, dict) and index.body.get("price") is not None:
+                stamp = _ms(index.body.get("calcTime")) or now
+                rows.append(_obs("binance", "margin_price_index", symbol, _ASSETS[symbol], _num(index.body.get("price")), "usd", stamp, now, 60))
+        if not self.settings.binance_api_secret:
+            return rows, blocked
+        assets = [_ASSETS[symbol] for symbol in symbols]
+        if "USDT" not in assets:
+            assets.append("USDT")
+        signed = _signed(
+            self.settings.binance_api_secret,
+            {"assets": ",".join(assets), "isIsolated": "FALSE", "timestamp": int(now.timestamp() * 1000), "recvWindow": 5000},
+        )
+        hourly = await fetch_json(
+            self.client,
+            self.breaker,
+            self.bucket,
+            f"{base}/sapi/v1/margin/next-hourly-interest-rate",
+            signed,
+            headers,
+        )
+        if hourly.status == "GEO_BLOCKED":
+            blocked = True
+        elif hourly.status == "ok" and isinstance(hourly.body, list):
+            rows.extend(_hourly_interest(symbols, hourly.body, now))
+        for asset in assets:
+            daily = await fetch_json(
+                self.client,
+                self.breaker,
+                self.bucket,
+                f"{base}/sapi/v1/margin/crossMarginData",
+                _signed(self.settings.binance_api_secret, {"coin": asset, "timestamp": int(now.timestamp() * 1000), "recvWindow": 5000}),
+                headers,
+            )
+            if daily.status == "GEO_BLOCKED":
+                blocked = True
+                continue
+            if daily.status == "ok" and isinstance(daily.body, list):
+                rows.extend(_daily_interest(symbols, asset, daily.body, now))
+        return rows, blocked
+
+
+def _hourly_interest(symbols: list[str], body: list, now: datetime) -> list[RawExternalObservation]:
+    by_asset = {item.get("asset"): item for item in body if isinstance(item, dict)}
+    rows: list[RawExternalObservation] = []
+    quote = by_asset.get("USDT")
+    quote_rate = _num(quote.get("nextHourlyInterestRate")) if quote else None
+    for symbol in symbols:
+        asset = _ASSETS[symbol]
+        item = by_asset.get(asset)
+        rate = _num(item.get("nextHourlyInterestRate")) if item else None
+        if rate is not None:
+            rows.append(_obs("binance", "borrow_hourly_interest", symbol, asset, rate, "rate", now, now, 3600))
+        if quote_rate is not None:
+            rows.append(_obs("binance", "quote_borrow_hourly_interest", symbol, "USDT", quote_rate, "rate", now, now, 3600))
+    return rows
+
+
+def _daily_interest(symbols: list[str], asset: str, body: list, now: datetime) -> list[RawExternalObservation]:
+    rate = None
+    for item in body:
+        if isinstance(item, dict) and item.get("coin") == asset and item.get("dailyInterest") is not None:
+            rate = _num(item.get("dailyInterest"))
+            break
+    if rate is None:
+        return []
+    rows = []
+    if asset == "USDT":
+        for symbol in symbols:
+            rows.append(_obs("binance", "quote_borrow_daily_interest", symbol, "USDT", rate, "rate", now, now, 86_400))
+        return rows
+    for symbol in symbols:
+        if _ASSETS[symbol] == asset:
+            rows.append(_obs("binance", "borrow_daily_interest", symbol, asset, rate, "rate", now, now, 86_400))
+    return rows
 
 
 def _oi_hist(symbol: str, body: list, now: datetime) -> list[RawExternalObservation]:

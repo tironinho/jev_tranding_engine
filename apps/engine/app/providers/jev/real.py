@@ -59,6 +59,7 @@ class RealJevProvider:
         api_key: str,
         model: str,
         timeout_s: float = 3.0,
+        min_data_quality: float = 0.70,
         client: Any | None = None,
     ) -> None:
         self.prompt_version = prompt_version
@@ -67,6 +68,7 @@ class RealJevProvider:
         self.api_key_configured = bool(self._api_key)
         self.model = model.strip() if model else "jev-latest"
         self.timeout_s = timeout_s
+        self.min_data_quality = min_data_quality
         self.client = client
 
     async def evaluate_market_state(self, request: JevMarketRequest) -> JevAssessment:
@@ -78,7 +80,7 @@ class RealJevProvider:
         payload = request.model_dump(mode="json")
         body = {
             "model": self.model,
-            "state": _normalized_state(payload),
+            "state": _state_for_model(payload, self.min_data_quality),
             "questions": {
                 name: {"type": "noul", "instructions": _INSTRUCTIONS[name]}
                 for name in _NOULS
@@ -117,6 +119,22 @@ class RealJevProvider:
             )
         except Exception as exc:
             raise JevProviderError(str(exc)) from exc
+
+
+def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
+    """A context below the quality floor stays on the desk and out of the question.
+
+    Incomplete external fields were pulling continuation under the veto line.
+    """
+    state = _normalized_state(payload)
+    intelligence = state.get("intelligence")
+    if not isinstance(intelligence, dict):
+        return state
+    quality = intelligence.get("data_quality")
+    overall = quality.get("overall") if isinstance(quality, dict) else None
+    if isinstance(overall, (int, float)) and overall < min_quality:
+        return {key: value for key, value in state.items() if key != "intelligence"}
+    return state
 
 
 def _normalized_state(payload: dict) -> dict[str, Any]:

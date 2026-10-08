@@ -207,6 +207,52 @@ async def test_real_jev_calls_only_the_configured_url():
     assert assessment.trend_continuation_probability == 0.8
 
 
+@pytest.mark.asyncio
+async def test_thin_external_context_stays_off_the_jev_question():
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            names = (
+                "trend_continuation_probability",
+                "reversal_probability",
+                "false_breakout_probability",
+            )
+            return {"answers": {name: {"noul": 0.6} for name in names}}
+
+    class _Client:
+        def __init__(self):
+            self.body: dict | None = None
+
+        async def post(self, url, headers=None, json=None, timeout=None):
+            self.body = json
+            return _Response()
+
+    def request(overall: float) -> JevMarketRequest:
+        return JevMarketRequest(
+            prompt_version="jev_market_v1",
+            symbol="BTCUSDT",
+            market_type="futures",
+            timestamp=clock(),
+            features={"range_60m_frac": 0.01},
+            baseline_action="LONG",
+            intelligence={"data_quality": {"overall": overall}, "microstructure": {"taker_imbalance_1m": 0.5}},
+        )
+
+    client = _Client()
+    provider = RealJevProvider(
+        prompt_version="jev_market_v1",
+        base_url="https://jev.example/evaluate",
+        api_key="secret",
+        model="m",
+        client=client,
+    )
+    await provider.evaluate_market_state(request(0.563))
+    assert "intelligence" not in client.body["state"]
+    await provider.evaluate_market_state(request(0.82))
+    assert client.body["state"]["intelligence"]["data_quality"]["overall"] == 0.82
+
+
 def test_prompt_v1_refuses_orders_and_is_locked():
     text = get_prompt("market_interpreter_v1")
     assert "do not place orders" in text.lower()

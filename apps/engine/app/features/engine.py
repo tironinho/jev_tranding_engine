@@ -176,6 +176,11 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["volume_ratio"] = (cur_vol / avg_vol) if cur_vol is not None and avg_vol else None
     features["volume_zscore"] = zscore(cur_vol, avg_source) if cur_vol is not None and avg_source else None
 
+    if len(highs) >= 60 and len(lows) >= 60:
+        features["range_60m"] = max(highs[-60:]) - min(lows[-60:])
+    else:
+        features["range_60m"] = None
+
     window_start = as_of - timedelta(seconds=60)
     trades = [trade for trade in state.trades if window_start <= trade.timestamp <= as_of]
     buy_vol = sum(trade.quantity for trade in trades if trade.aggressive_side == "buy")

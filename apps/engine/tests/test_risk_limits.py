@@ -230,6 +230,21 @@ def test_entry_throttle():
     assert ENTRY_THROTTLED in rejected.reject_reasons
 
 
+def test_a_target_beyond_the_last_hour_is_rejected():
+    from app.domain.enums import TARGET_BEYOND_HOUR
+
+    eng = engine()
+    snapshot, book = long_snapshot(range_60m=0.2)
+    rejected = eng.risk.evaluate(
+        _order(snapshot, Action.LONG),
+        snapshot,
+        _context(),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert TARGET_BEYOND_HOUR in rejected.reject_reasons
+
+
 def _order(snapshot, action: Action):
     from app.domain.enums import OperatingMode
     from app.domain.schemas import StrategyDecision

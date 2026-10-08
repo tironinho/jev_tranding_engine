@@ -307,3 +307,11 @@ def extend_target_for_costs(
     if target - required <= room:
         return required, True
     return target, False
+
+
+def target_inside_hour(entry: float, target: float, features: dict) -> bool:
+    """The planned winner has to fit inside the last hour's high-low range."""
+    span = features.get("range_60m")
+    if not isinstance(span, (int, float)) or span <= 0 or entry <= 0:
+        return False
+    return abs(target - entry) <= float(span) + 1e-9

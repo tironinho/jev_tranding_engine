@@ -72,6 +72,7 @@ def long_snapshot(**feature_overrides) -> MarketSnapshot:
         "resistance": 108.0,
         "resistance_15m": 108.0,
         "support_15m": 97.0,
+        "range_60m": 30.0,
         "funding_rate": 0.0,
     }
     features.update(feature_overrides)

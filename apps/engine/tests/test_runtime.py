@@ -249,6 +249,20 @@ async def test_price_events_do_not_time_exit_on_the_wall_clock():
 
 
 @pytest.mark.asyncio
+async def test_a_winner_is_not_closed_by_the_clock():
+    eng = engine()
+    _open(eng, entry_price=100, stop=95, target=110)
+    state = eng.states["BTCUSDT"]
+    state.last_price = 101
+    state.best_bid = 101
+    state.best_ask = 101.05
+    await eng.on_price("BTCUSDT", 101, clock() + timedelta(minutes=60))
+    await asyncio.gather(*list(eng._background))
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
+    assert eng.accounts.accounts["baseline"].trades == []
+
+
+@pytest.mark.asyncio
 async def test_saturated_symbol_does_not_start_a_second_evaluation():
     eng = engine()
     snapshot, book = long_snapshot()

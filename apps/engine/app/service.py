@@ -616,6 +616,9 @@ class TradingEngine:
             target=position.target,
             hold_minutes=hold_minutes,
             max_hold_minutes=self.risk.limits.max_hold_minutes,
+            entry=position.entry_price,
+            bid=state.best_bid,
+            ask=state.best_ask,
         )
         if reason is None:
             await self._step_stop(key, symbol, position, observed)

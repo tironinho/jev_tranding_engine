@@ -175,6 +175,15 @@ def exit_reason(side: Action, bid: float | None, ask: float | None, stop: float,
     return None
 
 
+def _clock_closes_a_loser(side: Action, bid: float | None, ask: float | None, entry: float | None) -> bool:
+    """A flat or losing mark may leave on the clock. A winner stays for the target or the stop."""
+    if entry is None:
+        return True
+    if side is Action.LONG:
+        return bid is not None and bid <= entry
+    return ask is not None and ask >= entry
+
+
 def position_exit(
     side: Action,
     bid: float | None,
@@ -183,12 +192,13 @@ def position_exit(
     target: float,
     hold_minutes: float,
     max_hold_minutes: int,
+    entry: float | None = None,
 ) -> str | None:
-    """Price exits win over the clock. Time exit is an explicit rule, not a kill switch."""
+    """Price exits win over the clock. Time exit closes a loser, not a winner."""
     reason = exit_reason(side, bid, ask, stop, target)
     if reason is not None:
         return reason
-    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
+    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes and _clock_closes_a_loser(side, bid, ask, entry):
         return "TIME"
     return None
 
@@ -238,8 +248,11 @@ def position_exit_observed(
     target: float,
     hold_minutes: float,
     max_hold_minutes: int,
+    entry: float | None = None,
+    bid: float | None = None,
+    ask: float | None = None,
 ) -> str | None:
-    """Stop uses the worst touch since the last check. Target uses the best. Clock is last."""
+    """Stop uses the worst touch since the last check. Target uses the best. Clock closes a loser."""
     if side is Action.LONG:
         if min_bid is not None and min_bid <= stop:
             return "STOP"
@@ -250,6 +263,8 @@ def position_exit_observed(
             return "STOP"
         if min_ask is not None and min_ask <= target:
             return "TARGET"
-    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
+    mark_bid = bid if bid is not None else max_bid
+    mark_ask = ask if ask is not None else min_ask
+    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes and _clock_closes_a_loser(side, mark_bid, mark_ask, entry):
         return "TIME"
     return None

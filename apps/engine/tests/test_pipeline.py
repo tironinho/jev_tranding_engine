@@ -56,16 +56,15 @@ async def test_duplicate_client_order_does_not_open_two_positions():
     eng = engine()
     snapshot, book = long_snapshot()
     attach_book(eng, book)
-    eng.strategy_settings["baseline_jev"].enabled = False
     first = await eng.evaluate_snapshot(snapshot)
-    baseline = next(item for item in first if item.strategy == "baseline")
-    qty_before = eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity
+    jev = next(item for item in first if item.strategy == "baseline_jev")
+    qty_before = eng.accounts.accounts["baseline_jev"].sole("BTCUSDT").quantity
     from app.execution.paper import PaperExecutionProvider
 
     intent = OrderIntent(
-        decision_id=baseline.decision_id,
+        decision_id=jev.decision_id,
         risk_id=None,
-        strategy="baseline",
+        strategy="baseline_jev",
         symbol="BTCUSDT",
         side="BUY",
         order_type=OrderType.MARKET,
@@ -80,10 +79,10 @@ async def test_duplicate_client_order_does_not_open_two_positions():
     )
     order, fills = eng.paper.submit_market(intent, SlippageConfig(model=SlippageModelName.SPREAD_BASED))
     again, fills_again = eng.paper.submit_market(intent, SlippageConfig(model=SlippageModelName.SPREAD_BASED))
-    assert order.client_order_id == again.client_order_id == baseline.decision_id.hex
+    assert order.client_order_id == again.client_order_id == jev.decision_id.hex
     assert order.status is OrderStatus.FILLED
     assert fills_again == fills
-    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == qty_before
+    assert eng.accounts.accounts["baseline_jev"].sole("BTCUSDT").quantity == qty_before
 
 
 def test_limit_below_the_market_is_not_filled():
@@ -168,7 +167,7 @@ async def test_an_expired_sibling_does_not_block_the_other_book():
     attach_book(eng, book)
 
     class Expired:
-        key = "baseline_jev"
+        key = "baseline"
 
         async def evaluate(self, snapshot, features, context):
             return StrategyDecision(
@@ -186,10 +185,10 @@ async def test_an_expired_sibling_does_not_block_the_other_book():
                 signal_status=SignalStatus.EXPIRED,
             )
 
-    eng.strategies["baseline_jev"] = Expired()
+    eng.strategies["baseline"] = Expired()
     await eng.evaluate_snapshot(snapshot)
-    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
-    assert eng.accounts.accounts["baseline_jev"].positions == {}
+    assert eng.accounts.accounts["baseline_jev"].sole("BTCUSDT").quantity > 0
+    assert eng.accounts.accounts["baseline"].positions == {}
     assert all("VOTES_NOT_ARRIVED" not in risk["reject_reasons"] for risk in eng.store.risks.values())
 
 

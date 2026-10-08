@@ -28,6 +28,7 @@ _SPOT_REST_CANDIDATES = (
     "https://data-api.binance.vision",
 )
 _MARKET_USER_AGENT = "Mozilla/5.0 (compatible; trading-engine/0.1)"
+_SPOT_WS_API = "wss://ws-api.binance.com/ws-api/v3"
 
 
 def _signed_params(secret: str, params: dict) -> dict:
@@ -62,7 +63,9 @@ class MarketFeed:
         self.geo_blocked = False
         self._rest_mode = "plain"
         self._rest_base_override: str | None = None
+        self._market_rest_blocked = False
         self._warned_418 = False
+        self._ws_id = 0
 
     def _futures(self) -> bool:
         return self.settings.market_type == "futures"
@@ -166,6 +169,9 @@ class MarketFeed:
     async def _bootstrap(self) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
             await self._prepare_market_rest(client)
+            if self._market_rest_blocked:
+                await self._load_ws_history()
+                return
             await self._load_rules(client)
             for symbol in self.settings.symbol_list:
                 for interval, limit in (("1m", 300), ("5m", 200), ("15m", 200)):
@@ -252,7 +258,8 @@ class MarketFeed:
                     return
         self._rest_mode = "plain"
         self._rest_base_override = None
-        log.warning("market history blocked; scores stay empty until klines return")
+        self._market_rest_blocked = True
+        log.warning("market rest blocked; loading candle history through the websocket api")
 
     async def _get(self, client: httpx.AsyncClient, path: str, params: dict, *, probe: bool = False):
         if not self.bucket.take():
@@ -289,6 +296,63 @@ class MarketFeed:
             log.info("binance %s %s -> %s", path, params.get("symbol", ""), response.status_code)
             return None
         return response.json()
+
+    async def _load_ws_history(self) -> None:
+        try:
+            async with websockets.connect(
+                _SPOT_WS_API,
+                ping_interval=20,
+                open_timeout=15,
+                max_queue=32,
+            ) as socket:
+                await self._fill_from_ws_api(socket)
+        except Exception as exc:
+            log.warning("websocket history failed: %s", type(exc).__name__)
+
+    async def _fill_from_ws_api(self, socket) -> None:
+        loaded = 0
+        for symbol in self.settings.symbol_list:
+            if symbol not in self.states:
+                continue
+            for interval, limit in (("1m", 300), ("5m", 200), ("15m", 200)):
+                payload = await self._ws_call(socket, "klines", {"symbol": symbol, "interval": interval, "limit": limit})
+                rows = payload.get("result") if isinstance(payload, dict) else None
+                if not isinstance(rows, list):
+                    continue
+                for candle in parse_rest_klines(symbol, interval, rows):
+                    self.states[symbol].upsert_candle(candle)
+                    loaded += 1
+            depth = await self._ws_call(socket, "depth", {"symbol": symbol, "limit": 20})
+            book = depth.get("result") if isinstance(depth, dict) else None
+            if isinstance(book, dict):
+                self._apply_rest_depth(symbol, book)
+            ticker = await self._ws_call(socket, "ticker.book", {"symbol": symbol})
+            quote = ticker.get("result") if isinstance(ticker, dict) else None
+            if isinstance(quote, dict):
+                self._apply_rest_book(symbol, quote)
+            if self.states[symbol].candles.get("1m") and self.on_trigger is not None:
+                log.info("bootstrap snapshot %s", symbol)
+                await self.on_trigger(symbol, datetime.now(timezone.utc), "bootstrap")
+        log.info("market history via websocket api candles=%s", loaded)
+
+    async def _ws_call(self, socket, method: str, params: dict) -> dict | None:
+        self._ws_id += 1
+        request_id = str(self._ws_id)
+        await socket.send(json.dumps({"id": request_id, "method": method, "params": params}))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            raw = await asyncio.wait_for(socket.recv(), timeout=max(0.1, deadline - time.monotonic()))
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or str(payload.get("id")) != request_id:
+                continue
+            if payload.get("status") != 200:
+                log.info("binance ws %s %s -> %s", method, params.get("symbol", ""), payload.get("status"))
+                return None
+            return payload
+        return None
 
     def _kline_path(self) -> str:
         return "/fapi/v1/klines" if self._futures() else "/api/v3/klines"

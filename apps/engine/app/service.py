@@ -19,7 +19,7 @@ from app.config import (
     risk_from_file,
     strategies_from_file,
 )
-from app.consensus.engine import consensus_from_decisions
+from app.consensus.engine import consensus_from_decisions, extra_open_slot
 from app.db.memory import MemoryStore
 from app.db.postgres import PostgresMirror
 from app.domain.enums import (
@@ -478,19 +478,20 @@ class TradingEngine:
                     )
                 )
             return
+        slot = extra_open_slot(decisions, self.combination.extra_entry_min_continuation)
         for decision in decisions:
             if not self._can_execute(decision):
                 continue
             cfg = self.strategy_settings[decision.strategy]
             if cfg.mode is OperatingMode.PAPER:
-                await self._execute_paper(decision, snapshot)
+                await self._execute_paper(decision, snapshot, extra_slot=slot)
             elif cfg.mode is OperatingMode.LIVE:
-                await self._execute_live(decision, snapshot)
+                await self._execute_live(decision, snapshot, extra_slot=slot)
 
-    async def _execute_paper(self, decision: StrategyDecision, snapshot: MarketSnapshot) -> None:
+    async def _execute_paper(self, decision: StrategyDecision, snapshot: MarketSnapshot, extra_slot: bool = False) -> None:
         fees = await self.fee_provider.get_fees(snapshot.symbol)
         context = self._risk_context(decision.strategy, snapshot, live=False)
-        risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book)
+        risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:
             return
@@ -511,14 +512,14 @@ class TradingEngine:
         await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=fill_payloads)
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
-    async def _execute_live(self, decision: StrategyDecision, snapshot: MarketSnapshot) -> None:
+    async def _execute_live(self, decision: StrategyDecision, snapshot: MarketSnapshot, extra_slot: bool = False) -> None:
         if not self.allows_new_live():
             self._log("live_blocked", "LIVE_LOCKED")
             self.store.add_event("live_blocked", "LIVE_LOCKED", {"decision_id": str(decision.decision_id)})
             return
         fees = await self.fee_provider.get_fees(snapshot.symbol)
         context = self._risk_context(decision.strategy, snapshot, live=True)
-        risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book)
+        risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:
             return

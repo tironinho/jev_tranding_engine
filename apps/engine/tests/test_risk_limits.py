@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from app.domain.enums import (
     ENGINE_DISABLED,
+    EXISTING_POSITION,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
     MAX_OPEN_POSITIONS,
@@ -138,6 +139,34 @@ def test_position_cap_and_spot_short():
         book,
     )
     assert MAX_OPEN_POSITIONS in capped.reject_reasons
+    opened = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(open_positions=eng.risk.limits.max_open_positions),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+        extra_slot=True,
+    )
+    assert opened.accepted
+    assert opened.details["extra_open_slot"] is True
+    still_capped = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(open_positions=eng.risk.limits.max_open_positions + 1),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+        extra_slot=True,
+    )
+    assert MAX_OPEN_POSITIONS in still_capped.reject_reasons
+    stacked = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(open_positions=eng.risk.limits.max_open_positions, has_position_on_symbol=True),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+        extra_slot=True,
+    )
+    assert EXISTING_POSITION in stacked.reject_reasons
     short = decision.model_copy(update={"action": Action.SHORT})
     blocked = eng.risk.evaluate(
         short,

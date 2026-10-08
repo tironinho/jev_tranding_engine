@@ -91,6 +91,7 @@ class RiskEngine:
         context: RiskContext,
         fees: FeeQuote,
         book: OrderBook | None,
+        extra_slot: bool = False,
     ) -> RiskDecision:
         reasons: list[str] = []
         if decision.action is Action.NO_TRADE:
@@ -124,7 +125,8 @@ class RiskEngine:
                 reasons.append(MAX_DAILY_DRAWDOWN)
             if context.realized_pnl_today <= -abs(self.limits.max_daily_loss) * context.day_start_equity:
                 reasons.append(MAX_DAILY_LOSS)
-        if context.open_positions >= self.limits.max_open_positions:
+        cap = self.limits.max_open_positions + (1 if extra_slot else 0)
+        if context.open_positions >= cap:
             reasons.append(MAX_OPEN_POSITIONS)
         if reasons:
             return self._reject(decision, reasons)
@@ -241,6 +243,7 @@ class RiskEngine:
             side=decision.action,
             details={
                 "geometry_reasons": list(geometry.reasons),
+                "extra_open_slot": bool(extra_slot and context.open_positions >= self.limits.max_open_positions),
                 "quantity_capped": qty + 1e-12 < ideal,
                 "slippage_model": preview.model,
                 "expected_price": preview.expected_price,

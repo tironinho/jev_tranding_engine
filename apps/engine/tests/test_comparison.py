@@ -5,7 +5,7 @@ import pytest
 
 from app.analytics.comparison import compare_strategies
 from app.analytics.performance import summarize_trades
-from app.consensus.engine import consensus_from_decisions
+from app.consensus.engine import consensus_from_decisions, extra_open_slot
 from app.domain.enums import Action, ConsensusLabel, OperatingMode, SignalStatus
 from app.domain.schemas import StrategyDecision, TradeRecord
 
@@ -111,6 +111,21 @@ def test_consensus_labels():
         _decision("baseline_openai_jev", Action.NO_TRADE, opportunity, SignalStatus.SKIPPED),
     ]
     assert consensus_from_decisions(standby_short).label is ConsensusLabel.SHORT_2_2
+
+
+def test_extra_slot_needs_both_books_and_a_clear_continuation():
+    opportunity = uuid4()
+    baseline = _decision("baseline", Action.SHORT, opportunity)
+    jev = _decision("baseline_jev", Action.SHORT, opportunity)
+    jev.metadata["jev_continuation"] = 0.80
+    assert extra_open_slot([baseline, jev], 0.80) is True
+    jev.metadata["jev_continuation"] = 0.79
+    assert extra_open_slot([baseline, jev], 0.80) is False
+    jev.metadata["jev_continuation"] = 0.90
+    refused = jev.model_copy(update={"action": Action.NO_TRADE})
+    assert extra_open_slot([baseline, refused], 0.80) is False
+    bare = jev.model_copy(update={"metadata": {}})
+    assert extra_open_slot([baseline, bare], 0.80) is False
 
 
 def test_net_pnl_is_not_gross_and_expectancy_matches_definition():

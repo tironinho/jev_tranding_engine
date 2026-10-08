@@ -23,6 +23,8 @@ combination:
   # Jev não cria trade que a baseline recusou e não inverte direção.
   failure_policy: NO_TRADE
   min_trend_continuation: 0.65
+  # A posição além do teto exige continuação neste piso. 0,65 só confirma. 0,80 é o corte da entrada extra.
+  extra_entry_min_continuation: 0.80
   max_reversal: 0.65
   # Noul near 0.5 is uncertainty. A false-breakout veto needs a clear yes, and only when a breakout exists.
   max_false_breakout: 0.80

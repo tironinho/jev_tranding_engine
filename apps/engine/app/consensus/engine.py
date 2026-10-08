@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.domain.enums import ConsensusLabel
+from app.domain.enums import Action, ConsensusLabel, SignalStatus
 from app.domain.schemas import ConsensusResult, StrategyDecision
 
 
@@ -27,6 +27,27 @@ def consensus_from_decisions(decisions: list[StrategyDecision]) -> ConsensusResu
         label=label,
         actions=actions,
     )
+
+
+def extra_open_slot(decisions: list[StrategyDecision], min_continuation: float) -> bool:
+    """One position past the cap, only when both books want the same side.
+
+    Continuation has to clear the extra-entry bar, which sits above the
+    normal 0.65 confirm. Risk still refuses a symbol that is already open.
+    """
+    by_key = {item.strategy: item for item in decisions}
+    baseline = by_key.get("baseline")
+    jev = by_key.get("baseline_jev")
+    if baseline is None or jev is None:
+        return False
+    if baseline.signal_status is not SignalStatus.VALID or jev.signal_status is not SignalStatus.VALID:
+        return False
+    if baseline.action not in (Action.LONG, Action.SHORT) or jev.action is not baseline.action:
+        return False
+    continuation = jev.metadata.get("jev_continuation")
+    if not isinstance(continuation, (int, float)):
+        return False
+    return float(continuation) >= min_continuation
 
 
 def _label(longs: int, shorts: int, voters: int) -> ConsensusLabel:

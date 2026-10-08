@@ -246,3 +246,97 @@ async def test_kill_switch_blocks_entries_and_resume_is_audited():
     await eng.resume("tester")
     assert eng.trading_enabled is True
     assert [row["action"] for row in eng.store.audit] == ["kill_switch", "resume"]
+
+
+def _voted(snapshot, strategy: str, action: Action, continuation: float | None = None):
+    from app.domain.enums import SignalStatus
+    from app.domain.schemas import StrategyDecision
+
+    metadata = {} if continuation is None else {"jev_continuation": continuation}
+    return StrategyDecision(
+        correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        strategy=strategy,
+        symbol=snapshot.symbol,
+        timestamp=snapshot.timestamp,
+        action=action,
+        confidence=0.8,
+        reason_codes=[],
+        metadata=metadata,
+        mode=OperatingMode.PAPER,
+        signal_status=SignalStatus.VALID,
+    )
+
+
+def _fill_book(eng, snapshot, symbols: list[str]) -> None:
+    from uuid import uuid4
+
+    for symbol in symbols:
+        eng.accounts.open_position(
+            strategy="baseline",
+            symbol=symbol,
+            side=Action.LONG,
+            quantity=0.01,
+            entry_price=100,
+            stop=99,
+            target=103,
+            opened_at=snapshot.timestamp - timedelta(minutes=5),
+            decision_id=uuid4(),
+            entry_fee=0.01,
+            initial_net_risk=1,
+            margin=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_full_book_opens_one_extra_only_when_both_sides_agree():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    for cfg in eng.strategy_settings.values():
+        cfg.mode = OperatingMode.PAPER
+    _fill_book(eng, snapshot, ["ETHUSDT", "SOLUSDT", "BNBUSDT"])
+    account = eng.accounts.accounts["baseline"]
+    assert len(account.positions) == eng.risk.limits.max_open_positions
+
+    await eng._execute_decisions(
+        [
+            _voted(snapshot, "baseline", Action.LONG),
+            _voted(snapshot, "baseline_jev", Action.LONG, 0.80),
+        ],
+        snapshot,
+    )
+    assert account.sole("BTCUSDT").quantity > 0
+    assert len(account.positions) == eng.risk.limits.max_open_positions + 1
+
+    quiet = snapshot.model_copy(update={"timestamp": snapshot.timestamp + timedelta(minutes=2)})
+    await eng._execute_decisions(
+        [
+            _voted(quiet, "baseline", Action.LONG),
+            _voted(quiet, "baseline_jev", Action.NO_TRADE, 0.90),
+        ],
+        quiet,
+    )
+    assert len([item for item in account.positions.values() if item.symbol == "BTCUSDT"]) == 1
+    assert any("EXISTING_POSITION" in risk["reject_reasons"] for risk in eng.store.risks.values())
+
+
+@pytest.mark.asyncio
+async def test_a_full_book_stays_shut_when_continuation_is_only_the_confirm_floor():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    for cfg in eng.strategy_settings.values():
+        cfg.mode = OperatingMode.PAPER
+    _fill_book(eng, snapshot, ["ETHUSDT", "SOLUSDT", "BNBUSDT"])
+    account = eng.accounts.accounts["baseline"]
+    await eng._execute_decisions(
+        [
+            _voted(snapshot, "baseline", Action.LONG),
+            _voted(snapshot, "baseline_jev", Action.LONG, 0.65),
+        ],
+        snapshot,
+    )
+    assert all(item.symbol != "BTCUSDT" for item in account.positions.values())
+    assert any("MAX_OPEN_POSITIONS" in risk["reject_reasons"] for risk in eng.store.risks.values())

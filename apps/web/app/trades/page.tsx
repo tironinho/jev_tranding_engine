@@ -1,3 +1,4 @@
+import { PositionTable } from "@/components/DecisionTable";
 import { Empty, Panel } from "@/components/Shell";
 import { engineFetch } from "@/lib/engine";
 import { money, num, pct, shortTime, sidePnl, signedClass } from "@/lib/utils";
@@ -37,7 +38,11 @@ export default async function TradesPage({
     if (value) params.set(key, value);
   }
   params.set("mode", "live");
-  const result = await engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`);
+  const [result, positions] = await Promise.all([
+    engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`),
+    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"] }>("/api/positions"),
+  ]);
+  const open = (positions.ok ? positions.data?.rows ?? [] : []).filter((row) => row?.mode === "live");
   const rows = result.ok ? result.data?.rows ?? [] : null;
   const totals = rows?.reduce(
     (sum, trade) => {
@@ -76,7 +81,12 @@ export default async function TradesPage({
         <input name="regime" placeholder="regime" defaultValue={query.regime} className="border border-line bg-ink px-2 py-1" />
         <button className="border border-line px-2 py-1">filtrar</button>
       </form>
-      <Panel title="TRADES — PRODUÇÃO">
+      {open.length ? (
+        <Panel title="ABERTAS — PRODUÇÃO">
+          <PositionTable rows={open} />
+        </Panel>
+      ) : null}
+      <Panel title="FECHADAS — PRODUÇÃO">
         {!rows ? <Empty /> : !rows.length ? <Empty label="NENHUM TRADE DE PRODUÇÃO FECHADO" /> : (
           <div className="overflow-x-auto">
             <dl className="mb-3 grid grid-cols-2 gap-3 text-[11px] md:grid-cols-6">

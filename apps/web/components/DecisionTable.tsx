@@ -109,6 +109,7 @@ export function PositionTable({
     target: number;
     notional?: number;
     leverage?: number | null;
+    mode?: string;
     unrealized: number;
     target_pnl?: number;
     stop_pnl?: number;

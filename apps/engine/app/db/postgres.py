@@ -223,9 +223,10 @@ class PostgresMirror:
                 ).scalars().all()
             points = []
             for row in rows:
-                wallet = (row.payload or {}).get("wallet")
-                if isinstance(wallet, (int, float)):
-                    points.append({"t": row.timestamp.isoformat(), "wallet": float(wallet)})
+                body = row.payload or {}
+                equity = body.get("equity")
+                if isinstance(equity, (int, float)):
+                    points.append({"t": row.timestamp.isoformat(), "wallet": float(equity)})
             return points
         except Exception as exc:
             self.last_error = str(exc)

@@ -1083,9 +1083,31 @@ class TradingEngine:
             ]
         return {"starting_equity": start, "series": series}
 
+    def mark_account(self, payload: dict) -> dict:
+        """USDT net is cash after the borrow. Equity marks every debt at the last price."""
+        if payload.get("status") != "ok":
+            return payload
+        equity = 0.0
+        for asset in payload.get("assets") or []:
+            net = float(asset.get("total") or 0)
+            name = str(asset.get("asset") or "")
+            if abs(net) < 1e-8:
+                continue
+            if name == "USDT":
+                equity += net
+                continue
+            state = self.states.get(f"{name}USDT")
+            price = state.last_price if state is not None else None
+            if price is None:
+                return payload
+            equity += net * price
+        return {**payload, "equity_usdt": equity}
+
     async def note_balance(self, payload: dict) -> None:
+        equity = payload.get("equity_usdt")
         wallet = payload.get("wallet")
-        if payload.get("status") != "ok" or not isinstance(wallet, (int, float)):
+        value = equity if isinstance(equity, (int, float)) else wallet
+        if payload.get("status") != "ok" or not isinstance(value, (int, float)):
             return
         now = utcnow()
         previous = self.balance_points[-1] if self.balance_points else None
@@ -1093,21 +1115,25 @@ class TradingEngine:
             then = datetime.fromisoformat(previous["t"])
             if then.tzinfo is None:
                 then = then.replace(tzinfo=timezone.utc)
-            same = abs(float(previous["wallet"]) - float(wallet)) < 0.005
+            same = abs(float(previous["wallet"]) - float(value)) < 0.005
             if same and (now - then).total_seconds() < 900:
-                self._last_wallet = float(wallet)
+                self._last_wallet = float(value)
                 return
-        point = {"t": now.isoformat(), "wallet": float(wallet)}
+        point = {"t": now.isoformat(), "wallet": float(value)}
         self.balance_points.append(point)
         self.balance_points = self.balance_points[-2000:]
-        self._last_wallet = float(wallet)
+        self._last_wallet = float(value)
         if self.postgres and self.postgres.healthy:
-            await self.postgres.save_event("balance", "wallet", {"wallet": float(wallet)})
+            await self.postgres.save_event(
+                "balance",
+                "equity",
+                {"equity": float(value), "wallet": float(wallet) if isinstance(wallet, (int, float)) else None},
+            )
 
     async def _balance_loop(self) -> None:
         while True:
             try:
-                await self.note_balance(await self.balance.snapshot())
+                await self.note_balance(self.mark_account(await self.balance.snapshot()))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1138,6 +1164,7 @@ class TradingEngine:
                         "notional": notional,
                         "margin": margin,
                         "leverage": (notional / margin) if margin and margin > 0 else None,
+                        "mode": position.mode,
                         "unrealized": _marked_net(position, mark, self.fee_config),
                         "target_pnl": _plan_net(position, position.target, self.fee_config),
                         "stop_pnl": _plan_net(position, position.stop, self.fee_config),

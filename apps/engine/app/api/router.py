@@ -363,7 +363,7 @@ async def resume(body: ConfirmBody, request: Request) -> dict:
 
 
 async def _noted_balance(engine):
-    payload = await engine.balance.snapshot()
+    payload = engine.mark_account(await engine.balance.snapshot())
     await engine.note_balance(payload)
     return payload
 

@@ -9,6 +9,7 @@ export type BinanceBalance = {
   available: number | null;
   unrealized: number | null;
   margin_level?: number | null;
+  equity_usdt?: number | null;
   assets: Array<{ asset: string; total: number; free?: number | null }>;
   detail?: string | null;
 };
@@ -44,7 +45,7 @@ export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | nul
         </div>
       ) : (
         <div className="grid gap-3">
-          <div className="font-mono text-2xl text-paper">{num(balance.wallet, 2)} USDT</div>
+          <div className="font-mono text-2xl text-paper">{num(balance.equity_usdt ?? balance.wallet, 2)} USDT</div>
           <dl className="grid grid-cols-2 gap-3 text-[11px]">
             <div>
               <dt className="text-mute">AVAILABLE</dt>
@@ -104,7 +105,7 @@ export function RealAccountPanel({ balance }: { balance: BinanceBalance | null |
             </tbody>
           </table>
           <div className="px-2 pt-2 text-[10px] text-mute">
-            USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Uma conta só. O Jev dimensiona em cima deste saldo.
+            Patrimônio marcado {num(balance.equity_usdt ?? balance.wallet, 2)}. USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Uma conta só. O Jev dimensiona em cima deste patrimônio.
           </div>
         </div>
       )}

@@ -351,7 +351,7 @@ async def test_a_full_book_stays_shut_when_continuation_is_only_the_confirm_floo
     await eng._execute_decisions(
         [
             _voted(snapshot, "baseline", Action.LONG),
-            _voted(snapshot, "baseline_jev", Action.LONG, 0.65),
+            _voted(snapshot, "baseline_jev", Action.LONG, 0.55),
         ],
         snapshot,
     )

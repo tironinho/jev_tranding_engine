@@ -219,7 +219,7 @@ def test_uncertain_continuation_does_not_confirm():
         is_mock=True,
         provider_version="test",
         prompt_version="jev_market_v1",
-        trend_continuation_probability=0.55,
+        trend_continuation_probability=0.50,
         reversal_probability=0.40,
         false_breakout_probability=0.10,
         buying_pressure_probability=0.1,
@@ -228,7 +228,7 @@ def test_uncertain_continuation_does_not_confirm():
     blocked, _, reasons = apply_jev_veto(Action.LONG, 0.8, assessment, CombinationConfig(), False)
     assert blocked is Action.NO_TRADE
     assert "JEV_LOW_CONTINUATION" in reasons
-    clear = assessment.model_copy(update={"trend_continuation_probability": 0.65, "reversal_probability": 0.64})
+    clear = assessment.model_copy(update={"trend_continuation_probability": 0.55, "reversal_probability": 0.64})
     kept, _, kept_reasons = apply_jev_veto(Action.LONG, 0.8, clear, CombinationConfig(), False)
     assert kept is Action.LONG
     assert "JEV_CONFIRM" in kept_reasons

@@ -22,8 +22,9 @@ combination:
   openai_rule_version: openai_jev_veto_only_v1
   # Jev não cria trade que a baseline recusou e não inverte direção.
   failure_policy: NO_TRADE
-  min_trend_continuation: 0.65
-  # A posição além do teto exige continuação neste piso. 0,65 só confirma. 0,80 é o corte da entrada extra.
+  # 0,50 no Noul é incerteza. 0,55 confirma: acima disso e ainda abaixo do 0,65 que deixava a conta muda.
+  # O zero a zero deste payoff fica perto de 0,40. A posição além do teto continua em 0,80.
+  min_trend_continuation: 0.55
   extra_entry_min_continuation: 0.80
   max_reversal: 0.65
   # Noul near 0.5 is uncertainty. A false-breakout veto needs a clear yes, and only when a breakout exists.

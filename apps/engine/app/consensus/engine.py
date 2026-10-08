@@ -33,7 +33,7 @@ def extra_open_slot(decisions: list[StrategyDecision], min_continuation: float) 
     """One position past the cap, only when both books want the same side.
 
     Continuation has to clear the extra-entry bar, which sits above the
-    normal 0.65 confirm. Risk still refuses a symbol that is already open.
+    normal 0.55 confirm. Risk still refuses a symbol that is already open.
     """
     by_key = {item.strategy: item for item in decisions}
     baseline = by_key.get("baseline")

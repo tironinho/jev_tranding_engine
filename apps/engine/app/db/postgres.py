@@ -208,6 +208,30 @@ class PostgresMirror:
             )
         )
 
+    async def load_balance_points(self) -> list[dict]:
+        if not self.factory or not self.healthy:
+            return []
+        try:
+            async with self.factory() as session:
+                rows = (
+                    await session.execute(
+                        select(EngineEventRow)
+                        .where(EngineEventRow.kind == "balance")
+                        .order_by(EngineEventRow.timestamp.asc())
+                        .limit(2000)
+                    )
+                ).scalars().all()
+            points = []
+            for row in rows:
+                wallet = (row.payload or {}).get("wallet")
+                if isinstance(wallet, (int, float)):
+                    points.append({"t": row.timestamp.isoformat(), "wallet": float(wallet)})
+            return points
+        except Exception as exc:
+            self.last_error = str(exc)
+            log.warning("balance history load failed: %s", exc)
+            return []
+
     async def save_event(self, kind: str, message: str, payload: dict) -> None:
         await self._write(
             EngineEventRow(

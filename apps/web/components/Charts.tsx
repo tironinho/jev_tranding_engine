@@ -8,6 +8,7 @@ const COLORS: Record<string, string> = {
   baseline: "#9fb0c0",
   baseline_jev: "#c6b48a",
   baseline_openai_jev: "#8aa89a",
+  conta: "#d7e2ea",
 };
 
 type Point = { t: string; equity: number; indexed?: number | null; drawdown?: number; mark?: boolean };

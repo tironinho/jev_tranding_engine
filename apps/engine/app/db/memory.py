@@ -160,6 +160,7 @@ class MemoryStore:
         side: str | None = None,
         result: str | None = None,
         regime: str | None = None,
+        mode: str | None = None,
     ) -> list[dict]:
         rows = []
         for trade in self.trades:
@@ -170,6 +171,8 @@ class MemoryStore:
             if side and trade["side"] != side:
                 continue
             if regime and trade.get("quantitative_regime") != regime:
+                continue
+            if mode and trade.get("mode", "paper") != mode:
                 continue
             if result == "win" and trade["net_pnl"] <= 0:
                 continue

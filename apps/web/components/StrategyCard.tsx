@@ -18,6 +18,7 @@ export type StrategyCardData = {
 
 export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; liveArmed: boolean }) {
   const mode = card.enabled ? card.mode : "off";
+  const liveAccount = liveArmed && card.key === "baseline_jev";
   const hasTrades = card.trades > 0;
   const result = card.marked_pnl ?? card.net_pnl;
   return (
@@ -31,11 +32,11 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="WIN RATE" value={hasTrades ? pct(card.win_rate) : "NO DATA"} />
         <Stat label="PROFIT FACTOR" value={hasTrades ? num(card.profit_factor, 2) : "NO DATA"} />
         <Stat label="EXPECTANCY" value={hasTrades ? `${num(card.expectancy_r, 2)} R` : "NO DATA"} />
-        <Stat label="NET PNL" value={hasTrades ? money(result) : "NO DATA"} className={hasTrades ? signedClass(result) : ""} />
-        <Stat label="DRAWDOWN" value={hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
+        <Stat label="NET PNL" value={liveAccount || hasTrades ? money(result) : "NO DATA"} className={liveAccount || hasTrades ? signedClass(result) : ""} />
+        <Stat label="DRAWDOWN" value={liveAccount || hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
       <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">
-        {liveArmed ? "histórico de paper — a conta é a margem Binance" : `simulado ${num(card.equity, 2)} USDT`}
+        {liveAccount ? `saldo real ${num(card.equity, 2)} USDT` : liveArmed ? "histórico de paper" : `simulado ${num(card.equity, 2)} USDT`}
       </div>
     </article>
   );

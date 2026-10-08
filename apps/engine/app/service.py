@@ -173,6 +173,8 @@ class TradingEngine:
         self._evaluating: set[str] = set()
         self._real_day = None
         self._real_day_start: float | None = None
+        self.balance_points: list[dict] = []
+        self._last_wallet: float | None = None
         self._close_batch: list[tuple[str, datetime, str]] = []
         self._close_flush: asyncio.Task | None = None
         self._quotes: dict[str, list[dict]] = {}
@@ -206,6 +208,9 @@ class TradingEngine:
                 self.db_error = self.postgres.last_error
                 if self.db_healthy:
                     self.apply_runtime(runtime)
+                    self.balance_points = await self.postgres.load_balance_points()
+                    if self.balance_points:
+                        self._last_wallet = self.balance_points[-1]["wallet"]
                     self._log("restore", "book restored from postgres")
         await self.feed.start()
         self.evolution.bind_research_client(self._http)
@@ -213,6 +218,9 @@ class TradingEngine:
             await self.evolution.attach_postgres(self.postgres.factory)
         await self.evolution.start()
         self._arm_live_strategy()
+        task = asyncio.create_task(self._balance_loop(), name="balance_samples")
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
         self._log("engine", "engine started")
 
     async def stop(self) -> None:
@@ -1020,12 +1028,21 @@ class TradingEngine:
             account = self.accounts.accounts[key]
             trades = list(account.trades)
             marked = account.equity(self._marks())
-            reports[key] = summarize_trades(trades, self.settings.initial_paper_equity, mark=marked)
-            reports[key]["marked_pnl"] = marked - self.settings.initial_paper_equity
-            reports[key]["by_regime"] = slice_performance(trades, self.settings.initial_paper_equity)
+            start = self.settings.initial_paper_equity
+            live_book = key == "baseline_jev" and self.settings.live_armed and self._last_wallet is not None
+            if live_book:
+                trades = [trade for trade in trades if trade.mode == "live"]
+                start = self.balance_points[0]["wallet"] if self.balance_points else self._last_wallet
+                marked = self._last_wallet
+            reports[key] = summarize_trades(trades, start, mark=marked)
+            reports[key]["marked_pnl"] = marked - start
+            reports[key]["by_regime"] = slice_performance(trades, start)
             reports[key]["equity"] = marked
             reports[key]["mode"] = self.strategy_settings[key].mode.value
             reports[key]["enabled"] = self.strategy_settings[key].enabled
+            if live_book:
+                peak = max(point["wallet"] for point in self.balance_points) if self.balance_points else marked
+                reports[key]["max_drawdown"] = ((peak - marked) / peak) if peak else 0.0
         return reports
 
     def comparison(self) -> dict:
@@ -1053,7 +1070,49 @@ class TradingEngine:
                 }
                 for point in points
             ]
+        if self.balance_points:
+            first = self.balance_points[0]["wallet"] or 1
+            series["conta"] = [
+                {
+                    "t": point["t"],
+                    "equity": point["wallet"],
+                    "indexed": (point["wallet"] / first * 100) if first else None,
+                    "mark": False,
+                }
+                for point in self.balance_points
+            ]
         return {"starting_equity": start, "series": series}
+
+    async def note_balance(self, payload: dict) -> None:
+        wallet = payload.get("wallet")
+        if payload.get("status") != "ok" or not isinstance(wallet, (int, float)):
+            return
+        now = utcnow()
+        previous = self.balance_points[-1] if self.balance_points else None
+        if previous is not None:
+            then = datetime.fromisoformat(previous["t"])
+            if then.tzinfo is None:
+                then = then.replace(tzinfo=timezone.utc)
+            same = abs(float(previous["wallet"]) - float(wallet)) < 0.005
+            if same and (now - then).total_seconds() < 900:
+                self._last_wallet = float(wallet)
+                return
+        point = {"t": now.isoformat(), "wallet": float(wallet)}
+        self.balance_points.append(point)
+        self.balance_points = self.balance_points[-2000:]
+        self._last_wallet = float(wallet)
+        if self.postgres and self.postgres.healthy:
+            await self.postgres.save_event("balance", "wallet", {"wallet": float(wallet)})
+
+    async def _balance_loop(self) -> None:
+        while True:
+            try:
+                await self.note_balance(await self.balance.snapshot())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._log("balance", type(exc).__name__)
+            await asyncio.sleep(60)
 
     def positions_payload(self) -> list[dict]:
         rows = []

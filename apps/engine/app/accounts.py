@@ -203,6 +203,7 @@ class AccountBook:
             decision_id=position.decision_id,
             quantitative_regime=quantitative_regime,
             market_regime=market_regime,
+            mode=position.mode,
         )
         position.status = PositionStatus.CLOSED
         position.closed_at = closed_at

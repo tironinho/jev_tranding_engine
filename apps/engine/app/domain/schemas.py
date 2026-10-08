@@ -207,6 +207,7 @@ class TradeRecord(BaseModel):
     decision_id: UUID
     quantitative_regime: str | None = None
     market_regime: str | None = None
+    mode: Literal["paper", "live"] = "paper"
 
 
 class ConsensusResult(BaseModel):

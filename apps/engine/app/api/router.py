@@ -144,7 +144,7 @@ async def overview(request: Request) -> dict:
         "strategies": cards,
         "tickers": [engine.ticker(symbol) for symbol in engine.settings.symbol_list],
         "positions": engine.positions_payload(),
-        "binance_balance": await engine.balance.snapshot(),
+        "binance_balance": await _noted_balance(engine),
         "paper": engine.paper_book(),
     }
 
@@ -244,6 +244,7 @@ async def trades(
     side: str | None = None,
     result: str | None = None,
     regime: str | None = None,
+    mode: str | None = None,
 ) -> dict:
     _actor(request)
     rows = _engine(request).store.filter_trades(
@@ -252,6 +253,7 @@ async def trades(
         side=side,
         result=result,
         regime=regime,
+        mode=mode,
     )
     return {"rows": rows}
 
@@ -358,6 +360,12 @@ async def resume(body: ConfirmBody, request: Request) -> dict:
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc
     return {"trading_enabled": True}
+
+
+async def _noted_balance(engine):
+    payload = await engine.balance.snapshot()
+    await engine.note_balance(payload)
+    return payload
 
 
 def _balance_actor(request: Request) -> str:

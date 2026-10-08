@@ -36,6 +36,7 @@ export default async function TradesPage({
     const value = query[key];
     if (value) params.set(key, value);
   }
+  params.set("mode", "live");
   const result = await engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`);
   const rows = result.ok ? result.data?.rows ?? [] : null;
   const totals = rows?.reduce(
@@ -75,8 +76,8 @@ export default async function TradesPage({
         <input name="regime" placeholder="regime" defaultValue={query.regime} className="border border-line bg-ink px-2 py-1" />
         <button className="border border-line px-2 py-1">filtrar</button>
       </form>
-      <Panel title="TRADES — DINHEIRO SIMULADO">
-        {!rows ? <Empty /> : !rows.length ? <Empty /> : (
+      <Panel title="TRADES — PRODUÇÃO">
+        {!rows ? <Empty /> : !rows.length ? <Empty label="NENHUM TRADE DE PRODUÇÃO FECHADO" /> : (
           <div className="overflow-x-auto">
             <dl className="mb-3 grid grid-cols-2 gap-3 text-[11px] md:grid-cols-6">
               <div>
@@ -161,7 +162,7 @@ export default async function TradesPage({
               </tbody>
             </table>
             <div className="px-2 py-2 text-[10px] text-mute">
-              NET é o dinheiro realizado na conta simulada, já com taxa. TARGET $ e STOP $ são o bruto do plano. último evento {rows[0] ? shortTime(rows[0].closed_at) : "NO DATA"}
+              Só ordens reais fechadas, já com taxa. A posição ainda aberta fica na overview. último evento {rows[0] ? shortTime(rows[0].closed_at) : "NO DATA"}
             </div>
           </div>
         )}

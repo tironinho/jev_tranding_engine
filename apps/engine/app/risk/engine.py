@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -25,7 +25,6 @@ from app.domain.enums import (
     PERSISTENCE_UNAVAILABLE,
     RISK_REJECTED,
     SPOT_SHORT_NOT_SUPPORTED,
-    TARGET_EXTENDED_FOR_FEES,
     Action,
     MarketType,
 )
@@ -35,7 +34,6 @@ from app.execution.slippage import SlippageConfig, simulate_fill
 from app.market.state import OrderBook
 from app.risk.economics import (
     compute_trade_economics,
-    extend_target_for_costs,
     funding_cashflow,
     funding_periods,
     plan_geometry,
@@ -198,22 +196,6 @@ class RiskEngine:
         if preview.model == "fixed_bps":
             included = False
         slip_per_unit = entry * max(preview.slippage_bps, 0) / 10_000
-        target, extended = extend_target_for_costs(
-            side=decision.action,
-            entry=entry,
-            stop=geometry.stop,
-            target=geometry.target,
-            quantity=qty,
-            entry_fee_rate=entry_rate,
-            exit_fee_rate=exit_rate,
-            exit_slippage_per_unit=slip_per_unit,
-            funding_cashflow_total=funding,
-            spread_cost=extra_spread,
-            slippage_cost=extra_slip,
-            min_net_rr=self.limits.min_net_rr,
-        )
-        if extended:
-            geometry = replace(geometry, target=target, reasons=(*geometry.reasons, TARGET_EXTENDED_FOR_FEES))
         economics = compute_trade_economics(
             side=decision.action,
             entry=entry,

@@ -7,7 +7,6 @@ from app.domain.enums import (
     MAX_OPEN_POSITIONS,
     NET_RR_TOO_LOW,
     SPOT_SHORT_NOT_SUPPORTED,
-    TARGET_EXTENDED_FOR_FEES,
     Action,
 )
 from app.execution.slippage import SlippageConfig
@@ -171,7 +170,8 @@ def test_low_net_rr_rejects_without_moving_the_target():
     assert not rejected.accepted
     assert NET_RR_TOO_LOW in rejected.reject_reasons
     assert rejected.economics is not None
-    assert rejected.economics.target == 108
+    distance = rejected.economics.entry - rejected.economics.stop
+    assert abs(rejected.economics.target - (rejected.economics.entry + 2.5 * distance)) < 1e-9
 
 
 def test_a_fresh_stop_blocks_the_same_symbol():
@@ -230,9 +230,7 @@ def test_entry_throttle():
     assert ENTRY_THROTTLED in rejected.reject_reasons
 
 
-def test_a_narrow_hour_does_not_block_the_entry():
-    from app.domain.enums import TARGET_BEYOND_HOUR
-
+def test_a_narrow_hour_that_cannot_pay_is_rejected():
     eng = engine()
     snapshot, book = long_snapshot(range_60m=0.2)
     result = eng.risk.evaluate(
@@ -242,8 +240,8 @@ def test_a_narrow_hour_does_not_block_the_entry():
         FeeQuote(0.0002, 0.0005, "config"),
         book,
     )
-    assert result.accepted
-    assert TARGET_BEYOND_HOUR not in result.reject_reasons
+    assert not result.accepted
+    assert NET_RR_TOO_LOW in result.reject_reasons
 
 
 def _order(snapshot, action: Action):
@@ -266,7 +264,7 @@ def _order(snapshot, action: Action):
 
 def test_tight_stop_is_sized_to_the_account_and_clears_fees():
     eng = engine(max_symbol_exposure=0.02)
-    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, resistance_15m=100.05)
+    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, range_1m=2.0, range_60m=30.0)
     accepted = eng.risk.evaluate(
         _order(snapshot, Action.LONG),
         snapshot,
@@ -279,7 +277,6 @@ def test_tight_stop_is_sized_to_the_account_and_clears_fees():
     assert accepted.economics.net_rr is not None and accepted.economics.net_rr >= 1.5
     assert accepted.economics.entry * accepted.economics.quantity <= 10_000 * 0.02 * 1.001
     assert accepted.details["quantity_capped"] is True
-    assert TARGET_EXTENDED_FOR_FEES in accepted.details["geometry_reasons"]
 
 
 def test_margin_short_opens_and_spot_boot_uses_the_spot_book():

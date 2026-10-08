@@ -189,7 +189,7 @@ async def test_exit_uses_event_time_stored_fee_and_regime():
 
 
 @pytest.mark.asyncio
-async def test_one_r_steps_the_stop_and_a_giveback_exits_there():
+async def test_a_one_r_print_leaves_the_original_stop():
     eng = engine()
     position = _open(
         eng,
@@ -202,31 +202,22 @@ async def test_one_r_steps_the_stop_and_a_giveback_exits_there():
         initial_net_risk=1,
     )
     state = eng.states["BTCUSDT"]
-    state.last_price = 100.4
-    state.best_bid = 100.4
-    state.best_ask = 100.45
-    await eng.on_price("BTCUSDT", 100.4, clock() + timedelta(minutes=1))
-    await asyncio.gather(*list(eng._background))
-    assert position.stop == 99
-
     state.last_price = 101
     state.best_bid = 101
     state.best_ask = 101.05
     await eng.on_price("BTCUSDT", 101, clock() + timedelta(minutes=2))
     await asyncio.gather(*list(eng._background))
-    breakeven = (100 + 0.1) / (1 - 0.0005)
-    assert position.stop == pytest.approx(breakeven)
-    assert position.initial_stop == 99
+    assert position.stop == 99
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT") is position
 
-    state.last_price = 100
-    state.best_bid = 100
-    state.best_ask = 100.05
-    await eng.on_price("BTCUSDT", 100, clock() + timedelta(minutes=3))
+    state.last_price = 99
+    state.best_bid = 99
+    state.best_ask = 99.05
+    await eng.on_price("BTCUSDT", 99, clock() + timedelta(minutes=3))
     await asyncio.gather(*list(eng._background))
     trade = eng.accounts.accounts["baseline"].trades[0]
     assert trade.exit_reason == "STOP"
-    assert trade.exit_price == pytest.approx(breakeven)
-    assert trade.exit_price > 99
+    assert trade.exit_price == pytest.approx(99)
 
 
 @pytest.mark.asyncio

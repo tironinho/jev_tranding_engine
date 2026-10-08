@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from app.config import RiskLimits
 from app.domain.enums import (
-    NO_STRUCTURE_TARGET,
+    HOUR_RANGE_UNAVAILABLE,
     STOP_ATR_FALLBACK,
     STOP_TOO_TIGHT,
     STOP_WIDENED_TO_MIN,
@@ -66,12 +66,12 @@ def plan_geometry(
         distance = entry - structural
         if distance / entry > limits.max_stop_pct:
             return STOP_TOO_WIDE
-        floor = _stop_floor(entry, float(atr), limits)
+        floor = _stop_floor(entry, float(atr), features, limits)
         if distance < floor:
             structural = entry - floor
             distance = floor
             reasons.append(STOP_WIDENED_TO_MIN)
-        target = _target_long(entry, distance, features, limits)
+        target = _fit_target(side, entry, distance, features, limits)
         if isinstance(target, str):
             return target
         return Geometry(stop=structural, target=target, reasons=tuple(reasons))
@@ -86,54 +86,38 @@ def plan_geometry(
     distance = structural - entry
     if distance / entry > limits.max_stop_pct:
         return STOP_TOO_WIDE
-    floor = _stop_floor(entry, float(atr), limits)
+    floor = _stop_floor(entry, float(atr), features, limits)
     if distance < floor:
         structural = entry + floor
         distance = floor
         reasons.append(STOP_WIDENED_TO_MIN)
-    target = _target_short(entry, distance, features, limits)
+    target = _fit_target(side, entry, distance, features, limits)
     if isinstance(target, str):
         return target
     return Geometry(stop=structural, target=target, reasons=tuple(reasons))
 
 
-def _stop_floor(entry: float, atr: float, limits: RiskLimits) -> float:
-    """The stop has to clear both the fee minimum and a multiple of recent range."""
-    return max(limits.min_stop_pct * entry, limits.atr_stop_mult * atr)
+def _stop_floor(entry: float, atr: float, features: dict, limits: RiskLimits) -> float:
+    """Clear the fee minimum, the ATR multiple, and the widest of the last five 1m bars."""
+    recent = features.get("range_1m")
+    span = float(recent) if isinstance(recent, (int, float)) and recent > 0 else 0.0
+    return max(limits.min_stop_pct * entry, limits.atr_stop_mult * atr, span)
 
 
-def _target_long(entry: float, distance: float, features: dict, limits: RiskLimits) -> float | str:
-    if limits.target_mode.value == "fixed":
-        return entry * (1 + limits.fixed_target_pct)
-    if limits.target_mode.value == "rr":
-        return entry + distance * limits.rr_target_multiple
-    # Estrutura de 15 minutos só limita o lucro quando paga pelo menos o múltiplo do stop.
-    # Um nível colado na entrada não serve: o alvo vai para esse múltiplo.
-    rr_target = entry + distance * limits.rr_target_multiple
-    resistance = features.get("resistance_15m")
-    if isinstance(resistance, (int, float)) and float(resistance) > entry:
-        if limits.target_fallback == "rr" and float(resistance) < rr_target:
-            return rr_target
-        return float(resistance)
-    if limits.target_fallback == "rr":
-        return rr_target
-    return NO_STRUCTURE_TARGET
-
-
-def _target_short(entry: float, distance: float, features: dict, limits: RiskLimits) -> float | str:
-    if limits.target_mode.value == "fixed":
-        return entry * (1 - limits.fixed_target_pct)
-    if limits.target_mode.value == "rr":
-        return entry - distance * limits.rr_target_multiple
-    rr_target = entry - distance * limits.rr_target_multiple
-    support = features.get("support_15m")
-    if isinstance(support, (int, float)) and float(support) < entry:
-        if limits.target_fallback == "rr" and float(support) > rr_target:
-            return rr_target
-        return float(support)
-    if limits.target_fallback == "rr":
-        return rr_target
-    return NO_STRUCTURE_TARGET
+def _fit_target(side: Action, entry: float, distance: float, features: dict, limits: RiskLimits) -> float | str:
+    """The target sits inside the last hour and never farther than the planned multiple."""
+    hour = features.get("range_60m")
+    if not isinstance(hour, (int, float)) or hour <= 0 or distance <= 0:
+        return HOUR_RANGE_UNAVAILABLE
+    reward = min(distance * limits.rr_target_multiple, float(hour))
+    if reward <= 0:
+        return HOUR_RANGE_UNAVAILABLE
+    if side is Action.LONG:
+        return entry + reward
+    fitted = entry - reward
+    if fitted <= 0:
+        return HOUR_RANGE_UNAVAILABLE
+    return fitted
 
 
 def compute_trade_economics(

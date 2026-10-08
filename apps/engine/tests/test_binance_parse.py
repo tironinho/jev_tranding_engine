@@ -118,4 +118,5 @@ def test_taker_flow_is_negative_when_selling_dominates():
     state.candles["1m"] = candles
     features, _quality = compute_features(state, candles[-1].close_time, 110)
     assert features["taker_flow_1m"] == -0.4
+    assert abs(features["range_1m"] - 0.4) < 1e-9
     assert abs(features["return_60m"] - 0.1) < 1e-9

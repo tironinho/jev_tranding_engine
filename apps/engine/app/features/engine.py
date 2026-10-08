@@ -183,6 +183,9 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
         features["range_60m"] = None
     span = features["range_60m"]
     features["range_60m_frac"] = (span / price) if isinstance(span, (int, float)) and span > 0 and price > 0 else None
+    recent_bars = candles_1m[-5:]
+    recent_spans = [bar.high - bar.low for bar in recent_bars if bar.high >= bar.low]
+    features["range_1m"] = max(recent_spans) if recent_spans else None
 
     if candles_1m and candles_1m[-1].volume > 0 and candles_1m[-1].taker_buy_volume is not None:
         ratio = (2 * candles_1m[-1].taker_buy_volume / candles_1m[-1].volume) - 1

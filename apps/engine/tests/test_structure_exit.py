@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.config import RiskLimits
-from app.domain.enums import NO_STRUCTURE_TARGET, Action
+from app.domain.enums import Action
 from types import SimpleNamespace
 
 from app.execution.paper import position_exit, stepped_stop
@@ -25,35 +25,40 @@ def _fifteen(index: int, high: float, low: float) -> Candle:
     )
 
 
-def test_15m_target_is_used_when_the_1m_high_is_already_broken():
-    limits = RiskLimits(target_fallback="none", min_stop_pct=0.0001, max_stop_pct=0.05)
-    features = {
-        "atr": 1.0,
-        "recent_swing_low": 98.0,
-        "resistance": 100.0,
-        "resistance_15m": 110.0,
-        "support_15m": 90.0,
-    }
-    geometry = plan_geometry(Action.LONG, 101.0, features, limits)
-    assert geometry.target == 110.0
-
-
-def test_nearby_15m_level_does_not_cap_the_winner_below_the_risk_multiple():
-    limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
+def test_a_wide_hour_leaves_the_target_at_two_and_a_half_r():
+    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
         "recent_swing_low": 100.0,
-        "resistance_15m": 101.2,
-        "support_15m": 90.0,
+        "range_60m": 20.0,
     }
     geometry = plan_geometry(Action.LONG, 101.0, features, limits)
     stop = 100.0 - 0.1
     assert geometry.target == 101.0 + (101.0 - stop) * 2.5
 
 
+def test_the_target_shrinks_to_the_last_hour():
+    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
+    features = {
+        "atr": 1.0,
+        "recent_swing_low": 100.0,
+        "range_60m": 1.5,
+    }
+    geometry = plan_geometry(Action.LONG, 101.0, features, limits)
+    assert geometry.target == 101.0 + 1.5
+
+
+def test_a_missing_hour_has_no_target():
+    from app.domain.enums import HOUR_RANGE_UNAVAILABLE
+
+    limits = RiskLimits(min_stop_pct=0.0001, max_stop_pct=0.05)
+    features = {"atr": 1.0, "recent_swing_low": 98.0, "resistance_15m": 110.0}
+    assert plan_geometry(Action.LONG, 101.0, features, limits) == HOUR_RANGE_UNAVAILABLE
+
+
 def test_an_atr_wider_than_the_fee_floor_sets_the_stop():
     limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
-    features = {"atr": 1.0, "recent_swing_low": 99.9, "resistance_15m": 110.0}
+    features = {"atr": 1.0, "recent_swing_low": 99.9, "range_60m": 10.0}
     geometry = plan_geometry(Action.LONG, 100.0, features, limits)
     assert geometry.stop == 98.0
 
@@ -62,21 +67,18 @@ def test_a_stop_tighter_than_the_minimum_is_widened_instead_of_rejected():
     from app.domain.enums import STOP_WIDENED_TO_MIN
 
     limits = RiskLimits(target_fallback="rr", rr_target_multiple=2.5, min_stop_pct=0.0025, max_stop_pct=0.05)
-    features = {"atr": 0.01, "recent_swing_low": 99.99, "resistance_15m": 100.05}
+    features = {"atr": 0.01, "recent_swing_low": 99.99, "range_60m": 2.0}
     geometry = plan_geometry(Action.LONG, 100.0, features, limits)
     assert geometry.stop == 100.0 * (1 - 0.0025)
     assert STOP_WIDENED_TO_MIN in geometry.reasons
 
 
-def test_broken_15m_high_still_has_no_invented_target():
-    limits = RiskLimits(target_fallback="none", min_stop_pct=0.0001, max_stop_pct=0.05)
-    features = {
-        "atr": 1.0,
-        "recent_swing_low": 98.0,
-        "resistance": 120.0,
-        "resistance_15m": 100.0,
-    }
-    assert plan_geometry(Action.LONG, 101.0, features, limits) == NO_STRUCTURE_TARGET
+def test_a_one_minute_bar_wider_than_the_fee_floor_sets_the_stop():
+    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
+    features = {"atr": 0.01, "recent_swing_low": 99.99, "range_1m": 0.8, "range_60m": 3.0}
+    geometry = plan_geometry(Action.LONG, 100.0, features, limits)
+    assert geometry.stop == 99.2
+    assert geometry.target == 100.0 + min(0.8 * 2.5, 3.0)
 
 
 def _position(**overrides):
@@ -104,6 +106,21 @@ def test_cusum_ignores_noise_and_fires_on_an_atr_move():
     assert filt.event("BTCUSDT", 101.4, 1.0) is False
 
 
+def test_continuation_cut_stays_at_least_the_configured_floor():
+    from types import SimpleNamespace
+
+    from app.config import CombinationConfig, RiskLimits
+    from app.strategies.runners import _continuation_floor
+
+    snapshot = SimpleNamespace(price=100.0, features={"atr": 0.036})
+    context = SimpleNamespace(
+        risk=RiskLimits(),
+        combination=CombinationConfig(),
+        round_trip_fee=0.001,
+    )
+    assert _continuation_floor(snapshot, context) == 0.65
+
+
 def test_meta_hit_probability_rises_when_the_stop_is_tight():
     from app.strategies.rules import meta_hit_probability
 
@@ -113,29 +130,13 @@ def test_meta_hit_probability_rises_when_the_stop_is_tight():
     assert tight == (1 + 0.001 / 0.0025) / 3.5
 
 
-def test_stop_stays_put_inside_the_first_r():
+def test_a_favorable_print_leaves_the_original_stop():
     assert stepped_stop(_position(), 100.4) is None
-
-
-def test_one_r_moves_a_long_stop_to_fee_breakeven():
-    locked = stepped_stop(_position(), 101.0)
-    assert locked == (100.0 + 0.1) / (1 - 0.0005)
-
-
-def test_two_r_locks_one_r_of_profit():
-    assert stepped_stop(_position(), 102.0) == 101.0
-
-
-def test_short_mirrors_the_same_steps():
+    assert stepped_stop(_position(), 101.0) is None
+    assert stepped_stop(_position(), 102.0) is None
     short = _position(side=Action.SHORT, stop=101.0, initial_stop=101.0, target=97.5)
-    assert stepped_stop(short, 99.5) is None
-    assert stepped_stop(short, 99.0) == (100.0 - 0.1) / (1 + 0.0005)
-    assert stepped_stop(short, 98.0) == 99.0
-
-
-def test_a_tighter_stop_is_not_loosened():
-    position = _position(stop=100.2)
-    assert stepped_stop(position, 101.0) is None
+    assert stepped_stop(short, 99.0) is None
+    assert stepped_stop(short, 98.0) is None
 
 
 def test_a_winner_stays_open_when_the_clock_ends():

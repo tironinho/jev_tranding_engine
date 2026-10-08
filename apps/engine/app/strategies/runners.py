@@ -390,13 +390,14 @@ class BaselineOpenAIJevStrategy:
 
 
 def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext) -> float:
+    configured = context.combination.min_trend_continuation
     if context.risk is None or snapshot.price <= 0:
-        return context.combination.min_trend_continuation
+        return configured
     atr = snapshot.features.get("atr")
     if not isinstance(atr, (int, float)) or atr <= 0:
-        return context.combination.min_trend_continuation
+        return configured
     stop_pct = max(context.risk.min_stop_pct, context.risk.atr_stop_mult * float(atr) / snapshot.price)
-    return meta_hit_probability(context.risk.rr_target_multiple, context.round_trip_fee, stop_pct)
+    return max(configured, meta_hit_probability(context.risk.rr_target_multiple, context.round_trip_fee, stop_pct))
 
 
 def _remember_jev(metadata: dict, assessment, effect: str) -> None:

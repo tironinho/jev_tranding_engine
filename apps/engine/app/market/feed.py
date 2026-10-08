@@ -185,6 +185,8 @@ class MarketFeed:
                 ticker = await self._get(client, self._book_path(), {"symbol": symbol})
                 if isinstance(ticker, dict):
                     self._apply_rest_book(symbol, ticker)
+                if not self.states[symbol].candles.get("1m"):
+                    log.warning("bootstrap history missing %s", symbol)
                 if self.states[symbol].last_price:
                     log.info("bootstrap snapshot %s", symbol)
                     await self.on_trigger(symbol, datetime.now(timezone.utc), "bootstrap")
@@ -261,11 +263,22 @@ class MarketFeed:
         self._market_rest_blocked = True
         log.warning("market rest blocked; loading candle history through the websocket api")
 
+    async def _acquire_budget(self) -> bool:
+        """Wait for a local token. One short sleep can wake early and used to drop the last symbol."""
+        deadline = time.monotonic() + 30
+        while True:
+            if self.bucket.take():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log.warning("market rest budget exhausted")
+                return False
+            pause = min(max(self.bucket.retry_after_s() + 0.01, 0.02), remaining)
+            await asyncio.sleep(pause)
+
     async def _get(self, client: httpx.AsyncClient, path: str, params: dict, *, probe: bool = False):
-        if not self.bucket.take():
-            await asyncio.sleep(self.bucket.retry_after_s())
-            if not self.bucket.take():
-                return None
+        if not await self._acquire_budget():
+            return None
         query = dict(params)
         if self._rest_mode == "signed" and self.settings.binance_api_secret:
             query = _signed_params(

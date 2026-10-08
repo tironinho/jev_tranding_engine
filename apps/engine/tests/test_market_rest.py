@@ -106,6 +106,31 @@ def _kline() -> list:
     return [1_700_000_000_000, "1", "2", "0.5", "1.5", "10", 1_700_000_059_999, "15", 1, "4", "6", "0"]
 
 
+class _TwoMisses:
+    """The first two takes fail even after the calculated wait. The old path returned None."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def take(self, amount: float = 1.0, now: float | None = None) -> bool:
+        self.attempts += 1
+        return self.attempts >= 3
+
+    def retry_after_s(self, amount: float = 1.0) -> float:
+        return 0.01
+
+
+@pytest.mark.asyncio
+async def test_history_waits_when_the_budget_is_empty_instead_of_skipping_the_symbol():
+    feed = _feed()
+    feed.bucket = _TwoMisses()
+    client = _Client([(200, [[1, "1", "1", "1", "1", "1"]])])
+    body = await feed._get(client, "/api/v3/klines", {"symbol": "XRPUSDT", "interval": "1m", "limit": 300})
+    assert body == [[1, "1", "1", "1", "1", "1"]]
+    assert client.calls[0][1]["symbol"] == "XRPUSDT"
+    assert feed.bucket.attempts == 3
+
+
 @pytest.mark.asyncio
 async def test_blocked_rest_marks_history_for_the_websocket():
     feed = _feed(binance_spot_rest_url="https://api.binance.com")

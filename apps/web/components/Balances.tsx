@@ -31,12 +31,6 @@ export type PaperBook = {
   accounts: PaperAccount[];
 };
 
-const LABELS: Record<string, string> = {
-  baseline: "BASELINE",
-  baseline_jev: "BASELINE + JEV",
-  baseline_openai_jev: "BASELINE + OPENAI + JEV",
-};
-
 export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | null | undefined }) {
   const ready = balance?.status === "ok" && balance.wallet != null;
   const others = (balance?.assets ?? []).filter((item) => item.asset !== "USDT" && item.total !== 0);
@@ -80,18 +74,19 @@ export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | nul
   );
 }
 
-export function PaperBookPanel({ book }: { book: PaperBook | null | undefined }) {
-  const rows = book?.accounts ?? [];
+export function RealAccountPanel({ balance }: { balance: BinanceBalance | null | undefined }) {
+  const ready = balance?.status === "ok" && balance.wallet != null;
+  const rows = (balance?.assets ?? []).filter((item) => item.total !== 0 || (item.free ?? 0) !== 0);
   return (
-    <Panel title="SIMULADO — MESMA BANCA EM CADA ESTRATÉGIA">
-      {!rows.length ? (
+    <Panel title="CONTA — MARGEM REAL">
+      {!balance || !ready ? (
         <div className="font-mono text-xs tracking-[0.16em] text-mute">NO DATA</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-[11px]">
             <thead className="text-mute">
               <tr className="border-b border-line">
-                {["STRATEGY", "START", "CASH", "EQUITY", "OPEN", "TODAY", "VS START"].map((head) => (
+                {["ASSET", "FREE", "NET"].map((head) => (
                   <th key={head} className="px-2 py-2 font-normal tracking-[0.08em]">
                     {head}
                   </th>
@@ -100,23 +95,20 @@ export function PaperBookPanel({ book }: { book: PaperBook | null | undefined })
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.strategy} className="border-b border-line/70 font-mono">
-                  <td className="px-2 py-2">{LABELS[row.strategy] ?? row.strategy}</td>
-                  <td className="px-2 py-2">{num(row.starting_equity, 2)}</td>
-                  <td className="px-2 py-2">{num(row.cash, 2)}</td>
-                  <td className="px-2 py-2">{num(row.equity, 2)}</td>
-                  <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{money(row.unrealized)}</td>
-                  <td className={`px-2 py-2 ${signedClass(row.realized_today)}`}>{money(row.realized_today)}</td>
-                  <td className={`px-2 py-2 ${signedClass(row.net_pnl)}`}>{money(row.net_pnl)}</td>
+                <tr key={row.asset} className="border-b border-line/70 font-mono">
+                  <td className="px-2 py-2">{row.asset}</td>
+                  <td className="px-2 py-2">{num(row.free, row.asset === "USDT" ? 2 : 4)}</td>
+                  <td className={`px-2 py-2 ${signedClass(row.total)}`}>{num(row.total, row.asset === "USDT" ? 2 : 4)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div className="px-2 pt-2 text-[10px] text-mute">
-            USDT simulado, cross margin até {book?.leverage ?? 1}x. A margem travada é o nocional dividido por essa alavancagem. Ordem real continua bloqueada. Não some as contas. OPEN é a posição marcada. VS START é equity menos a banca inicial.
+            USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Uma conta só. O Jev dimensiona em cima deste saldo.
           </div>
         </div>
       )}
     </Panel>
   );
 }
+

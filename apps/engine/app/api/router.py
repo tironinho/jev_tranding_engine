@@ -375,6 +375,60 @@ async def binance_balance(request: Request) -> dict:
     return await _engine(request).balance.snapshot()
 
 
+_ORDER_METHODS = {"POST", "DELETE", "GET"}
+_ORDER_FIELDS = {
+    "symbol",
+    "side",
+    "type",
+    "quantity",
+    "price",
+    "stopPrice",
+    "timeInForce",
+    "sideEffectType",
+    "isIsolated",
+    "newClientOrderId",
+    "newOrderRespType",
+    "origClientOrderId",
+}
+_ORDER_SIDES = {"BUY", "SELL"}
+_ORDER_TYPES = {"MARKET", "LIMIT", "STOP_LOSS_LIMIT"}
+_ORDER_EFFECTS = {"AUTO_BORROW_REPAY", "AUTO_REPAY"}
+
+
+class MarginOrderBody(BaseModel):
+    method: str
+    params: dict[str, str] = Field(default_factory=dict)
+
+
+@router.post("/api/binance/order")
+async def binance_order(request: Request, body: MarginOrderBody) -> dict:
+    _balance_actor(request)
+    engine = _engine(request)
+    if engine.settings.balance_upstream_url or engine.settings.service_role != "account":
+        raise HTTPException(409, "this host does not place orders")
+    if body.method not in _ORDER_METHODS:
+        raise HTTPException(400, "method")
+    params = {key: str(value) for key, value in body.params.items() if key in _ORDER_FIELDS}
+    symbol = params.get("symbol", "")
+    if symbol not in engine.settings.symbol_list:
+        raise HTTPException(400, "symbol")
+    if body.method == "POST":
+        if params.get("side") not in _ORDER_SIDES or params.get("type") not in _ORDER_TYPES:
+            raise HTTPException(400, "order")
+        if params.get("sideEffectType") not in _ORDER_EFFECTS or params.get("isIsolated") != "FALSE":
+            raise HTTPException(400, "margin")
+        if "quantity" not in params:
+            raise HTTPException(400, "quantity")
+    from app.execution.binance_live import LiveExecutionBlocked
+
+    try:
+        return await engine.live._signed(body.method, params)
+    except LiveExecutionBlocked as exc:
+        raise HTTPException(409, exc.reason) from exc
+    except Exception as exc:
+        raise HTTPException(502, type(exc).__name__) from exc
+
+
 @router.get("/api/audit")
 async def audit(request: Request) -> dict:
     _actor(request)

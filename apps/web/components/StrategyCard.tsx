@@ -34,8 +34,8 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="NET PNL" value={hasTrades ? money(result) : "NO DATA"} className={hasTrades ? signedClass(result) : ""} />
         <Stat label="DRAWDOWN" value={hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
-      <div className={cn("mt-3 border-t border-line pt-2 font-mono text-[11px]", signedClass(result))}>
-        simulado {num(card.equity, 2)} USDT
+      <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">
+        {liveArmed ? "histórico de paper — a conta é a margem Binance" : `simulado ${num(card.equity, 2)} USDT`}
       </div>
     </article>
   );

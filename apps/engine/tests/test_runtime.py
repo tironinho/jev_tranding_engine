@@ -135,6 +135,13 @@ def test_disarmed_restart_does_not_restore_live_mode():
     assert fresh.strategy_settings["baseline"].mode is not OperatingMode.LIVE
 
 
+def test_armed_engine_puts_only_jev_live():
+    fresh = engine(trading_live_enabled=True, allow_real_orders=True)
+    fresh._arm_live_strategy()
+    assert fresh.strategy_settings["baseline_jev"].mode is OperatingMode.LIVE
+    assert fresh.strategy_settings["baseline"].mode is not OperatingMode.LIVE
+
+
 def test_saved_paper_config_does_not_turn_baseline_back_on():
     fresh = engine()
     fresh.strategy_settings["baseline"].mode = OperatingMode.SHADOW

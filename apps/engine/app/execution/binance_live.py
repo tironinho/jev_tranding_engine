@@ -10,7 +10,7 @@ from uuid import UUID
 import httpx
 
 from app.config import Settings
-from app.domain.enums import LIVE_LOCKED, MARGIN_PAPER_ONLY, NO_CREDENTIALS, OrderStatus, OrderType
+from app.domain.enums import LIVE_LOCKED, NO_CREDENTIALS, OrderStatus, OrderType
 from app.domain.schemas import OrderRecord
 from app.execution.paper import OrderIntent
 
@@ -35,18 +35,20 @@ class BinanceExecutionProvider:
         self.client = client
         self._sent: dict[str, OrderRecord] = {}
 
+    def _margin(self) -> bool:
+        return self.settings.market_type == "margin"
+
+    def _relays(self) -> bool:
+        return self._margin() and bool(self.settings.balance_upstream_url)
+
     def _endpoint(self) -> str:
-        self._block_margin()
+        if self._margin():
+            return f"{self.settings.binance_account_rest_url.rstrip('/')}/sapi/v1/margin/order"
         if self.settings.market_type == "spot":
             return f"{self.settings.binance_spot_rest_url}/api/v3/order"
         return f"{self.settings.binance_futures_rest_url}/fapi/v1/order"
 
-    def _block_margin(self) -> None:
-        if self.settings.market_type == "margin":
-            raise LiveExecutionBlocked(MARGIN_PAPER_ONLY)
-
     async def submit(self, intent: OrderIntent) -> OrderRecord:
-        self._block_margin()
         client_id = intent.decision_id.hex
         existing = self._sent.get(client_id)
         if existing is not None:
@@ -58,8 +60,11 @@ class BinanceExecutionProvider:
             "type": intent.order_type.value,
             "quantity": _qty(intent.quantity),
             "newClientOrderId": client_id,
-            "newOrderRespType": "RESULT",
+            "newOrderRespType": "FULL",
         }
+        if self._margin():
+            params["sideEffectType"] = "AUTO_BORROW_REPAY"
+            params["isIsolated"] = "FALSE"
         if intent.order_type is OrderType.LIMIT:
             params["timeInForce"] = "GTC"
             params["price"] = _price(intent.limit_price or 0, None)
@@ -69,8 +74,7 @@ class BinanceExecutionProvider:
         return order
 
     async def submit_stop(self, intent: OrderIntent, stop_price: float, tick: float | None = None) -> OrderRecord:
-        """Resting protective stop. Futures uses closePosition. Spot uses a stop-limit."""
-        self._block_margin()
+        """Resting protective stop. Futures uses closePosition. Margin and spot use a stop-limit that repays debt."""
         client_id = _suffixed(intent.decision_id, "S")
         existing = self._sent.get(client_id)
         if existing is not None:
@@ -78,7 +82,7 @@ class BinanceExecutionProvider:
         self._require_entry(intent)
         closing_side = "SELL" if intent.side == "BUY" else "BUY"
         aligned = _align_stop(stop_price, tick, direction=-1 if closing_side == "SELL" else 1)
-        if self.settings.market_type == "spot":
+        if self._margin() or self.settings.market_type == "spot":
             params = {
                 "symbol": intent.symbol,
                 "side": closing_side,
@@ -88,8 +92,11 @@ class BinanceExecutionProvider:
                 "price": _price(_spot_limit(aligned, closing_side), tick),
                 "timeInForce": "GTC",
                 "newClientOrderId": client_id,
-                "newOrderRespType": "RESULT",
+                "newOrderRespType": "FULL",
             }
+            if self._margin():
+                params["sideEffectType"] = "AUTO_REPAY"
+                params["isIsolated"] = "FALSE"
         else:
             params = {
                 "symbol": intent.symbol,
@@ -110,7 +117,6 @@ class BinanceExecutionProvider:
 
     async def submit_close(self, intent: OrderIntent) -> OrderRecord:
         """Flatten a position this process opened. Does not require the arm flags."""
-        self._block_margin()
         client_id = _suffixed(intent.decision_id, "C")
         existing = self._sent.get(client_id)
         if existing is not None and existing.status is OrderStatus.FILLED:
@@ -124,7 +130,10 @@ class BinanceExecutionProvider:
             "newClientOrderId": client_id,
             "newOrderRespType": "RESULT",
         }
-        if self.settings.market_type != "spot":
+        if self._margin():
+            params["sideEffectType"] = "AUTO_REPAY"
+            params["isIsolated"] = "FALSE"
+        elif self.settings.market_type != "spot":
             params["reduceOnly"] = "true"
         payload = await self._signed("POST", params)
         order = _order_from_payload(intent, payload, client_id, OrderType.MARKET)
@@ -132,7 +141,6 @@ class BinanceExecutionProvider:
         return order
 
     async def cancel(self, symbol: str, client_order_id: str) -> None:
-        self._block_margin()
         self._require_credentials()
         await self._signed("DELETE", {"symbol": symbol, "origClientOrderId": client_order_id})
 
@@ -157,11 +165,19 @@ class BinanceExecutionProvider:
         self._require_credentials()
 
     def _require_credentials(self) -> None:
-        if not self.settings.binance_api_key or not self.settings.binance_api_secret or self.client is None:
+        if self.client is None:
+            raise LiveExecutionBlocked(NO_CREDENTIALS)
+        if self._relays():
+            if not (self.settings.balance_share_token or self.settings.engine_api_secret):
+                raise LiveExecutionBlocked(NO_CREDENTIALS)
+            return
+        if not self.settings.binance_api_key or not self.settings.binance_api_secret:
             raise LiveExecutionBlocked(NO_CREDENTIALS)
 
     async def _signed(self, method: str, params: dict) -> dict:
         self._require_credentials()
+        if self._relays():
+            return await self._relay(method, params)
         body = {**params, "timestamp": int(time.time() * 1000), "recvWindow": 5000}
         query = urlencode(body)
         signature = hmac.new(self.settings.binance_api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
@@ -175,8 +191,26 @@ class BinanceExecutionProvider:
             response = await self.client.delete(url, params=signed, headers=headers)
         else:
             response = await self.client.get(url, params=signed, headers=headers)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise LiveExecutionBlocked(f"HTTP {response.status_code}")
         return response.json()
+
+    async def _relay(self, method: str, params: dict) -> dict:
+        token = self.settings.balance_share_token or self.settings.engine_api_secret
+        url = f"{self.settings.balance_upstream_url.rstrip('/')}/api/binance/order"
+        assert self.client is not None
+        response = await self.client.post(
+            url,
+            json={"method": method, "params": params},
+            headers={"authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            raise LiveExecutionBlocked(f"HTTP {response.status_code}")
+        body = response.json()
+        if not isinstance(body, dict):
+            raise LiveExecutionBlocked("INVALID_JSON")
+        return body
 
 
 def execution_of(payload: dict) -> tuple[float, float]:

@@ -1,4 +1,5 @@
 import inspect
+import json
 
 import httpx
 import pytest
@@ -49,7 +50,7 @@ async def test_dashboard_cannot_select_live_while_disarmed():
     eng = engine()
     with pytest.raises(PermissionError, match="LIVE_LOCKED"):
         await eng.update_strategy("baseline", enabled=None, mode="live", call_model=None, actor="test")
-    assert eng.strategy_settings["baseline"].mode.value == "paper"
+    assert eng.strategy_settings["baseline"].mode.value == "shadow"
 
 
 @pytest.mark.asyncio
@@ -65,17 +66,60 @@ async def test_live_flags_block_before_any_http():
 
 
 @pytest.mark.asyncio
-async def test_margin_never_sends_a_live_order():
+async def test_margin_order_borrows_on_entry_and_never_withdraws():
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["effect"] = request.url.params["sideEffectType"]
+        seen["isolated"] = request.url.params["isIsolated"]
+        assert "withdraw" not in request.url.path
+        assert request.url.params["type"] == "MARKET"
+        return httpx.Response(200, json={"status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "1", "clientOrderId": "x"})
+
+    transport = httpx.MockTransport(handler)
     cfg = settings(
         market_type="margin",
         trading_live_enabled=True,
         allow_real_orders=True,
         binance_api_key="k",
         binance_api_secret="s",
+        binance_account_rest_url="https://api.binance.com",
     )
-    provider = BinanceExecutionProvider(cfg, client=_BoomClient())  # type: ignore[arg-type]
-    with pytest.raises(LiveExecutionBlocked, match="MARGIN_PAPER_ONLY"):
-        await provider.submit(_intent())
+    async with httpx.AsyncClient(transport=transport) as client:
+        order = await BinanceExecutionProvider(cfg, client=client).submit(_intent())
+    assert seen["path"] == "/sapi/v1/margin/order"
+    assert seen["effect"] == "AUTO_BORROW_REPAY"
+    assert seen["isolated"] == "FALSE"
+    assert order.filled_quantity == 0.01
+
+
+@pytest.mark.asyncio
+async def test_oregon_relays_the_margin_order_to_singapore():
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["host"] = request.url.host
+        seen["path"] = request.url.path
+        body = json.loads(request.content)
+        assert body["params"]["sideEffectType"] == "AUTO_BORROW_REPAY"
+        assert "signature" not in body["params"]
+        assert request.headers["authorization"] == "Bearer share"
+        return httpx.Response(200, json={"status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "1"})
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(
+        market_type="margin",
+        trading_live_enabled=True,
+        allow_real_orders=True,
+        balance_upstream_url="https://gateway.example",
+        balance_share_token="share",
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        order = await BinanceExecutionProvider(cfg, client=client).submit(_intent())
+    assert seen["host"] == "gateway.example"
+    assert seen["path"] == "/api/binance/order"
+    assert order.filled_quantity == 0.01
 
 
 @pytest.mark.asyncio

@@ -171,6 +171,8 @@ class TradingEngine:
         self.evolution = EvolutionService(settings)
         self.evolution.bind_trades(self._all_trades)
         self._evaluating: set[str] = set()
+        self._real_day = None
+        self._real_day_start: float | None = None
         self._close_batch: list[tuple[str, datetime, str]] = []
         self._close_flush: asyncio.Task | None = None
         self._quotes: dict[str, list[dict]] = {}
@@ -210,6 +212,7 @@ class TradingEngine:
         if self.postgres is not None and self.postgres.factory is not None and self.db_healthy:
             await self.evolution.attach_postgres(self.postgres.factory)
         await self.evolution.start()
+        self._arm_live_strategy()
         self._log("engine", "engine started")
 
     async def stop(self) -> None:
@@ -526,6 +529,21 @@ class TradingEngine:
             self.store.add_event("live_blocked", "LIVE_LOCKED", {"decision_id": str(decision.decision_id)})
             return
         context = self._risk_context(decision.strategy, snapshot, live=True)
+        if self.settings.market_type == "margin":
+            balance = await self.balance.snapshot()
+            wallet = balance.get("wallet")
+            available = balance.get("available")
+            if balance.get("status") != "ok" or not isinstance(wallet, (int, float)) or wallet <= 0:
+                self._log("live_blocked", "NO_REAL_EQUITY")
+                return
+            context.equity = float(wallet)
+            context.cash = float(available) if isinstance(available, (int, float)) and available > 0 else float(wallet)
+            day = snapshot.timestamp.astimezone(timezone.utc).date()
+            if self._real_day != day or self._real_day_start is None:
+                self._real_day = day
+                self._real_day_start = float(wallet)
+            context.day_start_equity = self._real_day_start
+            context.realized_pnl_today = 0.0
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:
@@ -877,6 +895,15 @@ class TradingEngine:
             fills,
             trade,
         )
+
+    def _arm_live_strategy(self) -> None:
+        if not self.settings.live_armed:
+            return
+        jev = self.strategy_settings.get("baseline_jev")
+        if jev is None:
+            return
+        jev.mode = OperatingMode.LIVE
+        self._log("live", "baseline_jev live")
 
     def apply_runtime(self, runtime: dict) -> None:
         saved_accounts = set()

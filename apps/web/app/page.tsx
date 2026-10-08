@@ -1,4 +1,4 @@
-import { BinanceBalancePanel, PaperBookPanel, type BinanceBalance, type PaperBook } from "@/components/Balances";
+import { BinanceBalancePanel, RealAccountPanel, type BinanceBalance, type PaperBook } from "@/components/Balances";
 import { DecisionTable, PositionTable } from "@/components/DecisionTable";
 import { EngineStatus, Panel } from "@/components/Shell";
 import { StrategyCard, type StrategyCardData } from "@/components/StrategyCard";
@@ -46,7 +46,7 @@ export default async function OverviewPage() {
       <EngineStatus status={data.status} />
       <div className="grid gap-3 lg:grid-cols-2">
         <BinanceBalancePanel balance={data.binance_balance} />
-        <PaperBookPanel book={data.paper} />
+        <RealAccountPanel balance={data.binance_balance} />
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {data.tickers.map((ticker) => (

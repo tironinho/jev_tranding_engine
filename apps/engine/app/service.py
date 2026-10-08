@@ -922,6 +922,9 @@ class TradingEngine:
         if accounts:
             self.accounts.restore_state(accounts)
             saved_accounts = set(accounts)
+        for strategy, rows in (runtime.get("trades") or {}).items():
+            if strategy in saved_accounts:
+                self.accounts.merge_trades(strategy, rows)
         for strategy, rows in (runtime.get("orphan_trades") or {}).items():
             if strategy in saved_accounts or strategy not in self.accounts.accounts:
                 continue

@@ -278,6 +278,20 @@ class AccountBook:
         for trade in account.trades:
             account.last_entry_by_symbol.setdefault(trade.symbol, trade.opened_at)
 
+    def merge_trades(self, strategy: str, rows: list[dict]) -> None:
+        """A later account snapshot must not erase a close already stored on its own row."""
+        account = self.accounts.get(strategy)
+        if account is None:
+            return
+        known = {str(trade.trade_id) for trade in account.trades}
+        for raw in rows:
+            trade = TradeRecord.model_validate(raw)
+            if str(trade.trade_id) in known:
+                continue
+            account.trades.append(trade)
+            known.add(str(trade.trade_id))
+        account.trades.sort(key=lambda trade: trade.closed_at)
+
     def adopt_trades(self, strategy: str, rows: list[dict]) -> None:
         """Closed trades written before the account snapshot existed. Cash follows their net sum."""
         account = self.accounts[strategy]

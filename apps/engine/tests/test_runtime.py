@@ -151,6 +151,69 @@ def test_saved_paper_config_does_not_turn_baseline_back_on():
     assert fresh.strategy_settings["baseline"].mode is OperatingMode.SHADOW
 
 
+def test_a_live_close_survives_the_account_snapshot_that_dropped_it():
+    now = clock()
+    trade = TradeRecord(
+        strategy="baseline_jev",
+        symbol="ETHUSDT",
+        side=Action.SHORT,
+        quantity=0.0038,
+        entry_price=2496.93,
+        exit_price=2461.0,
+        stop=2600,
+        target=2461,
+        opened_at=now,
+        closed_at=now,
+        gross_pnl=0.14,
+        fees=0.01,
+        slippage=0,
+        funding=0,
+        net_pnl=0.13,
+        r_multiple=0.2,
+        mfe=0.16,
+        mae=0.02,
+        exit_reason="TARGET",
+        decision_id=uuid4(),
+        mode="live",
+    )
+    fresh = engine()
+    fresh.apply_runtime(
+        {
+            "accounts": {
+                "baseline_jev": {
+                    "strategy": "baseline_jev",
+                    "cash": 10_000,
+                    "day_start_equity": 10_000,
+                    "day_key": "2026-01-01",
+                    "positions": [],
+                    "trades": [],
+                }
+            },
+            "trades": {"baseline_jev": [trade.model_dump(mode="json")]},
+        }
+    )
+    account = fresh.accounts.accounts["baseline_jev"]
+    assert account.cash == 10_000
+    assert len(account.trades) == 1
+    assert fresh.store.filter_trades(mode="live")[0]["net_pnl"] == 0.13
+    fresh.apply_runtime(
+        {
+            "accounts": {
+                "baseline_jev": {
+                    "strategy": "baseline_jev",
+                    "cash": 10_000,
+                    "day_start_equity": 10_000,
+                    "day_key": "2026-01-01",
+                    "positions": [],
+                    "trades": [trade.model_dump(mode="json")],
+                }
+            },
+            "trades": {"baseline_jev": [trade.model_dump(mode="json")]},
+        }
+    )
+    assert len(fresh.accounts.accounts["baseline_jev"].trades) == 1
+
+
 def test_orphan_trades_rebuild_performance_when_no_account_snapshot_exists():
     now = clock()
     trade = TradeRecord(

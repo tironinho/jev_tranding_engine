@@ -349,6 +349,7 @@ class PostgresMirror:
             orphans = {key: value for key, value in grouped.items() if key not in saved}
             return {
                 "accounts": saved,
+                "trades": grouped,
                 "strategies": [
                     {
                         "strategy_key": row.strategy_key,

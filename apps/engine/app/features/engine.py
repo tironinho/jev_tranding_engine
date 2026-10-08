@@ -361,13 +361,14 @@ def build_snapshot(
         return None
     features, quality = compute_features(state, as_of, price)
     book_at = state.last_book_at
-    staleness_ms = None
-    stale = False
     if book_at is None:
-        stale = True
         quality.warnings.append("missing_book")
-    else:
-        staleness_ms = int((as_of - book_at).total_seconds() * 1000)
+    fresh_at = [moment for moment in (book_at, state.last_trade_at, state.last_event_at) if moment is not None]
+    staleness_ms = None
+    stale = not fresh_at
+    if fresh_at:
+        newest = max(fresh_at)
+        staleness_ms = int((as_of - newest).total_seconds() * 1000)
         stale = staleness_ms > stale_after_ms
     quality = quality.model_copy(update={"stale": stale, "staleness_ms": staleness_ms})
     bid = state.best_bid

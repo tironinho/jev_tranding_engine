@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from app.features.engine import compute_features
+from app.features.engine import build_snapshot, compute_features
 from app.market.state import Candle, SymbolMarketState
 
 
@@ -17,6 +17,21 @@ def _candle(index: int, price: float) -> Candle:
         closed=True,
         timeframe="1m",
     )
+
+
+def test_a_fresh_candle_keeps_the_score_alive_when_the_book_is_old():
+    state = SymbolMarketState(symbol="BTCUSDT", market_type="spot")
+    candles = [_candle(i, 100 + i * 0.01) for i in range(40)]
+    state.candles["1m"] = list(candles)
+    as_of = candles[-1].close_time
+    state.last_price = candles[-1].close
+    state.best_bid = state.last_price - 0.01
+    state.best_ask = state.last_price + 0.01
+    state.last_book_at = as_of - timedelta(seconds=30)
+    state.last_event_at = as_of
+    snapshot = build_snapshot(state, as_of=as_of, trigger="kline_close_1m", stale_after_ms=5_000)
+    assert snapshot is not None
+    assert snapshot.data_quality.stale is False
 
 
 def test_future_candles_do_not_change_features_at_t():

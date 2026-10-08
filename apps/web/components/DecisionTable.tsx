@@ -27,10 +27,11 @@ type Row = {
 
 function cell(decision?: Decision) {
   if (!decision) return <span className="text-mute">—</span>;
-  if (decision.signal_status === "skipped") {
+  if (decision.signal_status === "skipped" || decision.signal_status === "expired") {
+    const label = decision.signal_status === "expired" ? "EXPIRED" : "STANDBY";
     return (
       <Link href={`/decisions/${decision.decision_id}`} className="font-mono hover:underline">
-        STANDBY
+        {label}
       </Link>
     );
   }

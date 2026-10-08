@@ -159,7 +159,7 @@ async def test_a_scrap_of_capital_does_not_open():
 
 
 @pytest.mark.asyncio
-async def test_an_expired_vote_blocks_the_order():
+async def test_an_expired_sibling_does_not_block_the_other_book():
     from app.domain.enums import SignalStatus
     from app.domain.schemas import StrategyDecision
 
@@ -188,8 +188,9 @@ async def test_an_expired_vote_blocks_the_order():
 
     eng.strategies["baseline_jev"] = Expired()
     await eng.evaluate_snapshot(snapshot)
-    assert eng.accounts.accounts["baseline"].positions == {}
-    assert any("VOTES_NOT_ARRIVED" in risk["reject_reasons"] for risk in eng.store.risks.values())
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
+    assert eng.accounts.accounts["baseline_jev"].positions == {}
+    assert all("VOTES_NOT_ARRIVED" not in risk["reject_reasons"] for risk in eng.store.risks.values())
 
 
 @pytest.mark.asyncio

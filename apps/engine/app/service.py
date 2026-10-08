@@ -25,9 +25,7 @@ from app.db.postgres import PostgresMirror
 from app.domain.enums import (
     EXPIRED_SIGNAL,
     QUEUE_SATURATED,
-    RISK_REJECTED,
     STRATEGY_ERROR,
-    VOTES_NOT_ARRIVED,
     Action,
     OperatingMode,
     OrderStatus,
@@ -36,7 +34,7 @@ from app.domain.enums import (
     SlippageModelName,
 )
 from app.domain.mathutil import utcnow
-from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, RiskDecision, StrategyDecision
+from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.intelligence.runner import IntelligenceRunner
 from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, execution_of
@@ -400,14 +398,9 @@ class TradingEngine:
 
     async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id) -> StrategyDecision:
         started = time.perf_counter()
-        if key == "baseline_jev":
-            decision, context, budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0)
-            async with self._locks[key]:
-                return await self._persist_strategy(key, snapshot, decision, context, started, budget_ms)
+        decision, context, _budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0)
         async with self._locks[key]:
-            waited_ms = (time.perf_counter() - started) * 1000
-            decision, context, budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms)
-            return await self._persist_strategy(key, snapshot, decision, context, started, budget_ms)
+            return await self._persist_strategy(key, snapshot, decision, context, started)
 
     async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float):
         cfg = self.strategy_settings[key]
@@ -426,9 +419,7 @@ class TradingEngine:
             round_trip_fee=self.fee_config.taker_fee_rate * 2,
         )
         context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
-        budget_ms = cfg.max_signal_age_ms
-        if key == "baseline_jev":
-            budget_ms = max(budget_ms, 12_000)
+        budget_ms = max(cfg.max_signal_age_ms, 12_000)
         if key == "baseline_openai_jev":
             budget_ms = max(budget_ms, int((self.settings.openai_timeout_s + 4) * 1000))
         if waited_ms > budget_ms:
@@ -452,12 +443,8 @@ class TradingEngine:
             context.artifacts.append({"kind": "error", "error": str(exc)})
         return decision, context, budget_ms
 
-    async def _persist_strategy(self, key: str, snapshot: MarketSnapshot, decision, context, started: float, budget_ms: float):
+    async def _persist_strategy(self, key: str, snapshot: MarketSnapshot, decision, context, started: float):
         elapsed = (time.perf_counter() - started) * 1000
-        if decision.signal_status is SignalStatus.VALID and elapsed > budget_ms:
-            decision.signal_status = SignalStatus.EXPIRED
-            if EXPIRED_SIGNAL not in decision.reason_codes:
-                decision.reason_codes.append(EXPIRED_SIGNAL)
         self.health[key]["last_latency_ms"] = elapsed
         self.health[key]["last_decision_at"] = snapshot.timestamp.isoformat()
         if self.health[key]["status"] != "error":
@@ -477,17 +464,6 @@ class TradingEngine:
         await self.bus.publish(Event("decision", {"decision_id": stored["decision_id"], "strategy": key, "action": decision.action.value}))
         return decision
 
-    def _votes_missing(self, decisions: list[StrategyDecision]) -> bool:
-        by_key = {item.strategy: item for item in decisions}
-        for key in STRATEGY_KEYS:
-            cfg = self.strategy_settings[key]
-            if not cfg.enabled or cfg.mode is OperatingMode.DISABLED:
-                continue
-            decision = by_key.get(key)
-            if decision is None or decision.signal_status is SignalStatus.EXPIRED:
-                return True
-        return False
-
     def _can_execute(self, decision: StrategyDecision) -> bool:
         cfg = self.strategy_settings.get(decision.strategy)
         if cfg is None or not cfg.enabled or cfg.mode not in (OperatingMode.PAPER, OperatingMode.LIVE):
@@ -495,21 +471,6 @@ class TradingEngine:
         return decision.action is not Action.NO_TRADE and decision.signal_status is SignalStatus.VALID
 
     async def _execute_decisions(self, decisions: list[StrategyDecision], snapshot: MarketSnapshot) -> None:
-        if self._votes_missing(decisions):
-            for decision in decisions:
-                if not self._can_execute(decision):
-                    continue
-                await self._record_risk(
-                    RiskDecision(
-                        decision_id=decision.decision_id,
-                        correlation_id=decision.correlation_id,
-                        accepted=False,
-                        reject_reasons=[RISK_REJECTED, VOTES_NOT_ARRIVED],
-                        side=decision.action,
-                        details={"risk_rejected": True},
-                    )
-                )
-            return
         slot = extra_open_slot(decisions, self.combination.extra_entry_min_continuation)
         for decision in decisions:
             if not self._can_execute(decision):

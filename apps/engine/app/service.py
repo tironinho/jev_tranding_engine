@@ -43,7 +43,6 @@ from app.execution.paper import OrderIntent, PaperExecutionProvider, position_ex
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
-from app.market.cusum import CusumFilter
 from app.market.feed import MarketFeed
 from app.market.state import SymbolMarketState
 from app.providers.binance_account import BinanceBalanceProvider
@@ -175,7 +174,6 @@ class TradingEngine:
         self._quotes: dict[str, list[dict]] = {}
         self._quotes_dirty: set[str] = set()
         self._quote_tasks: dict[str, asyncio.Task] = {}
-        self.cusum = CusumFilter(settings.cusum_atr_multiple)
 
     async def start(self) -> None:
         import httpx
@@ -338,10 +336,6 @@ class TradingEngine:
                 stale_after_ms=self.settings.stale_after_ms,
             )
             if snapshot is None:
-                return []
-            atr = snapshot.features.get("atr")
-            if not self.cusum.event(symbol, snapshot.price, atr if isinstance(atr, (int, float)) else None):
-                self._log("cusum", f"{symbol} quiet")
                 return []
             return await self.evaluate_snapshot(snapshot)
         finally:

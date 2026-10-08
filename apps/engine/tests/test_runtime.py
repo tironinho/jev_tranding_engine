@@ -292,7 +292,6 @@ async def test_saturated_symbol_does_not_start_a_second_evaluation():
             )
 
     eng.strategies["baseline"] = Hold()
-    eng.cusum.event = lambda *_args, **_kwargs: True
     await eng.on_snapshot_trigger("BTCUSDT", clock(), "kline_close_1m")
     await asyncio.wait_for(started.wait(), timeout=2)
     await eng.on_snapshot_trigger("BTCUSDT", clock(), "kline_close_1m")

@@ -18,8 +18,10 @@ export function LiveRefresh() {
     for (const event of ["market_update", "decision", "trade", "position", "engine_status"]) {
       source.addEventListener(event, refresh);
     }
+    const poll = window.setInterval(refresh, 5000);
     return () => {
       source.close();
+      window.clearInterval(poll);
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [router]);

@@ -115,7 +115,6 @@ class PostgresMirror:
                 session.add(row)
                 await session.commit()
         except Exception as exc:
-            self.healthy = False
             self.last_error = str(exc)
             log.warning("postgres write failed: %s", exc)
 
@@ -268,11 +267,14 @@ class PostgresMirror:
                 await _upsert_account(session, strategy, account)
                 for position in positions:
                     await _upsert_position(session, position)
-                for order in orders:
-                    await _upsert_order(session, order)
+                stored_ids: dict[str, str] = {}
+                with session.no_autoflush:
+                    for order in orders:
+                        stored = await _upsert_order(session, order)
+                        stored_ids[str(order["order_id"])] = str(stored)
                 await session.flush()
                 for fill in fills:
-                    await _upsert_fill(session, fill)
+                    await _upsert_fill(session, _bind_fill_order(fill, stored_ids))
                 if trade is not None:
                     await _upsert_trade(session, trade)
                 session.add(
@@ -285,7 +287,6 @@ class PostgresMirror:
                 )
                 await session.commit()
         except Exception as exc:
-            self.healthy = False
             self.last_error = str(exc)
             log.warning("postgres checkpoint failed: %s", exc)
 
@@ -409,13 +410,14 @@ async def _upsert_position(session: AsyncSession, position: dict) -> None:
         row.payload = position
 
 
-async def _upsert_order(session: AsyncSession, order: dict) -> None:
+async def _upsert_order(session: AsyncSession, order: dict) -> uuid.UUID:
     result = await session.execute(select(OrderRow).where(OrderRow.client_order_id == order["client_order_id"]))
     row = result.scalar_one_or_none()
     if row is None:
+        stored = uuid.UUID(str(order["order_id"]))
         session.add(
             OrderRow(
-                id=uuid.UUID(str(order["order_id"])),
+                id=stored,
                 client_order_id=order["client_order_id"],
                 decision_id=uuid.UUID(str(order["decision_id"])),
                 strategy=order["strategy"],
@@ -425,9 +427,23 @@ async def _upsert_order(session: AsyncSession, order: dict) -> None:
                 payload=order,
             )
         )
-    else:
-        row.status = order["status"]
-        row.payload = order
+        return stored
+    row.status = order["status"]
+    row.payload = order
+    return row.id
+
+
+def _bind_fill_order(fill: dict, stored_ids: dict[str, str]) -> dict:
+    """A restarted exit keeps the client order id and mints a new UUID.
+
+    The fill has to reference the row that already exists, or the insert
+    rolls the whole book back and the trade count never sticks.
+    """
+    incoming = str(fill.get("order_id") or "")
+    stored = stored_ids.get(incoming)
+    if not stored or stored == incoming:
+        return fill
+    return {**fill, "order_id": stored}
 
 
 async def _upsert_fill(session: AsyncSession, fill: dict) -> None:

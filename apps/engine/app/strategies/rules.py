@@ -34,7 +34,7 @@ def apply_jev_veto(
     breakout: bool,
     min_continuation: float | None = None,
 ) -> tuple[Action, float, list[str]]:
-    """Veto-only v1. Jev cannot create or flip a trade."""
+    """Decide the classified candidate. Jev cannot create or flip a trade."""
     reasons: list[str] = []
     if min_continuation is None:
         required = config.min_short_continuation if action is Action.SHORT else config.min_trend_continuation

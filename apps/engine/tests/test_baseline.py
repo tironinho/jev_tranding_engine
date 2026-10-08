@@ -1,6 +1,10 @@
 from app.domain.enums import (
     BAD_SPREAD,
     BELOW_THRESHOLD,
+    CLASS_ALIGNED,
+    CLASS_DIVERGENT,
+    CLASS_FLOW_AGAINST,
+    CLASS_SINGLE_DRIVER,
     STALE_MARKET_DATA,
     Action,
 )
@@ -95,3 +99,61 @@ def test_taker_flow_is_used_before_the_aggtrade_delta():
     assert result.scores["orderflow_score"] < 0
     assert result.scores["volume_score"] is not None
     assert result.scores["volume_score"] < 0
+
+
+def test_aligned_components_are_classified_before_the_side():
+    eng = engine()
+    snapshot, _book = long_snapshot()
+    result = score_baseline(snapshot, eng.weights)
+    assert result.market_class.primary == CLASS_ALIGNED
+    assert CLASS_ALIGNED in result.reason_codes
+    assert result.action is Action.LONG
+
+
+def test_one_component_does_not_become_a_trade():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        rsi=50,
+        roc=0,
+        volume_ratio=1,
+        orderflow_delta_ratio=0,
+        imbalance_10=0,
+        range_position=0.5,
+        breakout=False,
+        breakdown=False,
+    )
+    result = score_baseline(snapshot, eng.weights)
+    assert result.market_class.primary == CLASS_SINGLE_DRIVER
+    assert result.action is Action.NO_TRADE
+    assert CLASS_SINGLE_DRIVER in result.reason_codes
+
+
+def test_flow_against_the_composite_refuses_the_side():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        volume_ratio=1,
+        orderflow_delta_ratio=-0.25,
+        imbalance_10=0,
+        taker_flow_1m=None,
+    )
+    result = score_baseline(snapshot, eng.weights)
+    assert result.composite > eng.weights.min_abs_score
+    assert CLASS_FLOW_AGAINST in result.market_class.labels
+    assert result.action is Action.NO_TRADE
+
+
+def test_opposing_components_are_divergent_and_do_not_trade():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        rsi=30,
+        roc=-0.004,
+        volume_ratio=1.8,
+        orderflow_delta_ratio=-0.8,
+        imbalance_10=-0.4,
+        range_position=0.5,
+        breakout=False,
+        breakdown=False,
+    )
+    result = score_baseline(snapshot, eng.weights)
+    assert CLASS_DIVERGENT in result.market_class.labels
+    assert result.action is Action.NO_TRADE

@@ -147,6 +147,8 @@ async def test_real_jev_calls_only_the_configured_url():
         baseline_action="SHORT",
         baseline_confidence=0.7,
         baseline_scores={"trend_score": -0.4},
+        baseline_class="CLASS_ALIGNED",
+        baseline_labels=["CLASS_ALIGNED", "BREAKDOWN"],
     )
     missing = RealJevProvider(prompt_version="jev_market_v1", base_url="", api_key="", model="m")
     with pytest.raises(Exception):
@@ -183,6 +185,8 @@ async def test_real_jev_calls_only_the_configured_url():
             assert "`baseline_action`" in json["questions"]["trend_continuation_probability"]["instructions"]
             assert "features" not in json["state"]
             assert "price" not in json["state"]
+            assert json["state"]["baseline_class"] == "CLASS_ALIGNED"
+            assert json["state"]["baseline_labels"] == ["CLASS_ALIGNED", "BREAKDOWN"]
             assert json["state"]["range_60m"] == 0.01
             assert json["state"]["taker_flow_1m"] == -0.2
             assert "symbol" not in json

@@ -24,7 +24,7 @@ from app.domain.enums import (
 from app.domain.schemas import MarketSnapshot, StrategyDecision
 from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
-from app.strategies.baseline_score import score_baseline
+from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, meta_hit_probability
 
 
@@ -93,8 +93,7 @@ class BaselineStrategy:
             confidence=result.confidence,
             reasons=result.reason_codes,
             metadata={
-                "composite": result.composite,
-                "scores": result.scores,
+                **_class_metadata(result),
                 "combination_rule_version": context.combination.baseline_version,
             },
             model_version=result.version,
@@ -110,8 +109,7 @@ class BaselineJevStrategy:
         started = time.perf_counter()
         result = score_baseline(snapshot, context.weights)
         metadata = {
-            "composite": result.composite,
-            "scores": result.scores,
+            **_class_metadata(result),
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.jev_rule_version,
         }
@@ -129,17 +127,7 @@ class BaselineJevStrategy:
                 prompt_version=None,
                 started=started,
             )
-        request = JevMarketRequest(
-            prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
-            symbol=snapshot.symbol,
-            market_type=snapshot.market_type.value,
-            timestamp=snapshot.timestamp,
-            features=dict(snapshot.features),
-            baseline_action=result.action.value,
-            baseline_confidence=result.confidence,
-            baseline_scores=result.scores,
-            intelligence=context.intelligence,
-        )
+        request = _jev_request(context, snapshot, result)
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return blocked
@@ -191,7 +179,7 @@ class BaselineJevStrategy:
             result.confidence,
             assessment,
             context.combination,
-            breakout=bool(snapshot.features.get("breakout") or snapshot.features.get("breakdown")),
+            breakout=_class_has_break(result),
             min_continuation=required,
         )
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
@@ -216,8 +204,7 @@ class BaselineOpenAIJevStrategy:
         started = time.perf_counter()
         result = score_baseline(snapshot, context.weights)
         metadata: dict[str, Any] = {
-            "composite": result.composite,
-            "scores": result.scores,
+            **_class_metadata(result),
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.openai_rule_version,
         }
@@ -299,18 +286,22 @@ class BaselineOpenAIJevStrategy:
                 prompt_version=record.prompt_version,
                 started=started,
             )
-        request = JevMarketRequest(
-            prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
-            symbol=snapshot.symbol,
-            market_type=snapshot.market_type.value,
-            timestamp=snapshot.timestamp,
-            features=dict(snapshot.features),
-            baseline_action=result.action.value,
-            baseline_confidence=result.confidence,
-            baseline_scores=result.scores,
-            market_state=state.model_dump(),
-            intelligence=context.intelligence,
-        )
+        if abstained:
+            metadata["openai_effect"] = "assessed"
+            metadata["jev_effect"] = "idle"
+            return _decision(
+                context=context,
+                snapshot=snapshot,
+                strategy=self.key,
+                action=Action.NO_TRADE,
+                confidence=result.confidence,
+                reasons=[BASELINE_NO_TRADE, *result.reason_codes, *blocks],
+                metadata=metadata,
+                model_version=record.model,
+                prompt_version=record.prompt_version,
+                started=started,
+            )
+        request = _jev_request(context, snapshot, result, market_state=state.model_dump())
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return blocked
@@ -355,22 +346,6 @@ class BaselineOpenAIJevStrategy:
                 "error": assessment.error,
             }
         )
-        if abstained:
-            _remember_jev(metadata, assessment, "assessed")
-            metadata["openai_effect"] = "assessed"
-            reasons = [BASELINE_NO_TRADE, *result.reason_codes, *blocks]
-            return _decision(
-                context=context,
-                snapshot=snapshot,
-                strategy=self.key,
-                action=Action.NO_TRADE,
-                confidence=result.confidence,
-                reasons=reasons,
-                metadata=metadata,
-                model_version=record.model,
-                prompt_version=record.prompt_version,
-                started=started,
-            )
         required = _continuation_floor(snapshot, context, result.action)
         metadata["jev_required_continuation"] = required
         action, confidence, vetoes = apply_jev_veto(
@@ -378,7 +353,7 @@ class BaselineOpenAIJevStrategy:
             result.confidence,
             assessment,
             context.combination,
-            breakout=bool(snapshot.features.get("breakout") or snapshot.features.get("breakdown")),
+            breakout=_class_has_break(result),
             min_continuation=required,
         )
         metadata["openai_effect"] = "confirm"
@@ -395,6 +370,44 @@ class BaselineOpenAIJevStrategy:
             prompt_version=record.prompt_version,
             started=started,
         )
+
+
+def _class_metadata(result: BaselineResult) -> dict[str, Any]:
+    market_class = result.market_class
+    return {
+        "composite": result.composite,
+        "scores": result.scores,
+        "market_class": market_class.primary,
+        "class_labels": list(market_class.labels),
+        "class_agreement": market_class.agreement,
+        "class_drivers": market_class.drivers,
+    }
+
+
+def _class_has_break(result: BaselineResult) -> bool:
+    return "BREAKOUT" in result.market_class.labels or "BREAKDOWN" in result.market_class.labels
+
+
+def _jev_request(
+    context: StrategyContext,
+    snapshot: MarketSnapshot,
+    result: BaselineResult,
+    market_state: dict | None = None,
+) -> JevMarketRequest:
+    return JevMarketRequest(
+        prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
+        symbol=snapshot.symbol,
+        market_type=snapshot.market_type.value,
+        timestamp=snapshot.timestamp,
+        features=dict(snapshot.features),
+        baseline_action=result.action.value,
+        baseline_confidence=result.confidence,
+        baseline_scores=result.scores,
+        baseline_class=result.market_class.primary,
+        baseline_labels=list(result.market_class.labels),
+        market_state=market_state,
+        intelligence=context.intelligence,
+    )
 
 
 def _quality_gate(context, snapshot, metadata, started, strategy):

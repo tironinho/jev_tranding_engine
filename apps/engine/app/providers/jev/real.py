@@ -21,9 +21,16 @@ _ONCHAIN = (
 )
 
 _INSTRUCTIONS = {
-    "trend_continuation_probability": "The `baseline_action` side reaches the target before the stop." + _ONCHAIN,
-    "reversal_probability": "Price reverses against `baseline_action`." + _ONCHAIN,
-    "false_breakout_probability": "The `breakout` or `breakdown` flag is a false break." + _ONCHAIN,
+    "trend_continuation_probability": (
+        "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
+        "It is not an order. That side reaches the target before the stop."
+    )
+    + _ONCHAIN,
+    "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
+    "false_breakout_probability": (
+        "The break named in `baseline_class` is a false break. If the class has no break, stay near 0.5."
+    )
+    + _ONCHAIN,
 }
 
 _UNUSED_NOULS = {
@@ -122,6 +129,8 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "baseline_action": payload.get("baseline_action"),
         "baseline_confidence": payload.get("baseline_confidence"),
         "baseline_scores": payload.get("baseline_scores") or {},
+        "baseline_class": payload.get("baseline_class"),
+        "baseline_labels": payload.get("baseline_labels") or [],
         "taker_flow_1m": features.get("taker_flow_1m"),
         "return_60m": features.get("return_60m"),
         "range_60m": float(frac) if isinstance(frac, (int, float)) else None,

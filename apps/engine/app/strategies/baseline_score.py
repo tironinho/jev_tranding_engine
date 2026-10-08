@@ -10,6 +10,11 @@ from app.domain.enums import (
     BELOW_VWAP,
     BREAKDOWN,
     BREAKOUT,
+    CLASS_ALIGNED,
+    CLASS_DIVERGENT,
+    CLASS_FLOW_AGAINST,
+    CLASS_RANGE,
+    CLASS_SINGLE_DRIVER,
     HIGH_VOLUME,
     HIGH_VOLATILITY,
     INSUFFICIENT_HISTORY,
@@ -27,6 +32,30 @@ from app.domain.mathutil import clip
 from app.domain.schemas import MarketSnapshot
 
 
+# A component below this magnitude does not vote. It is a scale gate, not a fitted edge.
+_COMPONENT_FLOOR = 0.15
+_AGREEMENT_ALIGNED = 0.75
+_DIRECTIONAL = (
+    ("trend_score", "trend"),
+    ("momentum_score", "momentum"),
+    ("volume_score", "volume"),
+    ("orderflow_score", "orderflow"),
+    ("structure_score", "structure"),
+)
+_REFUSAL = (CLASS_DIVERGENT, CLASS_SINGLE_DRIVER, CLASS_FLOW_AGAINST)
+
+
+@dataclass(frozen=True)
+class MarketClass:
+    primary: str
+    labels: tuple[str, ...]
+    agreement: float
+    drivers: int
+
+
+_UNAVAILABLE = MarketClass("unavailable", (), 0.0, 0)
+
+
 @dataclass(frozen=True)
 class BaselineResult:
     action: Action
@@ -35,6 +64,7 @@ class BaselineResult:
     scores: dict[str, float | None]
     reason_codes: list[str]
     version: str
+    market_class: MarketClass = _UNAVAILABLE
 
 
 def _num(features: dict, name: str) -> float | None:
@@ -123,6 +153,72 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     return scores
 
 
+def classify_scores(
+    scores: dict[str, float | None],
+    features: dict,
+    composite: float,
+    config: BaselineWeightConfig,
+) -> MarketClass:
+    """Name the situation from the weighted scores. This is not an order."""
+    side = 1 if composite > 0 else -1 if composite < 0 else 0
+    agree_weight = 0.0
+    total_weight = 0.0
+    drivers = 0
+    for name, attr in _DIRECTIONAL:
+        value = scores.get(name)
+        weight = getattr(config, attr)
+        if value is None or weight <= 0 or abs(value) < _COMPONENT_FLOOR:
+            continue
+        drivers += 1
+        total_weight += weight
+        if side and (value > 0) == (side > 0):
+            agree_weight += weight
+    agreement = agree_weight / total_weight if total_weight else 0.0
+
+    labels: list[str] = []
+    if drivers >= 2 and agreement >= _AGREEMENT_ALIGNED:
+        labels.append(CLASS_ALIGNED)
+    elif drivers == 1:
+        labels.append(CLASS_SINGLE_DRIVER)
+    elif drivers >= 2:
+        labels.append(CLASS_DIVERGENT)
+
+    flow = scores.get("orderflow_score")
+    if side and flow is not None and abs(flow) >= _COMPONENT_FLOOR and (flow > 0) != (side > 0):
+        labels.append(CLASS_FLOW_AGAINST)
+
+    if features.get("breakout") is True:
+        labels.append(BREAKOUT)
+    elif features.get("breakdown") is True:
+        labels.append(BREAKDOWN)
+    else:
+        structure = scores.get("structure_score")
+        if structure is None or abs(structure) < _COMPONENT_FLOOR:
+            labels.append(CLASS_RANGE)
+
+    volatility = scores.get("volatility_score")
+    if volatility is not None and volatility <= -1.0:
+        labels.append(HIGH_VOLATILITY)
+
+    return MarketClass(_primary(labels), tuple(labels), agreement, drivers)
+
+
+def _primary(labels: list[str]) -> str:
+    for code in (
+        HIGH_VOLATILITY,
+        CLASS_FLOW_AGAINST,
+        CLASS_DIVERGENT,
+        CLASS_SINGLE_DRIVER,
+        CLASS_ALIGNED,
+        BREAKOUT,
+        BREAKDOWN,
+        CLASS_RANGE,
+    ):
+        if code in labels:
+            return code
+    return "unclear"
+
+
 def combine_scores(scores: dict[str, float | None], config: BaselineWeightConfig) -> float:
     """Missing flow components are left out. Their weight is not given to the rest."""
     terms = (
@@ -138,7 +234,6 @@ def combine_scores(scores: dict[str, float | None], config: BaselineWeightConfig
 
 
 def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> BaselineResult:
-    reasons: list[str] = []
     if snapshot.data_quality.stale:
         return BaselineResult(Action.NO_TRADE, 0.0, 0.0, {}, [STALE_MARKET_DATA], config.version)
     scores = score_components(snapshot, config)
@@ -158,6 +253,9 @@ def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> Ba
         )
 
     features = snapshot.features
+    composite = clip(combine_scores(scores, config), -1, 1)
+    market_class = classify_scores(scores, features, composite, config)
+    reasons = list(market_class.labels)
     spread_bps = float(features.get("spread_bps") or 0)
     if spread_bps > config.max_spread_bps:
         reasons.append(BAD_SPREAD)
@@ -170,16 +268,32 @@ def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> Ba
     if isinstance(volume_ratio, (int, float)) and volume_ratio < config.min_volume_ratio:
         reasons.append(LOW_LIQUIDITY)
 
-    composite = clip(combine_scores(scores, config), -1, 1)
     hard_block = {BAD_SPREAD, HIGH_VOLATILITY}
-    if any(code in hard_block for code in reasons) or abs(composite) < config.min_abs_score:
+    refused = any(code in _REFUSAL for code in market_class.labels)
+    if any(code in hard_block for code in reasons) or refused or abs(composite) < config.min_abs_score:
         if abs(composite) < config.min_abs_score:
             reasons.append(BELOW_THRESHOLD)
-        return BaselineResult(Action.NO_TRADE, abs(composite), composite, scores, _unique(reasons), config.version)
+        return BaselineResult(
+            Action.NO_TRADE,
+            abs(composite),
+            composite,
+            scores,
+            _unique(reasons),
+            config.version,
+            market_class,
+        )
 
     action = Action.LONG if composite > 0 else Action.SHORT
     reasons.extend(_context_reasons(features, action, config))
-    return BaselineResult(action, abs(composite), composite, scores, _unique(reasons), config.version)
+    return BaselineResult(
+        action,
+        abs(composite),
+        composite,
+        scores,
+        _unique(reasons),
+        config.version,
+        market_class,
+    )
 
 
 def _context_reasons(features: dict, action: Action, config: BaselineWeightConfig) -> list[str]:

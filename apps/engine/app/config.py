@@ -47,9 +47,9 @@ class BaselineWeightConfig:
 
 @dataclass(frozen=True)
 class CombinationConfig:
-    baseline_version: str = "baseline_score_v1"
-    jev_rule_version: str = "jev_veto_only_v1"
-    openai_rule_version: str = "openai_jev_veto_only_v1"
+    baseline_version: str = "baseline_classified_v1"
+    jev_rule_version: str = "jev_classified_v1"
+    openai_rule_version: str = "openai_jev_classified_v1"
     failure_policy: str = "NO_TRADE"
     min_trend_continuation: float = 0.55
     min_short_continuation: float = 0.40
@@ -169,9 +169,9 @@ def combination_from_file(payload: dict) -> CombinationConfig:
     block_long = payload.get("block_long_regimes") or []
     block_short = payload.get("block_short_regimes") or []
     return CombinationConfig(
-        baseline_version=payload.get("baseline_version", "baseline_score_v1"),
-        jev_rule_version=payload.get("jev_rule_version", "jev_veto_only_v1"),
-        openai_rule_version=payload.get("openai_rule_version", "openai_jev_veto_only_v1"),
+        baseline_version=payload.get("baseline_version", "baseline_classified_v1"),
+        jev_rule_version=payload.get("jev_rule_version", "jev_classified_v1"),
+        openai_rule_version=payload.get("openai_rule_version", "openai_jev_classified_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
         min_short_continuation=float(payload.get("min_short_continuation", 0.40)),

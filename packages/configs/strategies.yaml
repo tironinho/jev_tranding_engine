@@ -17,10 +17,10 @@ strategies:
     call_model: true
 
 combination:
-  baseline_version: baseline_score_v1
-  jev_rule_version: jev_veto_only_v1
-  openai_rule_version: openai_jev_veto_only_v1
-  # Jev não cria trade que a baseline recusou e não inverte direção.
+  baseline_version: baseline_classified_v1
+  jev_rule_version: jev_classified_v1
+  openai_rule_version: openai_jev_classified_v1
+  # Peso e classe ficam na baseline. O Jev lê o candidato e não cria outro lado.
   failure_policy: NO_TRADE
   # Long confirma em 0,55. Short confirma em 0,40, acima do zero a zero deste payoff.
   # Os dois pisos ainda sobem quando o stop apertado pede mais acerto para pagar o custo.

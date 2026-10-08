@@ -115,7 +115,20 @@ class BaselineJevStrategy:
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.jev_rule_version,
         }
-        abstained = result.action is Action.NO_TRADE
+        if result.action is Action.NO_TRADE:
+            metadata["jev_effect"] = "idle"
+            return _decision(
+                context=context,
+                snapshot=snapshot,
+                strategy=self.key,
+                action=Action.NO_TRADE,
+                confidence=result.confidence,
+                reasons=[BASELINE_NO_TRADE, *result.reason_codes],
+                metadata=metadata,
+                model_version=result.version,
+                prompt_version=None,
+                started=started,
+            )
         request = JevMarketRequest(
             prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
             symbol=snapshot.symbol,
@@ -171,20 +184,6 @@ class BaselineJevStrategy:
                 "error": assessment.error,
             }
         )
-        if abstained:
-            _remember_jev(metadata, assessment, "assessed")
-            return _decision(
-                context=context,
-                snapshot=snapshot,
-                strategy=self.key,
-                action=Action.NO_TRADE,
-                confidence=result.confidence,
-                reasons=[BASELINE_NO_TRADE, *result.reason_codes],
-                metadata=metadata,
-                model_version=assessment.provider_version,
-                prompt_version=assessment.prompt_version,
-                started=started,
-            )
         required = _continuation_floor(snapshot, context)
         metadata["jev_required_continuation"] = required
         action, confidence, vetoes = apply_jev_veto(

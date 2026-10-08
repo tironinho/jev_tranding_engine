@@ -72,7 +72,7 @@ export function JevDesk({ rows, selected }: { rows: JevReview[] | null; selected
                   </div>
                   <div className="mt-1 flex items-center justify-between text-[11px]">
                     <span className="text-mute">{row.state?.baseline_action ?? "—"}</span>
-                    <span className={effectClass(row.effect)}>{EFFECTS[row.effect ?? ""] ?? "NO DATA"}</span>
+                    <span className={effectClass(row.effect, row.response?.error)}>{effectText(row.effect, row.response?.error)}</span>
                   </div>
                 </Link>
               </li>
@@ -93,7 +93,7 @@ function Reading({ review }: { review: JevReview }) {
     <div className="grid gap-4">
       <Panel
         title={`${review.symbol ?? "NO DATA"} · ${shortTime(review.timestamp)}`}
-        aside={<span className={`font-mono text-[11px] ${effectClass(review.effect)}`}>{EFFECTS[review.effect ?? ""] ?? "NO DATA"}</span>}
+        aside={<span className={`font-mono text-[11px] ${effectClass(review.effect, answer.error)}`}>{effectText(review.effect, answer.error)}</span>}
       >
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -272,9 +272,18 @@ function flag(value: boolean | null | undefined) {
   return value ? "sim" : "não";
 }
 
-function effectClass(effect?: string) {
+function effectText(effect?: string, error?: string | null) {
+  if (effect && EFFECTS[effect]) return EFFECTS[effect];
+  if (error) {
+    const label = error.startsWith("jev_http_") ? error.replace("jev_http_", "HTTP ") : error;
+    return label.length > 28 ? `${label.slice(0, 28)}…` : label;
+  }
+  return "NO DATA";
+}
+
+function effectClass(effect?: string, error?: string | null) {
   if (effect === "confirm") return "text-[#3ddc97]";
-  if (effect === "veto") return "text-[#ff6b6b]";
+  if (effect === "veto" || error) return "text-[#ff6b6b]";
   return "text-mute";
 }
 

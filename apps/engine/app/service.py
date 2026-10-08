@@ -384,72 +384,83 @@ class TradingEngine:
         return decisions
 
     async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id) -> StrategyDecision:
-        cfg = self.strategy_settings[key]
         started = time.perf_counter()
+        if key == "baseline_jev":
+            decision, context, budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0)
+            async with self._locks[key]:
+                return await self._persist_strategy(key, snapshot, decision, context, started, budget_ms)
         async with self._locks[key]:
             waited_ms = (time.perf_counter() - started) * 1000
-            context = StrategyContext(
-                correlation_id=correlation_id,
-                opportunity_id=opportunity_id,
-                mode=cfg.mode,
-                now=snapshot.timestamp,
-                weights=self.weights,
-                combination=self.combination,
-                call_model=cfg.call_model,
-                jev=self.jev,
-                openai=self.openai,
-                failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
-                risk=self.risk.limits,
-                round_trip_fee=self.fee_config.taker_fee_rate * 2,
+            decision, context, budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms)
+            return await self._persist_strategy(key, snapshot, decision, context, started, budget_ms)
+
+    async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float):
+        cfg = self.strategy_settings[key]
+        context = StrategyContext(
+            correlation_id=correlation_id,
+            opportunity_id=opportunity_id,
+            mode=cfg.mode,
+            now=snapshot.timestamp,
+            weights=self.weights,
+            combination=self.combination,
+            call_model=cfg.call_model,
+            jev=self.jev,
+            openai=self.openai,
+            failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
+            risk=self.risk.limits,
+            round_trip_fee=self.fee_config.taker_fee_rate * 2,
+        )
+        context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
+        budget_ms = cfg.max_signal_age_ms
+        if key == "baseline_jev":
+            budget_ms = max(budget_ms, 12_000)
+        if key == "baseline_openai_jev":
+            budget_ms = max(budget_ms, int((self.settings.openai_timeout_s + 4) * 1000))
+        if waited_ms > budget_ms:
+            decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
+            decision.signal_status = SignalStatus.EXPIRED
+            return decision, context, budget_ms
+        timeout = max(0.05, (budget_ms - waited_ms) / 1000)
+        try:
+            decision = await asyncio.wait_for(
+                self.strategies[key].evaluate(snapshot, snapshot.features, context),
+                timeout=timeout,
             )
-            context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
-            budget_ms = cfg.max_signal_age_ms
-            if key == "baseline_jev":
-                budget_ms = max(budget_ms, 12_000)
-            if key == "baseline_openai_jev":
-                budget_ms = max(budget_ms, int((self.settings.openai_timeout_s + 4) * 1000))
-            if waited_ms > budget_ms:
-                decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
-                decision.signal_status = SignalStatus.EXPIRED
-            else:
-                timeout = max(0.05, (budget_ms - waited_ms) / 1000)
-                try:
-                    decision = await asyncio.wait_for(
-                        self.strategies[key].evaluate(snapshot, snapshot.features, context),
-                        timeout=timeout,
-                    )
-                except TimeoutError:
-                    decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
-                    decision.signal_status = SignalStatus.EXPIRED
-                    context.artifacts.append({"kind": "timeout"})
-                except Exception as exc:
-                    self.health[key]["errors"] += 1
-                    self.health[key]["status"] = "error"
-                    decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, STRATEGY_ERROR)
-                    context.artifacts.append({"kind": "error", "error": str(exc)})
-            elapsed = (time.perf_counter() - started) * 1000
-            if decision.signal_status is SignalStatus.VALID and elapsed > budget_ms:
-                decision.signal_status = SignalStatus.EXPIRED
-                if EXPIRED_SIGNAL not in decision.reason_codes:
-                    decision.reason_codes.append(EXPIRED_SIGNAL)
-            self.health[key]["last_latency_ms"] = elapsed
-            self.health[key]["last_decision_at"] = snapshot.timestamp.isoformat()
-            if self.health[key]["status"] != "error":
-                self.health[key]["status"] = "ok"
-            stored = self.store.add_decision(decision, context.artifacts)
-            for artifact in context.artifacts:
-                if artifact.get("kind") == "openai" and artifact.get("estimated_cost") is not None:
-                    self.openai_cost_total += float(artifact["estimated_cost"])
-                    self.openai_cost_known = True
-                if self.postgres and self.postgres.healthy:
-                    if artifact.get("kind") == "openai":
-                        await self.postgres.save_openai(stored["decision_id"], stored["snapshot_id"], artifact)
-                    elif artifact.get("kind") == "jev":
-                        await self.postgres.save_jev(stored["decision_id"], stored["snapshot_id"], artifact)
+        except TimeoutError:
+            decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
+            decision.signal_status = SignalStatus.EXPIRED
+            context.artifacts.append({"kind": "timeout"})
+        except Exception as exc:
+            self.health[key]["errors"] += 1
+            self.health[key]["status"] = "error"
+            decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, STRATEGY_ERROR)
+            context.artifacts.append({"kind": "error", "error": str(exc)})
+        return decision, context, budget_ms
+
+    async def _persist_strategy(self, key: str, snapshot: MarketSnapshot, decision, context, started: float, budget_ms: float):
+        elapsed = (time.perf_counter() - started) * 1000
+        if decision.signal_status is SignalStatus.VALID and elapsed > budget_ms:
+            decision.signal_status = SignalStatus.EXPIRED
+            if EXPIRED_SIGNAL not in decision.reason_codes:
+                decision.reason_codes.append(EXPIRED_SIGNAL)
+        self.health[key]["last_latency_ms"] = elapsed
+        self.health[key]["last_decision_at"] = snapshot.timestamp.isoformat()
+        if self.health[key]["status"] != "error":
+            self.health[key]["status"] = "ok"
+        stored = self.store.add_decision(decision, context.artifacts)
+        for artifact in context.artifacts:
+            if artifact.get("kind") == "openai" and artifact.get("estimated_cost") is not None:
+                self.openai_cost_total += float(artifact["estimated_cost"])
+                self.openai_cost_known = True
             if self.postgres and self.postgres.healthy:
-                await self.postgres.save_decision(stored)
-            await self.bus.publish(Event("decision", {"decision_id": stored["decision_id"], "strategy": key, "action": decision.action.value}))
-            return decision
+                if artifact.get("kind") == "openai":
+                    await self.postgres.save_openai(stored["decision_id"], stored["snapshot_id"], artifact)
+                elif artifact.get("kind") == "jev":
+                    await self.postgres.save_jev(stored["decision_id"], stored["snapshot_id"], artifact)
+        if self.postgres and self.postgres.healthy:
+            await self.postgres.save_decision(stored)
+        await self.bus.publish(Event("decision", {"decision_id": stored["decision_id"], "strategy": key, "action": decision.action.value}))
+        return decision
 
     def _votes_missing(self, decisions: list[StrategyDecision]) -> bool:
         by_key = {item.strategy: item for item in decisions}
@@ -496,6 +507,10 @@ class TradingEngine:
 
     async def _execute_paper(self, decision: StrategyDecision, snapshot: MarketSnapshot, extra_slot: bool = False) -> None:
         fees = await self.fee_provider.get_fees(snapshot.symbol)
+        async with self._locks[decision.strategy]:
+            await self._execute_paper_locked(decision, snapshot, fees, extra_slot)
+
+    async def _execute_paper_locked(self, decision: StrategyDecision, snapshot: MarketSnapshot, fees, extra_slot: bool = False) -> None:
         context = self._risk_context(decision.strategy, snapshot, live=False)
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
@@ -519,11 +534,15 @@ class TradingEngine:
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
     async def _execute_live(self, decision: StrategyDecision, snapshot: MarketSnapshot, extra_slot: bool = False) -> None:
+        fees = await self.fee_provider.get_fees(snapshot.symbol)
+        async with self._locks[decision.strategy]:
+            await self._execute_live_locked(decision, snapshot, fees, extra_slot)
+
+    async def _execute_live_locked(self, decision: StrategyDecision, snapshot: MarketSnapshot, fees, extra_slot: bool = False) -> None:
         if not self.allows_new_live():
             self._log("live_blocked", "LIVE_LOCKED")
             self.store.add_event("live_blocked", "LIVE_LOCKED", {"decision_id": str(decision.decision_id)})
             return
-        fees = await self.fee_provider.get_fees(snapshot.symbol)
         context = self._risk_context(decision.strategy, snapshot, live=True)
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)

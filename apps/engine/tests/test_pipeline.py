@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from datetime import timedelta
@@ -205,7 +207,7 @@ async def test_baseline_opens_a_new_symbol_while_another_entry_is_fresh():
 
 
 @pytest.mark.asyncio
-async def test_abstain_still_asks_jev_and_does_not_open():
+async def test_abstain_does_not_call_jev_and_does_not_open():
     eng = engine()
     snapshot, book = long_snapshot(
         ema_alignment=0,
@@ -225,11 +227,42 @@ async def test_abstain_still_asks_jev_and_does_not_open():
     jev = by_strategy["baseline_jev"]
     assert by_strategy["baseline"].action is Action.NO_TRADE
     assert jev.action is Action.NO_TRADE
-    assert jev.metadata["jev_effect"] == "assessed"
+    assert jev.metadata["jev_effect"] == "idle"
     assert jev.metadata["baseline_action"] == "NO_TRADE"
-    assert isinstance(jev.metadata["jev_continuation"], float)
+    assert "jev_continuation" not in jev.metadata
+    assert eng.store.jev_calls == []
     assert eng.accounts.accounts["baseline"].positions == {}
     assert eng.accounts.accounts["baseline_jev"].positions == {}
+
+
+@pytest.mark.asyncio
+async def test_two_symbols_ask_jev_at_the_same_time():
+    eng = engine()
+    first, book = long_snapshot()
+    second = first.model_copy(update={"symbol": "ETHUSDT"})
+    attach_book(eng, book)
+    for cfg in eng.strategy_settings.values():
+        cfg.mode = OperatingMode.SHADOW
+
+    class _Overlap:
+        def __init__(self, inner):
+            self.inner = inner
+            self.inflight = 0
+            self.max_inflight = 0
+
+        async def evaluate_market_state(self, request):
+            self.inflight += 1
+            self.max_inflight = max(self.max_inflight, self.inflight)
+            try:
+                await asyncio.sleep(0.05)
+                return await self.inner.evaluate_market_state(request)
+            finally:
+                self.inflight -= 1
+
+    probe = _Overlap(eng.jev)
+    eng.jev = probe
+    await asyncio.gather(eng.evaluate_snapshot(first), eng.evaluate_snapshot(second))
+    assert probe.max_inflight == 2
 
 
 @pytest.mark.asyncio

@@ -447,6 +447,9 @@ class TradingEngine:
         elapsed = (time.perf_counter() - started) * 1000
         self.health[key]["last_latency_ms"] = elapsed
         self.health[key]["last_decision_at"] = snapshot.timestamp.isoformat()
+        if decision.action is Action.NO_TRADE:
+            reasons = ",".join(decision.reason_codes[:4]) or "NO_REASON"
+            self._log("decision", f"{key} {snapshot.symbol} NO_TRADE {decision.confidence:.3f} {reasons}")
         if self.health[key]["status"] != "error":
             self.health[key]["status"] = "ok"
         stored = self.store.add_decision(decision, context.artifacts)

@@ -36,6 +36,7 @@ function cell(decision?: Decision) {
     );
   }
   const score = `${decision.action} ${Math.round(decision.confidence * 100)}%`;
+  const reason = decision.reason_codes?.find((code) => code !== "BASELINE_NO_TRADE" && code !== "JEV_CONFIRM");
   const meta = decision.metadata;
   const notes: string[] = [];
   if (meta?.baseline_action === "NO_TRADE" && typeof meta.openai_regime === "string") {
@@ -45,7 +46,7 @@ function cell(decision?: Decision) {
   if (meta?.baseline_action === "NO_TRADE" && typeof meta.jev_continuation === "number") {
     notes.push(`cont ${Math.round(meta.jev_continuation * 100)}%`);
   }
-  const label = notes.length ? `${score} · ${notes.join(" · ")}` : score;
+  const label = [score, reason, notes.join(" · ")].filter(Boolean).join(" · ");
   return (
     <Link href={`/decisions/${decision.decision_id}`} className="font-mono hover:underline">
       {label}

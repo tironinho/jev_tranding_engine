@@ -8,7 +8,8 @@ from app.intelligence.schemas import ProviderHealth, RawExternalObservation
 from app.providers.binance_account import _signed
 from app.resilience.guards import CircuitBreaker, TokenBucket
 
-_ASSETS = {"BTCUSDT": "BTC", "ETHUSDT": "ETH", "SOLUSDT": "SOL"}
+_ASSETS = {"BTCUSDT": "BTC", "ETHUSDT": "ETH", "SOLUSDT": "SOL", "BNBUSDT": "BNB", "XRPUSDT": "XRP"}
+_COINS = set(_ASSETS.values()) | {"USDT"}
 
 
 class BinanceIntelligenceProvider:
@@ -104,7 +105,12 @@ class BinanceIntelligenceProvider:
 
     async def _margin(self, symbols: list[str], now: datetime, headers: dict) -> tuple[list[RawExternalObservation], bool]:
         """Cross-margin price index and borrow interest. No futures host."""
+        if self.settings.balance_upstream_url:
+            return await self._margin_via_account(symbols, now), False
         base = self.settings.binance_account_rest_url.rstrip("/")
+        if not base.startswith("http"):
+            self._error = "NO_ACCOUNT_URL"
+            return [], False
         rows: list[RawExternalObservation] = []
         blocked = False
         for symbol in symbols:
@@ -158,6 +164,95 @@ class BinanceIntelligenceProvider:
             if daily.status == "ok" and isinstance(daily.body, list):
                 rows.extend(_daily_interest(symbols, asset, daily.body, now))
         return rows, blocked
+
+    async def _margin_via_account(self, symbols: list[str], now: datetime) -> list[RawExternalObservation]:
+        """Oregon cannot open sapi. Singapore reads the price index and the borrow rate."""
+        token = self.settings.balance_share_token or self.settings.engine_api_secret
+        if not token or self.client is None:
+            return []
+        url = f"{self.settings.balance_upstream_url.rstrip('/')}/api/binance/margin-read"
+        rows: list[RawExternalObservation] = []
+        for symbol in symbols:
+            body = await self._account_body(url, token, {"kind": "price_index", "symbol": symbol})
+            if isinstance(body, dict) and body.get("price") is not None:
+                stamp = _ms(body.get("calcTime")) or now
+                rows.append(_obs("binance", "margin_price_index", symbol, _ASSETS[symbol], _num(body.get("price")), "usd", stamp, now, 60))
+        assets = [_ASSETS[symbol] for symbol in symbols]
+        if "USDT" not in assets:
+            assets.append("USDT")
+        hourly = await self._account_body(url, token, {"kind": "hourly_interest", "assets": assets})
+        if isinstance(hourly, list):
+            rows.extend(_hourly_interest(symbols, hourly, now))
+        for asset in assets:
+            daily = await self._account_body(url, token, {"kind": "daily_interest", "asset": asset})
+            if isinstance(daily, list):
+                rows.extend(_daily_interest(symbols, asset, daily, now))
+        return rows
+
+    async def _account_body(self, url: str, token: str, payload: dict):
+        try:
+            response = await self.client.post(
+                url,
+                json=payload,
+                headers={"authorization": f"Bearer {token}"},
+                timeout=8,
+            )
+        except Exception as exc:
+            self._error = type(exc).__name__
+            return None
+        if response.status_code != 200:
+            self._error = f"HTTP {response.status_code}"
+            return None
+        try:
+            body = response.json()
+        except Exception:
+            self._error = "INVALID_JSON"
+            return None
+        if not isinstance(body, dict) or body.get("status") != "ok":
+            self._error = str(body.get("detail") or body.get("status") or "ERROR") if isinstance(body, dict) else "ERROR"
+            return None
+        self._error = None
+        return body.get("body")
+
+
+async def read_margin_on_account(client, settings: Settings, kind: str, symbol: str | None, asset: str | None, assets: list[str] | None) -> dict:
+    """Signed read on the account host. The path is chosen here, never by the caller."""
+    if kind not in {"price_index", "hourly_interest", "daily_interest"}:
+        raise ValueError("kind")
+    if client is None or not settings.binance_api_key or not settings.binance_api_secret:
+        raise ValueError("NO_CREDENTIALS")
+    base = settings.binance_account_rest_url.rstrip("/")
+    if not base.startswith("http"):
+        raise ValueError("NO_ACCOUNT_URL")
+    headers = {"X-MBX-APIKEY": settings.binance_api_key}
+    if kind == "price_index":
+        if symbol not in _ASSETS:
+            raise ValueError("symbol")
+        path, params, signed = "/sapi/v1/margin/priceIndex", {"symbol": symbol}, False
+    elif kind == "hourly_interest":
+        coins = [item for item in (assets or []) if item in _COINS]
+        if "USDT" not in coins:
+            coins.append("USDT")
+        path, params, signed = "/sapi/v1/margin/next-hourly-interest-rate", {"assets": ",".join(coins), "isIsolated": "FALSE"}, True
+    elif kind == "daily_interest":
+        if asset not in _COINS:
+            raise ValueError("asset")
+        path, params, signed = "/sapi/v1/margin/crossMarginData", {"coin": asset}, True
+    else:
+        raise ValueError("kind")
+    if signed:
+        params = _signed(
+            settings.binance_api_secret,
+            {**params, "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000), "recvWindow": 5000},
+        )
+    response = await client.get(f"{base}{path}", params=params, headers=headers, timeout=8)
+    if response.status_code >= 400:
+        return {"status": "ERROR", "detail": f"HTTP {response.status_code}"}
+    try:
+        body = response.json()
+    except Exception:
+        return {"status": "ERROR", "detail": "INVALID_JSON"}
+    return {"status": "ok", "body": body}
 
 
 def _hourly_interest(symbols: list[str], body: list, now: datetime) -> list[RawExternalObservation]:

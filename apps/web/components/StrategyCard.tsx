@@ -14,6 +14,7 @@ export type StrategyCardData = {
   marked_pnl?: number | null;
   max_drawdown: number | null;
   equity: number;
+  starting_equity?: number | null;
 };
 
 export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; liveArmed: boolean }) {
@@ -36,7 +37,11 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="DRAWDOWN" value={liveAccount || hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
       <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">
-        {liveAccount ? `saldo real ${num(card.equity, 2)} USDT` : liveArmed ? "histórico de paper" : `simulado ${num(card.equity, 2)} USDT`}
+        {liveAccount
+          ? `começou ${num(card.starting_equity, 2)} · agora ${num(card.equity, 2)}`
+          : liveArmed
+            ? "histórico de paper"
+            : `simulado ${num(card.equity, 2)} USDT`}
       </div>
     </article>
   );

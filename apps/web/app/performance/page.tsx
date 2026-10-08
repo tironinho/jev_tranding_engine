@@ -1,3 +1,4 @@
+import { AccountEvolution, type AccountTrack } from "@/components/Balances";
 import { DrawdownChart, EquityCurve, PnLChart } from "@/components/Charts";
 import { EngineLogs, RiskPanel } from "@/components/Inspector";
 import { PerformanceComparison } from "@/components/PerformanceComparison";
@@ -8,7 +9,11 @@ export const dynamic = "force-dynamic";
 
 export default async function PerformancePage() {
   const [equity, compare, trades, limits, logs] = await Promise.all([
-    engineFetch<{ series: Record<string, Array<{ t: string; equity: number; indexed: number | null; mark?: boolean }>>; drawdown: Record<string, Array<{ t: string; equity: number; drawdown: number }>> }>("/api/performance/equity"),
+    engineFetch<{
+      series: Record<string, Array<{ t: string; equity: number; indexed: number | null; mark?: boolean }>>;
+      drawdown: Record<string, Array<{ t: string; equity: number; drawdown: number }>>;
+      account?: AccountTrack;
+    }>("/api/performance/equity"),
     engineFetch<Record<string, number | null>>("/api/performance/compare"),
     engineFetch<{ rows: Array<{ closed_at: string; strategy: string; net_pnl: number }> }>("/api/trades?mode=live"),
     engineFetch<Record<string, number | string>>("/api/risk/limits"),
@@ -16,6 +21,23 @@ export default async function PerformancePage() {
   ]);
   return (
     <div className="grid gap-4">
+      <Panel title="SALDO REAL — COMEÇOU E EVOLUÇÃO">
+        <AccountEvolution track={equity.ok ? equity.data?.account : null} />
+        <EquityCurve
+          capital
+          series={
+            equity.ok && equity.data?.account?.points?.length
+              ? {
+                  conta: equity.data.account.points.map((point) => ({
+                    t: point.t,
+                    equity: point.equity,
+                    indexed: equity.data?.account?.started ? (point.equity / equity.data.account.started) * 100 : null,
+                  })),
+                }
+              : null
+          }
+        />
+      </Panel>
       <Panel title="EQUITY — CONTA REAL E O PAPER">
         <EquityCurve series={equity.ok ? equity.data?.series ?? null : null} />
       </Panel>

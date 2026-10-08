@@ -195,11 +195,11 @@ function Fields({ value }: { value: unknown }) {
 function Field({ name, value }: { name: string; value: unknown }) {
   if (value == null) return <SignedRow label={labelOf(name)} value={null} />;
   if (typeof value === "number") {
-    if (Math.abs(value) > 1) {
+    if (Math.abs(value) > 1 || name.endsWith("_raw") || name.includes("interest") || name.includes("price_index") || name.includes("_change")) {
       return (
         <div className="flex items-center justify-between gap-3 text-[11px]">
           <span className="text-mute">{labelOf(name)}</span>
-          <span className="font-mono">{value.toLocaleString("en-US", { maximumFractionDigits: 4 })}</span>
+          <span className="font-mono">{value.toLocaleString("en-US", { maximumFractionDigits: 8 })}</span>
         </div>
       );
     }

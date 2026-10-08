@@ -182,6 +182,42 @@ async def test_balance_http_error_has_no_invented_wallet():
     assert payload["detail"] == "HTTP 401"
 
 
+@pytest.mark.asyncio
+async def test_account_curve_keeps_the_start_and_skips_unmarked_borrow_cash():
+    eng = engine()
+    await eng.note_balance({"status": "ok", "wallet": 19.79, "assets": [{"asset": "USDT", "total": 19.79}]})
+    await eng.note_balance(
+        {
+            "status": "ok",
+            "wallet": 47.23,
+            "assets": [
+                {"asset": "USDT", "total": 47.23},
+                {"asset": "BTC", "total": -0.0002},
+            ],
+        }
+    )
+    assert len(eng.balance_points) == 1
+    eng.states["BTCUSDT"].last_price = 80_000.0
+    await eng.note_balance(
+        eng.mark_account(
+            {
+                "status": "ok",
+                "wallet": 47.23,
+                "assets": [
+                    {"asset": "USDT", "total": 47.23},
+                    {"asset": "BTC", "total": -0.0002},
+                ],
+            }
+        )
+    )
+    track = eng.account_curve()
+    marked = 47.23 - 0.0002 * 80_000
+    assert track["started"] == pytest.approx(19.79)
+    assert track["current"] == pytest.approx(marked)
+    assert track["change"] == pytest.approx(marked - 19.79)
+    assert [point["equity"] for point in track["points"]] == pytest.approx([19.79, marked])
+
+
 def test_paper_book_and_open_trade_money():
     eng = engine()
     eng.states["BTCUSDT"].last_price = 105

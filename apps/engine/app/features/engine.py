@@ -58,6 +58,31 @@ def quantitative_regime(features: dict) -> str:
     return f"{structure}|{vol}"
 
 
+_LIVE_BOOK = timedelta(seconds=15)
+
+
+def _at_decision(stamp: datetime | None, as_of: datetime) -> bool:
+    """The book at the decision counts. A book from a later replay does not."""
+    if stamp is None:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    moment = as_of if as_of.tzinfo is not None else as_of.replace(tzinfo=timezone.utc)
+    if stamp <= moment:
+        return True
+    return stamp - moment <= _LIVE_BOOK
+
+
+def _taker_ratio(candles: list[Candle]) -> float | None:
+    if not candles or any(candle.taker_buy_volume is None for candle in candles):
+        return None
+    volume = sum(candle.volume for candle in candles)
+    if volume <= 0:
+        return None
+    buy = sum(candle.taker_buy_volume or 0 for candle in candles)
+    return max(-1.0, min(1.0, (2 * buy / volume) - 1))
+
+
 def _book_depth(book: OrderBook, depth: int) -> tuple[float, float]:
     bid_qty = sum(level.quantity for level in book.bids[:depth])
     ask_qty = sum(level.quantity for level in book.asks[:depth])
@@ -191,11 +216,8 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     recent_spans = [bar.high - bar.low for bar in recent_bars if bar.high >= bar.low]
     features["range_1m"] = max(recent_spans) if recent_spans else None
 
-    if candles_1m and candles_1m[-1].volume > 0 and candles_1m[-1].taker_buy_volume is not None:
-        ratio = (2 * candles_1m[-1].taker_buy_volume / candles_1m[-1].volume) - 1
-        features["taker_flow_1m"] = max(-1.0, min(1.0, ratio))
-    else:
-        features["taker_flow_1m"] = None
+    features["taker_flow_1m"] = _taker_ratio(candles_1m[-1:])
+    features["taker_flow_5m"] = _taker_ratio(candles_1m[-5:])
 
     window_start = as_of - timedelta(seconds=60)
     trades = [trade for trade in state.trades if window_start <= trade.timestamp <= as_of]
@@ -222,9 +244,9 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     older = [point for point in cvd_points if point[0] <= slope_cut]
     features["cvd_slope"] = (cvd - older[-1][1]) if older else None
 
-    book = state.book if state.book and state.book.timestamp <= as_of else None
-    bid = state.best_bid if state.last_book_at and state.last_book_at <= as_of else None
-    ask = state.best_ask if state.last_book_at and state.last_book_at <= as_of else None
+    book = state.book if state.book and _at_decision(state.book.timestamp, as_of) else None
+    bid = state.best_bid if _at_decision(state.last_book_at, as_of) else None
+    ask = state.best_ask if _at_decision(state.last_book_at, as_of) else None
     if book and book.bids and book.asks:
         bid = book.bids[0].price
         ask = book.asks[0].price

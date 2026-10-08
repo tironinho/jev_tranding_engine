@@ -50,8 +50,20 @@ class IntelligenceRunner:
         self.alternative = AlternativeMeProvider(settings, client)
         self.cryptoquant = CryptoQuantProvider(settings, client)
         self.coinmetrics = CoinMetricsProvider(settings, client)
+        self._mark_series: dict[str, list[tuple[datetime, float]]] = {}
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
+
+    def note_marks(self, prices: dict[str, float], now: datetime) -> None:
+        moment = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        for symbol, price in prices.items():
+            if not isinstance(price, (int, float)) or price <= 0:
+                continue
+            series = self._mark_series.setdefault(symbol, [])
+            if series and abs(series[-1][1] - float(price)) < 1e-12 and (moment - series[-1][0]).total_seconds() < 20:
+                continue
+            series.append((moment, float(price)))
+            del series[:-120]
 
     def bind(self, client) -> None:
         self.binance.client = client
@@ -64,7 +76,7 @@ class IntelligenceRunner:
         if not self.settings.external_intelligence_enabled:
             return None
         try:
-            payload = build_context(symbol, features, self.cache.visible(now), now)
+            payload = build_context(symbol, features, self.cache.visible(now), now, self._mark_series)
         except Exception:
             log.exception("intelligence context failed for %s", symbol)
             return None

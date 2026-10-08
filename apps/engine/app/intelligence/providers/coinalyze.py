@@ -15,13 +15,17 @@ _WANTED = {
     "XRP": "XRPUSDT",
 }
 # One Binance perpetual per asset. Six history calls × 5 symbols = 30, plus the catalog, under the 40/minute cap.
+_CURRENT = (
+    ("funding-rate", "funding_rate"),
+    ("predicted-funding-rate", "predicted_funding"),
+)
 _HISTORY = (
-    ("open-interest-history", "5min", 2, {"convert_to_usd": "true"}, "oi"),
+    ("open-interest-history", "5min", 6, {"convert_to_usd": "true"}, "oi"),
     ("funding-rate-history", "1hour", 24, {}, "funding"),
     ("predicted-funding-rate-history", "1hour", 24, {}, "predicted"),
-    ("liquidation-history", "5min", 2, {}, "liquidation"),
-    ("long-short-ratio-history", "5min", 2, {}, "ratio"),
-    ("ohlcv-history", "5min", 2, {}, "ohlcv"),
+    ("liquidation-history", "5min", 12, {}, "liquidation"),
+    ("long-short-ratio-history", "5min", 12, {}, "ratio"),
+    ("ohlcv-history", "5min", 6, {}, "ohlcv"),
 )
 
 
@@ -35,7 +39,7 @@ class CoinalyzeProvider:
         self.client = client
         rate = max(self.settings.coinalyze_requests_per_minute, 1) / 60
         self.breaker = CircuitBreaker("coinalyze", failure_threshold=4, recovery_seconds=90)
-        self.bucket = TokenBucket(rate=rate, capacity=min(8, self.settings.coinalyze_requests_per_minute))
+        self.bucket = TokenBucket(rate=rate, capacity=min(16, max(self.settings.coinalyze_requests_per_minute, 1)))
         self._markets: list[dict] = []
         self._status = "DISABLED"
         self._error: str | None = None
@@ -57,7 +61,9 @@ class CoinalyzeProvider:
             return []
         headers = {"api_key": self.settings.coinalyze_api_key}
         base = f"https://{self.settings.coinalyze_base_host.strip().removeprefix('https://').strip('/')}/v1"
+        fetched_catalog = False
         if not self._markets:
+            fetched_catalog = True
             listed = await fetch_json(self.client, self.breaker, self.bucket, f"{base}/future-markets", {}, headers)
             if listed.status == "RATE_LIMIT":
                 self._status = "DEGRADED"
@@ -76,8 +82,23 @@ class CoinalyzeProvider:
         provider_symbols = ",".join(item["provider_symbol"] for item in chosen)
         rows: list[RawExternalObservation] = []
         budget = max(self.settings.coinalyze_requests_per_minute, 1)
-        spent = 1
+        spent = 1 if fetched_catalog else 0
         end = int(now.timestamp())
+        for path, metric in _CURRENT:
+            cost = len(chosen)
+            if spent + cost > budget:
+                self._status = "DEGRADED"
+                self._error = "BUDGET"
+                break
+            result = await fetch_json(self.client, self.breaker, self.bucket, f"{base}/{path}", {"symbols": provider_symbols}, headers)
+            spent += cost
+            if result.status == "RATE_LIMIT":
+                self._status = "DEGRADED"
+                self._error = "429"
+                return rows
+            if result.status != "ok":
+                continue
+            rows.extend(_current(result.body, chosen, now, metric))
         parsers = {
             "oi": _oi_history,
             "funding": _rate_history("funding_rate"),
@@ -147,6 +168,36 @@ def _one_per_asset(markets: list[dict]) -> list[dict]:
         seen.add(item["internal_symbol"])
         picked.append(item)
     return picked
+
+
+def _current(body, markets, now, metric: str) -> list[RawExternalObservation]:
+    if not isinstance(body, list):
+        return []
+    by_symbol = {item["provider_symbol"]: item for item in markets}
+    rows = []
+    for item in body:
+        if not isinstance(item, dict):
+            continue
+        mapped = by_symbol.get(item.get("symbol"))
+        if mapped is None or item.get("value") is None:
+            continue
+        try:
+            value = float(item["value"])
+        except (TypeError, ValueError):
+            continue
+        rows.append(
+            _obs(
+                "coinalyze",
+                metric,
+                mapped["internal_symbol"],
+                value,
+                "rate",
+                _seconds(item.get("update")) or now,
+                now,
+                mapped["provider_symbol"],
+            )
+        )
+    return rows
 
 
 def _oi_history(body, markets, now) -> list[RawExternalObservation]:

@@ -32,11 +32,81 @@ export type PaperBook = {
   accounts: PaperAccount[];
 };
 
+export type AccountTrack = {
+  started: number | null;
+  started_at: string | null;
+  current: number | null;
+  change: number | null;
+  points: Array<{ t: string; equity: number }>;
+};
+
+function openedAt(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function Sparkline({ points }: { points: Array<{ equity: number }> }) {
+  const step = Math.max(1, Math.ceil(points.length / 160));
+  const sampled = points.filter((point, index) => index % step === 0 || index === points.length - 1);
+  if (sampled.length < 2) return null;
+  const values = sampled.map((point) => point.equity);
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const span = high - low || 1;
+  const width = 320;
+  const height = 56;
+  const drawn = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * width;
+    const y = height - 4 - ((value - low) / span) * (height - 8);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const up = values[values.length - 1] >= values[0];
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-14 w-full" role="img" aria-label="evolução do saldo">
+      <polyline fill="none" stroke={up ? "#3ddc97" : "#ff6b6b"} strokeWidth="1.6" points={drawn.join(" ")} />
+    </svg>
+  );
+}
+
+export function AccountEvolution({ track }: { track: AccountTrack | null | undefined }) {
+  const started = track?.started ?? null;
+  const change = track?.change ?? null;
+  const ratio = started ? (change ?? 0) / started : null;
+  if (started == null) {
+    return <div className="font-mono text-xs tracking-[0.16em] text-mute">SEM HISTÓRICO</div>;
+  }
+  return (
+    <div className="grid gap-2">
+      <dl className="grid grid-cols-2 gap-3 text-[11px]">
+        <div>
+          <dt className="text-mute">COMEÇOU</dt>
+          <dd className="font-mono text-paper">{num(started, 2)} USDT</dd>
+          <dd className="font-mono text-[10px] text-mute">{openedAt(track?.started_at)}</dd>
+        </div>
+        <div>
+          <dt className="text-mute">EVOLUÇÃO</dt>
+          <dd className={`font-mono ${signedClass(change)}`}>{money(change)} USDT</dd>
+          <dd className={`font-mono text-[10px] ${signedClass(change)}`}>{ratio == null ? "—" : `${(ratio * 100).toFixed(2)}%`}</dd>
+        </div>
+      </dl>
+      <Sparkline points={track?.points ?? []} />
+    </div>
+  );
+}
+
 function held(item: { total: number; free?: number | null }) {
   return Math.abs(item.total) >= 0.0001 || Math.abs(item.free ?? 0) >= 0.0001;
 }
 
-export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | null | undefined }) {
+export function BinanceBalancePanel({ balance, track }: { balance: BinanceBalance | null | undefined; track?: AccountTrack | null }) {
   const ready = balance?.status === "ok" && balance.wallet != null;
   const others = (balance?.assets ?? []).filter((item) => item.asset !== "USDT" && held(item));
   return (
@@ -50,6 +120,7 @@ export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | nul
       ) : (
         <div className="grid gap-3">
           <div className="font-mono text-2xl text-paper">{num(balance.equity_usdt ?? balance.wallet, 2)} USDT</div>
+          <AccountEvolution track={track} />
           <dl className="grid grid-cols-2 gap-3 text-[11px]">
             <div>
               <dt className="text-mute">AVAILABLE</dt>

@@ -432,6 +432,7 @@ class TradingEngine:
             risk=self.risk.limits,
             round_trip_fee=self.fee_config.taker_fee_rate * 2,
         )
+        self.intelligence.note_marks(self._marks(), snapshot.timestamp)
         context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
         budget_ms = max(cfg.max_signal_age_ms, 12_000)
         if key == "baseline_openai_jev":
@@ -1040,6 +1041,7 @@ class TradingEngine:
             reports[key]["marked_pnl"] = marked - start
             reports[key]["by_regime"] = slice_performance(trades, start)
             reports[key]["equity"] = marked
+            reports[key]["starting_equity"] = start
             reports[key]["mode"] = self.strategy_settings[key].mode.value
             reports[key]["enabled"] = self.strategy_settings[key].enabled
             if live_book:
@@ -1083,7 +1085,19 @@ class TradingEngine:
                 }
                 for point in self.balance_points
             ]
-        return {"starting_equity": start, "series": series}
+        return {"starting_equity": start, "series": series, "account": self.account_curve()}
+
+    def account_curve(self) -> dict:
+        points = [{"t": point["t"], "equity": point["wallet"]} for point in self.balance_points]
+        current = self._last_wallet if self._last_wallet is not None else (points[-1]["equity"] if points else None)
+        started = points[0]["equity"] if points else None
+        return {
+            "started": started,
+            "started_at": points[0]["t"] if points else None,
+            "current": current,
+            "change": (current - started) if current is not None and started is not None else None,
+            "points": points,
+        }
 
     def mark_account(self, payload: dict) -> dict:
         """USDT net is cash after the borrow. Equity marks every debt at the last price."""
@@ -1105,11 +1119,26 @@ class TradingEngine:
             equity += net * price
         return {**payload, "equity_usdt": equity}
 
+    def _holds_coin(self, payload: dict) -> bool:
+        for asset in payload.get("assets") or []:
+            if str(asset.get("asset") or "") == "USDT":
+                continue
+            if abs(float(asset.get("total") or 0)) >= 1e-4:
+                return True
+        return False
+
     async def note_balance(self, payload: dict) -> None:
+        if payload.get("status") != "ok":
+            return
         equity = payload.get("equity_usdt")
         wallet = payload.get("wallet")
-        value = equity if isinstance(equity, (int, float)) else wallet
-        if payload.get("status") != "ok" or not isinstance(value, (int, float)):
+        # Cash after a short is not the account. Skip until the coins are marked.
+        if not isinstance(equity, (int, float)):
+            if self._holds_coin(payload):
+                return
+            equity = wallet
+        value = equity
+        if not isinstance(value, (int, float)):
             return
         now = utcnow()
         previous = self.balance_points[-1] if self.balance_points else None

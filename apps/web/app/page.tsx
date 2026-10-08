@@ -1,4 +1,4 @@
-import { BinanceBalancePanel, RealAccountPanel, type BinanceBalance, type PaperBook } from "@/components/Balances";
+import { BinanceBalancePanel, RealAccountPanel, type AccountTrack, type BinanceBalance, type PaperBook } from "@/components/Balances";
 import { DecisionTable, PositionTable } from "@/components/DecisionTable";
 import { EngineStatus, Panel } from "@/components/Shell";
 import { StrategyCard, type StrategyCardData } from "@/components/StrategyCard";
@@ -22,6 +22,7 @@ type Overview = {
   tickers: Array<{ symbol: string; price: number | null; spread_bps?: number | null; funding_rate?: number | null; open_interest?: number | null; status?: string; stale?: boolean }>;
   positions: Array<{ position_id?: string; strategy: string; symbol: string; side: string; quantity: number; entry: number; stop: number; target: number; notional?: number; leverage?: number | null; unrealized: number; target_pnl?: number; stop_pnl?: number }>;
   binance_balance?: BinanceBalance;
+  account?: AccountTrack;
   paper?: PaperBook;
 };
 
@@ -45,7 +46,7 @@ export default async function OverviewPage() {
     <div className="grid gap-4">
       <EngineStatus status={data.status} />
       <div className="grid gap-3 lg:grid-cols-2">
-        <BinanceBalancePanel balance={data.binance_balance} />
+        <BinanceBalancePanel balance={data.binance_balance} track={data.account} />
         <RealAccountPanel balance={data.binance_balance} />
       </div>
       <div className="grid gap-3 md:grid-cols-3">

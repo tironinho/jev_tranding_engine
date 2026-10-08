@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -306,7 +307,7 @@ async def test_coinalyze_stops_before_the_minute_budget_is_spent():
     async with httpx.AsyncClient(transport=transport) as client:
         provider = CoinalyzeProvider(cfg, client)
         await provider.collect(["BTCUSDT", "ETHUSDT"], _now())
-    assert seen == ["/v1/open-interest-history", "/v1/funding-rate-history"]
+    assert seen == ["/v1/funding-rate", "/v1/predicted-funding-rate"]
     assert (await provider.health()).last_error == "BUDGET"
 
 
@@ -343,6 +344,123 @@ def test_history_reaches_jev_without_turning_a_missing_series_into_zero():
     assert empty["derivatives"]["oi_change_1h"] is None
     assert empty["derivatives"]["funding_crowding"] is None
     assert empty["derivatives"]["liquidation_intensity"] is None
+
+
+def test_prices_we_already_have_fill_relative_strength_and_dominance():
+    now = _now()
+    marks = {
+        "ETHUSDT": [(now - timedelta(minutes=5), 100.0), (now, 110.0)],
+        "BTCUSDT": [(now - timedelta(minutes=5), 100.0), (now, 100.0)],
+        "SOLUSDT": [(now - timedelta(minutes=5), 100.0), (now, 90.0)],
+    }
+    rows = [
+        RawExternalObservation(
+            provider="alternative_me",
+            metric="btc_dominance",
+            symbol=None,
+            value=0.60,
+            unit="fraction",
+            observed_at=now - timedelta(minutes=2),
+            received_at=now,
+        ),
+        RawExternalObservation(
+            provider="alternative_me",
+            metric="btc_dominance",
+            symbol=None,
+            value=0.65,
+            unit="fraction",
+            observed_at=now,
+            received_at=now,
+        ),
+    ]
+    context = build_context("ETHUSDT", {"spread_bps": 16, "taker_flow_5m": 0.2}, rows, now, marks)
+    assert context["relative_strength"]["eth_vs_btc"] is not None
+    assert context["relative_strength"]["sol_vs_btc"] is not None
+    assert context["global"]["btc_dominance_change"] == pytest.approx(0.05)
+    assert context["global"]["alt_rotation_pressure"] < 0
+    assert context["microstructure"]["spread_stress"] == 1
+    assert context["microstructure"]["taker_imbalance_5m"] == pytest.approx(0.2)
+    assert context["microstructure"]["cvd_direction"] == pytest.approx(0.2)
+
+
+@pytest.mark.asyncio
+async def test_current_funding_is_kept_when_history_is_empty():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/future-markets":
+            return httpx.Response(200, json=[_market("BTCUSDT_PERP.A", "A", "BTC")])
+        if request.url.path == "/v1/funding-rate":
+            return httpx.Response(200, json=[{"symbol": "BTCUSDT_PERP.A", "value": 0.0001, "update": 1_759_900_000}])
+        return httpx.Response(200, json=[])
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(coinalyze_enabled=True, coinalyze_api_key="secret")
+    async with httpx.AsyncClient(transport=transport) as client:
+        provider = CoinalyzeProvider(cfg, client)
+        rows = await provider.collect(["BTCUSDT"], _now())
+    assert any(row.metric == "funding_rate" and row.value == 0.0001 for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_oregon_reads_margin_context_through_singapore():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        assert request.url.host == "gateway.example"
+        assert request.headers["authorization"] == "Bearer share"
+        body = json.loads(request.content)
+        if body["kind"] == "price_index":
+            return httpx.Response(200, json={"status": "ok", "body": {"price": "2500", "calcTime": 1_759_900_000_000}})
+        if body["kind"] == "hourly_interest":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "body": [
+                        {"asset": "ETH", "nextHourlyInterestRate": "0.00001"},
+                        {"asset": "USDT", "nextHourlyInterestRate": "0.00002"},
+                    ],
+                },
+            )
+        return httpx.Response(200, json={"status": "ok", "body": [{"coin": body["asset"], "dailyInterest": "0.0002"}]})
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(
+        market_type="margin",
+        balance_upstream_url="https://gateway.example",
+        balance_share_token="share",
+        binance_api_key="k",
+        binance_api_secret="s",
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        provider = BinanceIntelligenceProvider(cfg, client)
+        rows = await provider.collect(["ETHUSDT"], _now())
+    assert seen
+    assert set(seen) == {"/api/binance/margin-read"}
+    metrics = {row.metric: row.value for row in rows}
+    assert metrics["margin_price_index"] == 2500
+    assert metrics["borrow_hourly_interest"] == 0.00001
+    assert metrics["quote_borrow_hourly_interest"] == 0.00002
+
+
+def test_margin_read_rejects_anything_except_the_three_account_reads():
+    from fastapi.testclient import TestClient
+
+    from app.api.router import create_app
+    from tests.conftest import engine
+
+    eng = engine(service_role="account", binance_api_key="k", binance_api_secret="s")
+    app = create_app(eng.settings, eng)
+    app.state.settings = eng.settings
+    app.state.engine = eng
+    client = TestClient(app)
+    denied = client.post("/api/binance/margin-read", json={"kind": "withdraw", "symbol": "ETHUSDT"})
+    assert denied.status_code == 400
+    oregon = engine(service_role="engine", balance_upstream_url="https://gateway.example")
+    app.state.engine = oregon
+    app.state.settings = oregon.settings
+    blocked = client.post("/api/binance/margin-read", json={"kind": "price_index", "symbol": "ETHUSDT"})
+    assert blocked.status_code == 409
 
 
 def _obs(metric: str, symbol: str, value: float, observed: datetime) -> RawExternalObservation:

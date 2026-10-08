@@ -13,15 +13,15 @@ const COLORS: Record<string, string> = {
 
 type Point = { t: string; equity: number; indexed?: number | null; drawdown?: number; mark?: boolean };
 
-export function EquityCurve({ series }: { series: Record<string, Point[]> | null }) {
-  const [normalize, setNormalize] = useState(true);
+export function EquityCurve({ series, capital = false }: { series: Record<string, Point[]> | null; capital?: boolean }) {
+  const [normalize, setNormalize] = useState(!capital);
   const data = useMemo(() => merge(series, normalize ? "indexed" : "equity"), [series, normalize]);
   if (!series) return <Empty />;
   const onlyInitial = Object.values(series).every((points) => points.filter((point) => point.mark !== undefined ? !point.mark : true).length <= 1);
   return (
     <div>
       <div className="mb-2 flex items-center justify-between text-[11px] text-mute">
-        <span>{onlyInitial ? "sem trades fechados — curva no capital inicial" : "equity"}</span>
+        <span>{capital ? "USDT" : onlyInitial ? "sem trades fechados — curva no capital inicial" : "equity"}</span>
         <button type="button" className="border border-line px-2 py-1" onClick={() => setNormalize((value) => !value)}>
           {normalize ? "BASE 100" : "CAPITAL"}
         </button>

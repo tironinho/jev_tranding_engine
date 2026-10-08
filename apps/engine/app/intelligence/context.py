@@ -20,15 +20,22 @@ from app.intelligence.normalize import (
 from app.intelligence.quality import feature_quality, relative_disagreement
 from app.intelligence.schemas import RawExternalObservation
 
-_SLOW = 6 * 3600
+_SLOW = 24 * 3600
 
 
-def build_context(symbol: str, features: dict, rows: list[RawExternalObservation], now: datetime) -> dict:
+def build_context(
+    symbol: str,
+    features: dict,
+    rows: list[RawExternalObservation],
+    now: datetime,
+    marks: dict | None = None,
+) -> dict:
     """Normalized jev_feature_set_v1. Missing stays null."""
     visible = [row for row in rows if ensure_utc(row.observed_at) <= ensure_utc(now)]
+    remembered = marks or {}
     micro = _micro(features)
     _apply_flow(micro, symbol, visible)
-    derivatives = _derivatives(symbol, visible, now)
+    derivatives = _derivatives(symbol, visible, now, remembered)
     sentiment = _sentiment(visible, now)
     global_market = _dominance(visible, now, symbol)
     quality_rows = [micro["quality"], derivatives["quality"], sentiment["quality"]]
@@ -52,7 +59,7 @@ def build_context(symbol: str, features: dict, rows: list[RawExternalObservation
         "microstructure": micro,
         "derivatives": derivatives,
         "sentiment": sentiment,
-        "relative_strength": _relative(symbol, visible, now),
+        "relative_strength": _relative(symbol, visible, remembered),
         "onchain": {"exchange_flow_pressure": None, "stablecoin_liquidity": None, "available": False, "quality": 0.0},
         "global": global_market,
         "data_quality": {
@@ -74,16 +81,18 @@ def _micro(features: dict) -> dict:
     book_5 = _finite(features.get("imbalance_5"))
     book_20 = _finite(features.get("imbalance_20"))
     taker = _finite(features.get("taker_flow_1m"))
-    values = [item for item in (book_5, book_20, taker) if item is not None]
+    taker_5 = _finite(features.get("taker_flow_5m"))
+    spread = _finite(features.get("spread_bps"))
+    values = [item for item in (book_5, book_20, taker, taker_5, spread) if item is not None]
     return {
         "taker_imbalance_1m": taker,
-        "taker_imbalance_5m": None,
+        "taker_imbalance_5m": taker_5,
         "book_imbalance_5": book_5,
         "book_imbalance_20": book_20,
         "book_imbalance_consistency": _consistency(book_5, _finite(features.get("imbalance_10")), book_20),
-        "cvd_direction": None,
-        "spread_bps": _finite(features.get("spread_bps")),
-        "spread_stress": None,
+        "cvd_direction": taker_5,
+        "spread_bps": spread,
+        "spread_stress": None if spread is None else max(0.0, min(1.0, spread / 8.0)),
         "quality": feature_quality(available=bool(values), fresh=1.0 if values else 0.0),
         "source": "binance_book",
     }
@@ -96,9 +105,8 @@ def _apply_flow(micro: dict, symbol: str, rows: list[RawExternalObservation]) ->
     common = sorted(set(buys) & set(sells))
     if not common:
         return
-    if micro["taker_imbalance_5m"] is None:
-        micro["taker_imbalance_5m"] = taker_imbalance(buys[common[-1]], sells[common[-1]])
-    if micro["cvd_direction"] is None and len(common) >= 2:
+    micro["taker_imbalance_5m"] = taker_imbalance(buys[common[-1]], sells[common[-1]])
+    if len(common) >= 2:
         micro["cvd_direction"] = taker_imbalance(sum(buys[stamp] for stamp in common), sum(sells[stamp] for stamp in common))
     present = [
         micro[key]
@@ -110,7 +118,7 @@ def _apply_flow(micro: dict, symbol: str, rows: list[RawExternalObservation]) ->
         micro["source"] = "coinalyze"
 
 
-def _derivatives(symbol: str, rows: list[RawExternalObservation], now: datetime) -> dict:
+def _derivatives(symbol: str, rows: list[RawExternalObservation], now: datetime, marks: dict) -> dict:
     oi = _series(rows, "coinalyze", "open_interest_usd", symbol)
     if not oi:
         oi = _series(rows, "binance", "open_interest_value", symbol)
@@ -153,6 +161,8 @@ def _derivatives(symbol: str, rows: list[RawExternalObservation], now: datetime)
     if binance_oi and coinalyze_oi:
         disagreement = relative_disagreement(binance_oi[1], coinalyze_oi[1])
     price = _series(rows, "coinalyze", "close", symbol)
+    if len(price) < 2:
+        price = list(marks.get(symbol) or [])
     state, confidence = _position_state(_log_shift(price, 300), changes["oi_change_5m"])
     fresh = freshness(age_seconds(now, oi[-1][0] if oi else None), 900) if oi else 0.0
     available = any(item is not None for item in (*changes.values(), crowding, imbalance, borrow, quote_borrow, price_index))
@@ -218,22 +228,26 @@ def _dominance(rows, now: datetime, symbol: str) -> dict:
     series = _series(rows, "alternative_me", "btc_dominance", None)
     latest = series[-1][1] if series else None
     change = _shift(series, 3600)
+    if change is None and len(series) >= 2:
+        change = series[-1][1] - series[0][1]
     z = robust_zscore(latest, [value for _, value in series[:-1]]) if latest is not None else None
+    scale = 0.01 if latest is not None and abs(latest) <= 2 else 1.0
+    rotation = None if change is None else max(-1.0, min(1.0, math.tanh(-change / scale)))
     return {
         "btc_dominance_raw": latest,
         "btc_dominance_change": change,
         "btc_dominance_zscore": z,
-        "alt_rotation_pressure": None,
+        "alt_rotation_pressure": rotation,
         "symbol": symbol,
         "source_timestamp": series[-1][0].isoformat() if series else None,
     }
 
 
-def _relative(symbol: str, rows, now: datetime) -> dict:
-    closes = {
-        name: _series(rows, "coinalyze", "close", name)
-        for name in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT")
-    }
+def _relative(symbol: str, rows, marks: dict) -> dict:
+    closes = {}
+    for name in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"):
+        series = _series(rows, "coinalyze", "close", name)
+        closes[name] = series if len(series) >= 2 else list(marks.get(name) or series)
     return {
         "eth_vs_btc": _spread(closes["ETHUSDT"], closes["BTCUSDT"]) if symbol != "BTCUSDT" else None,
         "sol_vs_btc": _spread(closes["SOLUSDT"], closes["BTCUSDT"]) if symbol != "BTCUSDT" else None,

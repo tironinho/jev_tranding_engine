@@ -92,7 +92,7 @@ def _global(body, now: datetime) -> list[RawExternalObservation]:
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, dict) or data.get("bitcoin_percentage_of_market_cap") is None:
         return []
-    stamp = _seconds(data.get("last_updated")) or now
+    stamp = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
     quotes = data.get("quotes") if isinstance(data.get("quotes"), dict) else {}
     usd = quotes.get("USD") if isinstance(quotes.get("USD"), dict) else {}
     rows = [

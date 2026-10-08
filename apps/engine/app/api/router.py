@@ -145,6 +145,7 @@ async def overview(request: Request) -> dict:
         "tickers": [engine.ticker(symbol) for symbol in engine.settings.symbol_list],
         "positions": engine.positions_payload(),
         "binance_balance": await _noted_balance(engine),
+        "account": engine.account_curve(),
         "paper": engine.paper_book(),
     }
 
@@ -406,6 +407,29 @@ _ORDER_EFFECTS = {"AUTO_BORROW_REPAY", "AUTO_REPAY"}
 class MarginOrderBody(BaseModel):
     method: str
     params: dict[str, str] = Field(default_factory=dict)
+
+
+class MarginReadBody(BaseModel):
+    kind: str
+    symbol: str | None = None
+    asset: str | None = None
+    assets: list[str] = Field(default_factory=list)
+
+
+@router.post("/api/binance/margin-read")
+async def binance_margin_read(request: Request, body: MarginReadBody) -> dict:
+    _balance_actor(request)
+    engine = _engine(request)
+    if engine.settings.balance_upstream_url or engine.settings.service_role != "account":
+        raise HTTPException(409, "this host does not read the account")
+    from app.intelligence.providers.binance import read_margin_on_account
+
+    try:
+        return await read_margin_on_account(engine.live.client, engine.settings, body.kind, body.symbol, body.asset, body.assets)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, type(exc).__name__) from exc
 
 
 @router.post("/api/binance/order")

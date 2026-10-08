@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from app.features.engine import build_snapshot, compute_features
-from app.market.state import Candle, SymbolMarketState
+from app.market.state import Candle, Level, OrderBook, SymbolMarketState
 
 
 def _candle(index: int, price: float) -> Candle:
@@ -32,6 +32,44 @@ def test_a_fresh_candle_keeps_the_score_alive_when_the_book_is_old():
     snapshot = build_snapshot(state, as_of=as_of, trigger="kline_close_1m", stale_after_ms=5_000)
     assert snapshot is not None
     assert snapshot.data_quality.stale is False
+
+
+def test_the_book_that_arrives_with_the_candle_is_used():
+    state = SymbolMarketState(symbol="ETHUSDT", market_type="spot")
+    candles = [_candle(i, 100 + i * 0.01) for i in range(40)]
+    state.candles["1m"] = list(candles)
+    as_of = candles[-1].close_time
+    state.last_price = candles[-1].close
+    state.book = OrderBook(
+        bids=[Level(price=state.last_price - 0.05, quantity=3)],
+        asks=[Level(price=state.last_price + 0.05, quantity=1)],
+        timestamp=as_of + timedelta(seconds=1),
+    )
+    state.best_bid = state.book.bids[0].price
+    state.best_ask = state.book.asks[0].price
+    state.last_book_at = state.book.timestamp
+    features, _quality = compute_features(state, as_of, state.last_price)
+    assert features["imbalance_5"] == 0.5
+    assert features["spread_bps"] is not None
+    state.book = OrderBook(bids=state.book.bids, asks=state.book.asks, timestamp=as_of + timedelta(minutes=2))
+    state.last_book_at = state.book.timestamp
+    later, _quality = compute_features(state, as_of, state.last_price)
+    assert later["imbalance_5"] is None
+    assert later["spread_bps"] is None
+
+
+def test_five_minute_taker_uses_the_closed_candles():
+    state = SymbolMarketState(symbol="ETHUSDT", market_type="spot")
+    candles = []
+    for index in range(5):
+        candle = _candle(index, 100)
+        candle.taker_buy_volume = 8 if index == 4 else 4
+        candles.append(candle)
+    state.candles["1m"] = candles
+    features, _quality = compute_features(state, candles[-1].close_time, 100)
+    assert features["taker_flow_1m"] == (2 * 8 / 10) - 1
+    assert features["taker_flow_5m"] is not None
+    assert features["taker_flow_5m"] != features["taker_flow_1m"]
 
 
 def test_future_candles_do_not_change_features_at_t():

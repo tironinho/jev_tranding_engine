@@ -109,7 +109,7 @@ def apply_market_message(state, payload: dict, received_at: datetime) -> str | N
         state.best_ask = ask
         state.bid_qty = _f(data.get("B"))
         state.ask_qty = _f(data.get("A"))
-        stamp = _dt_ms(event_time) if isinstance(event_time, (int, float)) else received_at
+        stamp = _event_stamp(event_time, received_at)
         state.last_book_at = stamp
         state.last_price = (bid + ask) / 2
         state.last_event_at = stamp
@@ -119,7 +119,7 @@ def apply_market_message(state, payload: dict, received_at: datetime) -> str | N
         asks = _levels(data.get("a") or data.get("asks"))
         if not bids or not asks or bids[0].price > asks[0].price:
             return None
-        stamp = _dt_ms(data.get("T") or data.get("E") or received_at.timestamp() * 1000)
+        stamp = _event_stamp(data.get("T") or data.get("E"), received_at)
         state.book = OrderBook(bids=bids, asks=asks, timestamp=stamp)
         state.best_bid = bids[0].price
         state.best_ask = asks[0].price
@@ -176,6 +176,16 @@ def _apply_kline(state, data: dict) -> str | None:
     if closed and timeframe == "1m":
         return "kline_close_1m"
     return "kline"
+
+
+def _event_stamp(event_time, received_at: datetime) -> datetime:
+    """An exchange clock ahead of us must not hide the book we already received."""
+    if isinstance(event_time, (int, float)):
+        stamp = _dt_ms(event_time)
+        if stamp > received_at:
+            return received_at
+        return stamp
+    return received_at
 
 
 def _levels(rows: Any) -> list[Level]:

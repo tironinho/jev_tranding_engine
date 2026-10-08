@@ -98,7 +98,10 @@ class CoinalyzeProvider:
                 return rows
             if result.status != "ok":
                 continue
-            rows.extend(_current(result.body, chosen, now, metric))
+            try:
+                rows.extend(_current(result.body, chosen, now, metric))
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
         parsers = {
             "oi": _oi_history,
             "funding": _rate_history("funding_rate"),
@@ -123,7 +126,10 @@ class CoinalyzeProvider:
                 return rows
             if result.status != "ok":
                 continue
-            rows.extend(parsers[kind](result.body, chosen, now))
+            try:
+                rows.extend(parsers[kind](result.body, chosen, now))
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
         else:
             self._status = "ONLINE" if rows else "DEGRADED"
             self._error = None if rows else "EMPTY"
@@ -185,6 +191,9 @@ def _current(body, markets, now, metric: str) -> list[RawExternalObservation]:
             value = float(item["value"])
         except (TypeError, ValueError):
             continue
+        # The current endpoint quotes the rate in percent. History quotes the fraction.
+        if metric in {"funding_rate", "predicted_funding"}:
+            value = value / 100
         rows.append(
             _obs(
                 "coinalyze",
@@ -306,4 +315,10 @@ def _seconds(value) -> datetime | None:
         return None
     if number <= 0:
         return None
-    return datetime.fromtimestamp(number, tz=timezone.utc)
+    # Current funding stamps are milliseconds. History bars are seconds.
+    if number >= 100_000_000_000:
+        number = number / 1000
+    try:
+        return datetime.fromtimestamp(number, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None

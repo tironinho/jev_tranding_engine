@@ -389,7 +389,7 @@ async def test_current_funding_is_kept_when_history_is_empty():
         if request.url.path == "/v1/future-markets":
             return httpx.Response(200, json=[_market("BTCUSDT_PERP.A", "A", "BTC")])
         if request.url.path == "/v1/funding-rate":
-            return httpx.Response(200, json=[{"symbol": "BTCUSDT_PERP.A", "value": 0.0001, "update": 1_759_900_000}])
+            return httpx.Response(200, json=[{"symbol": "BTCUSDT_PERP.A", "value": 0.01, "update": 1_759_900_000}])
         return httpx.Response(200, json=[])
 
     transport = httpx.MockTransport(handler)
@@ -441,6 +441,22 @@ async def test_oregon_reads_margin_context_through_singapore():
     assert metrics["margin_price_index"] == 2500
     assert metrics["borrow_hourly_interest"] == 0.00001
     assert metrics["quote_borrow_hourly_interest"] == 0.00002
+
+
+def test_current_funding_stamp_in_milliseconds_stays_readable():
+    from app.intelligence.providers.coinalyze import _current, _seconds
+
+    stamp = _seconds(1_759_900_000_000)
+    assert stamp is not None
+    assert stamp == datetime.fromtimestamp(1_759_900_000, tz=timezone.utc)
+    rows = _current(
+        [{"symbol": "BTCUSDT_PERP.A", "value": 0.01, "update": 1_759_900_000_000}],
+        [{"provider_symbol": "BTCUSDT_PERP.A", "internal_symbol": "BTCUSDT"}],
+        _now(),
+        "funding_rate",
+    )
+    assert rows[0].value == pytest.approx(0.0001)
+    assert rows[0].observed_at == stamp
 
 
 def test_margin_read_rejects_anything_except_the_three_account_reads():

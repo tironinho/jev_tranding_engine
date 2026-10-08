@@ -20,6 +20,7 @@ from app.domain.enums import (
     MAX_RISK_PER_TRADE,
     MAX_SYMBOL_EXPOSURE,
     MAX_TOTAL_EXPOSURE,
+    MARGIN_LEVEL,
     NET_RR_TOO_LOW,
     ORDER_BELOW_MIN_NOTIONAL,
     PERSISTENCE_UNAVAILABLE,
@@ -61,6 +62,7 @@ class RiskContext:
     market_type: str
     step_size: float | None = None
     min_notional: float | None = None
+    margin_level: float | None = None
     rules_required: bool = False
     last_stop_at: datetime | None = None
 
@@ -106,6 +108,8 @@ class RiskEngine:
                 reasons.append(PERSISTENCE_UNAVAILABLE)
             if context.rules_required and not context.step_size:
                 reasons.append(EXCHANGE_RULES_UNAVAILABLE)
+            if context.margin_level is not None and context.margin_level < self.limits.min_margin_level:
+                reasons.append(MARGIN_LEVEL)
         elif decision.mode.value == "paper" and not context.persistence_ok:
             reasons.append(PERSISTENCE_UNAVAILABLE)
         if context.market_type == MarketType.SPOT.value and decision.action is Action.SHORT:

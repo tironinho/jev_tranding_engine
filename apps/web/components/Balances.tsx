@@ -32,9 +32,13 @@ export type PaperBook = {
   accounts: PaperAccount[];
 };
 
+function held(item: { total: number; free?: number | null }) {
+  return Math.abs(item.total) >= 0.0001 || Math.abs(item.free ?? 0) >= 0.0001;
+}
+
 export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | null | undefined }) {
   const ready = balance?.status === "ok" && balance.wallet != null;
-  const others = (balance?.assets ?? []).filter((item) => item.asset !== "USDT" && item.total !== 0);
+  const others = (balance?.assets ?? []).filter((item) => item.asset !== "USDT" && held(item));
   return (
     <Panel title={`BINANCE ${((balance?.market_type ?? "wallet").toUpperCase())} · USDT`}>
       {!balance ? (
@@ -77,7 +81,7 @@ export function BinanceBalancePanel({ balance }: { balance: BinanceBalance | nul
 
 export function RealAccountPanel({ balance }: { balance: BinanceBalance | null | undefined }) {
   const ready = balance?.status === "ok" && balance.wallet != null;
-  const rows = (balance?.assets ?? []).filter((item) => item.total !== 0 || (item.free ?? 0) !== 0);
+  const rows = (balance?.assets ?? []).filter(held);
   return (
     <Panel title="CONTA — MARGEM REAL">
       {!balance || !ready ? (

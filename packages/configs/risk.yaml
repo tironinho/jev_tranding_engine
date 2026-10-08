@@ -17,6 +17,8 @@ min_entry_interval_seconds: 60
 stop_cooldown_minutes: 15
 # Mínimo da Binance no spot/margem. 50 bloqueava a conta de ~20 USDT: 0,5% de risco não chega lá.
 min_order_notional: 5
+# A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
+min_margin_level: 2
 # No prazo, só fecha quem está no prejuízo. Quem está no lucro segue até o alvo ou o stop.
 max_hold_minutes: 60
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.

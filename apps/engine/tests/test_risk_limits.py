@@ -46,6 +46,42 @@ def _decision_from_snapshot(eng, snapshot):
     return decisions
 
 
+def test_a_tight_margin_level_blocks_a_new_live_entry():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    from app.domain.schemas import StrategyDecision
+    from app.domain.enums import MARGIN_LEVEL, OperatingMode
+
+    decision = StrategyDecision(
+        correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        strategy="baseline_jev",
+        symbol="BTCUSDT",
+        timestamp=snapshot.timestamp,
+        action=Action.LONG,
+        confidence=0.8,
+        reason_codes=["TREND_UP"],
+        mode=OperatingMode.LIVE,
+    )
+    blocked = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(live_requested=True, live_armed=True, persistence_ok=True, margin_level=1.74, step_size=0.001, rules_required=True),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert MARGIN_LEVEL in blocked.reject_reasons
+    clear = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(live_requested=True, live_armed=True, persistence_ok=True, margin_level=999, step_size=0.001, rules_required=True),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert MARGIN_LEVEL not in clear.reject_reasons
+
+
 def test_small_account_clears_the_exchange_minimum_and_not_the_old_fifty():
     eng = engine()
     snapshot, book = long_snapshot()

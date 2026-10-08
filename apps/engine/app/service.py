@@ -552,6 +552,8 @@ class TradingEngine:
                 self._real_day_start = float(wallet)
             context.day_start_equity = self._real_day_start
             context.realized_pnl_today = 0.0
+            level = balance.get("margin_level")
+            context.margin_level = float(level) if isinstance(level, (int, float)) else None
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:

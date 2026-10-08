@@ -22,7 +22,6 @@ from app.domain.enums import (
     MAX_TOTAL_EXPOSURE,
     NET_RR_TOO_LOW,
     ORDER_BELOW_MIN_NOTIONAL,
-    TARGET_BEYOND_HOUR,
     PERSISTENCE_UNAVAILABLE,
     RISK_REJECTED,
     SPOT_SHORT_NOT_SUPPORTED,
@@ -42,7 +41,6 @@ from app.risk.economics import (
     plan_geometry,
     rate_for,
     size_quantity,
-    target_inside_hour,
 )
 
 
@@ -216,12 +214,6 @@ class RiskEngine:
         )
         if extended:
             geometry = replace(geometry, target=target, reasons=(*geometry.reasons, TARGET_EXTENDED_FOR_FEES))
-        if not target_inside_hour(entry, geometry.target, snapshot.features):
-            return self._reject(
-                decision,
-                [TARGET_BEYOND_HOUR],
-                details={"geometry_reasons": list(geometry.reasons)},
-            )
         economics = compute_trade_economics(
             side=decision.action,
             entry=entry,

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from app.execution.paper import position_exit, stepped_stop
 from app.features.engine import compute_features
 from app.market.state import Candle, SymbolMarketState
-from app.risk.economics import plan_geometry, target_inside_hour
+from app.risk.economics import plan_geometry
 
 
 def _fifteen(index: int, high: float, low: float) -> Candle:
@@ -138,10 +138,7 @@ def test_a_tighter_stop_is_not_loosened():
     assert stepped_stop(position, 101.0) is None
 
 
-def test_a_target_wider_than_the_last_hour_does_not_fit():
-    assert target_inside_hour(100, 101, {"range_60m": 1.5}) is True
-    assert target_inside_hour(100, 103, {"range_60m": 1.5}) is False
-    assert target_inside_hour(100, 99, {}) is False
+def test_a_winner_stays_open_when_the_clock_ends():
     assert position_exit(Action.LONG, bid=100, ask=100.1, stop=95, target=120, hold_minutes=59, max_hold_minutes=60) is None
     assert position_exit(Action.LONG, bid=100, ask=100.1, stop=95, target=120, hold_minutes=60, max_hold_minutes=60, entry=100) == "TIME"
     assert position_exit(Action.LONG, bid=101, ask=101.1, stop=95, target=120, hold_minutes=60, max_hold_minutes=60, entry=100) is None

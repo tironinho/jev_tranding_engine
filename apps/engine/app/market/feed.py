@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 import httpx
 import websockets
@@ -14,6 +17,30 @@ from app.market.parse import apply_market_message, parse_exchange_filters, parse
 from app.resilience.guards import CircuitBreaker, TokenBucket
 
 log = logging.getLogger(__name__)
+
+# Public /api/v3 from a cloud IP often returns 418 while the same client,
+# signed with the account key, is accepted. Probe once and keep the route.
+_SPOT_REST_CANDIDATES = (
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+    "https://data-api.binance.vision",
+)
+_MARKET_USER_AGENT = "Mozilla/5.0 (compatible; trading-engine/0.1)"
+
+
+def _signed_params(secret: str, params: dict) -> dict:
+    query = urlencode(params)
+    signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+    return {**params, "signature": signature}
+
+
+def _market_headers(api_key: str, mode: str) -> dict[str, str]:
+    headers = {"User-Agent": _MARKET_USER_AGENT, "Accept": "application/json"}
+    if api_key and mode in {"keyed", "signed"}:
+        headers["X-MBX-APIKEY"] = api_key
+    return headers
 
 
 class MarketFeed:
@@ -33,6 +60,9 @@ class MarketFeed:
         self._tasks: list[asyncio.Task] = []
         self._last_ui: dict[str, float] = {}
         self.geo_blocked = False
+        self._rest_mode = "plain"
+        self._rest_base_override: str | None = None
+        self._warned_418 = False
 
     def _futures(self) -> bool:
         return self.settings.market_type == "futures"
@@ -57,6 +87,8 @@ class MarketFeed:
         return f"{base}?streams={'/'.join(streams)}"
 
     def rest_base(self) -> str:
+        if self._rest_base_override:
+            return self._rest_base_override
         if self._futures():
             return self.settings.binance_futures_rest_url
         return self.settings.binance_spot_rest_url
@@ -133,6 +165,7 @@ class MarketFeed:
 
     async def _bootstrap(self) -> None:
         async with httpx.AsyncClient(timeout=10) as client:
+            await self._prepare_market_rest(client)
             await self._load_rules(client)
             for symbol in self.settings.symbol_list:
                 for interval, limit in (("1m", 300), ("5m", 200), ("15m", 200)):
@@ -190,12 +223,53 @@ class MarketFeed:
         if isinstance(payload, dict):
             self.rules = parse_exchange_filters(payload, set(self.settings.symbol_list))
 
-    async def _get(self, client: httpx.AsyncClient, path: str, params: dict):
+    async def _prepare_market_rest(self, client: httpx.AsyncClient) -> None:
+        if self._futures() or not self.settings.symbol_list:
+            return
+        bases: list[str] = []
+        for base in (self.settings.binance_spot_rest_url.rstrip("/"), *_SPOT_REST_CANDIDATES):
+            if base and base not in bases:
+                bases.append(base)
+        modes: list[str] = []
+        if self.settings.binance_api_key:
+            modes.append("keyed")
+        if self.settings.binance_api_key and self.settings.binance_api_secret:
+            modes.append("signed")
+        modes.append("plain")
+        symbol = self.settings.symbol_list[0]
+        for base in bases:
+            for mode in modes:
+                self._rest_mode = mode
+                self._rest_base_override = base
+                rows = await self._get(
+                    client,
+                    "/api/v3/klines",
+                    {"symbol": symbol, "interval": "1m", "limit": 2},
+                    probe=True,
+                )
+                if isinstance(rows, list) and rows:
+                    log.info("market history host %s mode %s", base, mode)
+                    return
+        self._rest_mode = "plain"
+        self._rest_base_override = None
+        log.warning("market history blocked; scores stay empty until klines return")
+
+    async def _get(self, client: httpx.AsyncClient, path: str, params: dict, *, probe: bool = False):
         if not self.bucket.take():
             await asyncio.sleep(self.bucket.retry_after_s())
             if not self.bucket.take():
                 return None
-        response = await client.get(f"{self.rest_base()}{path}", params=params)
+        query = dict(params)
+        if self._rest_mode == "signed" and self.settings.binance_api_secret:
+            query = _signed_params(
+                self.settings.binance_api_secret,
+                {**query, "timestamp": int(time.time() * 1000), "recvWindow": 5000},
+            )
+        response = await client.get(
+            f"{self.rest_base()}{path}",
+            params=query,
+            headers=_market_headers(self.settings.binance_api_key, self._rest_mode),
+        )
         if response.status_code == 451:
             if not self.geo_blocked:
                 log.warning(
@@ -205,7 +279,11 @@ class MarketFeed:
                 self.geo_blocked = True
             return None
         if response.status_code in {418, 429}:
-            self.breaker.record_failure()
+            if not probe:
+                self.breaker.record_failure()
+            if response.status_code == 418 and not self._warned_418:
+                self._warned_418 = True
+                log.warning("Binance HTTP 418 on %s", path)
             return None
         if response.status_code >= 400:
             log.info("binance %s %s -> %s", path, params.get("symbol", ""), response.status_code)

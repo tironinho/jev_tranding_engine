@@ -15,6 +15,7 @@ class Candle:
     volume: float
     closed: bool
     timeframe: str
+    taker_buy_volume: float | None = None
 
 
 @dataclass

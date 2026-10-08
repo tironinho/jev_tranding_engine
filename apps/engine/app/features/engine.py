@@ -85,6 +85,7 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["return_3m"] = ret(3)
     features["return_5m"] = ret(5)
     features["return_15m"] = ret(15)
+    features["return_60m"] = ret(60)
     features["return_since_close"] = (price / closes[-1] - 1) if closes and closes[-1] else None
 
     lookback = closes[-50:] if closes else []
@@ -180,6 +181,14 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
         features["range_60m"] = max(highs[-60:]) - min(lows[-60:])
     else:
         features["range_60m"] = None
+    span = features["range_60m"]
+    features["range_60m_frac"] = (span / price) if isinstance(span, (int, float)) and span > 0 and price > 0 else None
+
+    if candles_1m and candles_1m[-1].volume > 0 and candles_1m[-1].taker_buy_volume is not None:
+        ratio = (2 * candles_1m[-1].taker_buy_volume / candles_1m[-1].volume) - 1
+        features["taker_flow_1m"] = max(-1.0, min(1.0, ratio))
+    else:
+        features["taker_flow_1m"] = None
 
     window_start = as_of - timedelta(seconds=60)
     trades = [trade for trade in state.trades if window_start <= trade.timestamp <= as_of]

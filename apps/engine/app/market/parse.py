@@ -34,6 +34,7 @@ def parse_rest_klines(symbol: str, timeframe: str, rows: list) -> list[Candle]:
             continue
         if min(open_, high, low, close) <= 0 or high < low:
             continue
+        taker_buy = _f(row[9]) if len(row) > 9 else None
         candles.append(
             Candle(
                 open_time=_dt_ms(row[0]),
@@ -43,6 +44,7 @@ def parse_rest_klines(symbol: str, timeframe: str, rows: list) -> list[Candle]:
                 low=low,
                 close=close,
                 volume=volume,
+                taker_buy_volume=taker_buy,
                 closed=True,
                 timeframe=timeframe,
             )
@@ -166,6 +168,7 @@ def _apply_kline(state, data: dict) -> str | None:
             low=low,
             close=close,
             volume=volume or 0,
+            taker_buy_volume=_f(candle.get("V")),
             closed=closed,
             timeframe=timeframe,
         )

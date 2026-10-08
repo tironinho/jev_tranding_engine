@@ -8,28 +8,27 @@ from app.providers.jev.schemas import JevAssessment, JevMarketRequest, JevProvid
 _NOULS = (
     "trend_continuation_probability",
     "reversal_probability",
-    "buying_pressure_probability",
-    "selling_pressure_probability",
     "false_breakout_probability",
-    "volatility_expansion_probability",
-    "liquidity_sweep_probability",
 )
 
 _INSTRUCTIONS = {
-    "trend_continuation_probability": "The `baseline_action` side hits its profit target before its stop.",
-    "reversal_probability": "A reversal against `baseline_action` is likely on this snapshot.",
-    "buying_pressure_probability": "Aggressive buying pressure dominates `features` right now.",
-    "selling_pressure_probability": "Aggressive selling pressure dominates `features` right now.",
-    "false_breakout_probability": "The latest breakout or breakdown in `features` is likely false.",
-    "volatility_expansion_probability": "Volatility is likely to expand from the current `features`.",
-    "liquidity_sweep_probability": "A liquidity sweep is likely around the current price in `features`.",
+    "trend_continuation_probability": "The `baseline_action` side reaches the target before the stop.",
+    "reversal_probability": "Price reverses against `baseline_action`.",
+    "false_breakout_probability": "The `breakout` or `breakdown` flag is a false break.",
+}
+
+_UNUSED_NOULS = {
+    "buying_pressure_probability": 0.5,
+    "selling_pressure_probability": 0.5,
+    "volatility_expansion_probability": 0.5,
+    "liquidity_sweep_probability": 0.5,
 }
 
 
 class RealJevProvider:
     """POST a TypeSafe System One request to the configured URL. No host is built in.
 
-    The body is `model`, `state`, and one Noul question per veto probability.
+    The body is `model`, a small normalized `state`, and three Noul questions.
     Each `answers.<name>.noul` is copied into `JevAssessment`. The veto stays in our code.
     """
 
@@ -63,13 +62,7 @@ class RealJevProvider:
         payload = request.model_dump(mode="json")
         body = {
             "model": self.model,
-            "state": {
-                "symbol": payload["symbol"],
-                "market_type": payload["market_type"],
-                "baseline_action": payload.get("baseline_action"),
-                "baseline_confidence": payload.get("baseline_confidence"),
-                "features": payload.get("features") or {},
-            },
+            "state": _normalized_state(payload),
             "questions": {
                 name: {"type": "noul", "instructions": _INSTRUCTIONS[name]}
                 for name in _NOULS
@@ -95,6 +88,7 @@ class RealJevProvider:
         try:
             return JevAssessment.model_validate(
                 {
+                    **_UNUSED_NOULS,
                     **probabilities,
                     "provider": "real",
                     "is_mock": False,
@@ -107,6 +101,24 @@ class RealJevProvider:
             )
         except Exception as exc:
             raise JevProviderError(str(exc)) from exc
+
+
+def _normalized_state(payload: dict) -> dict[str, Any]:
+    """Scores and unitless features only. Dollar prices stay off the request."""
+    features = payload.get("features") or {}
+    frac = features.get("range_60m_frac")
+    return {
+        "symbol": payload.get("symbol"),
+        "market_type": payload.get("market_type"),
+        "baseline_action": payload.get("baseline_action"),
+        "baseline_confidence": payload.get("baseline_confidence"),
+        "baseline_scores": payload.get("baseline_scores") or {},
+        "taker_flow_1m": features.get("taker_flow_1m"),
+        "return_60m": features.get("return_60m"),
+        "range_60m": float(frac) if isinstance(frac, (int, float)) else None,
+        "breakout": features.get("breakout"),
+        "breakdown": features.get("breakdown"),
+    }
 
 
 def _noul_probabilities(body: object) -> dict[str, float]:

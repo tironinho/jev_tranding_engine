@@ -55,3 +55,35 @@ def test_flat_scores_do_not_trade():
     result = score_baseline(snapshot, eng.weights)
     assert result.action is Action.NO_TRADE
     assert BELOW_THRESHOLD in result.reason_codes
+
+
+def test_missing_flow_does_not_push_volume_long():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        ema_alignment=0,
+        ema_20_slope=0,
+        price_vs_ema20=0,
+        rsi=50,
+        roc=0,
+        volume_ratio=2.5,
+        orderflow_delta_ratio=None,
+        taker_flow_1m=None,
+        imbalance_10=0,
+        range_position=0.5,
+        breakout=False,
+        breakdown=False,
+    )
+    result = score_baseline(snapshot, eng.weights)
+    assert result.scores["volume_score"] is None
+    assert result.scores["orderflow_score"] is None
+    assert result.action is not Action.LONG
+
+
+def test_taker_flow_is_used_before_the_aggtrade_delta():
+    eng = engine()
+    snapshot, _book = long_snapshot(taker_flow_1m=-0.8, orderflow_delta_ratio=0.9, volume_ratio=1.5)
+    result = score_baseline(snapshot, eng.weights)
+    assert result.scores["orderflow_score"] is not None
+    assert result.scores["orderflow_score"] < 0
+    assert result.scores["volume_score"] is not None
+    assert result.scores["volume_score"] < 0

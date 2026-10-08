@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from app.features.engine import compute_features
 from app.market.parse import apply_market_message, parse_rest_klines
-from app.market.state import SymbolMarketState
+from app.market.state import Candle, SymbolMarketState
 
 
 def test_spot_book_ticker_without_event_name_refreshes_the_book():
@@ -52,7 +53,8 @@ def test_kline_close_is_the_snapshot_trigger():
                 "h": "11",
                 "l": "9",
                 "c": "10.5",
-                "v": "3",
+                "v": "10",
+                "V": "3",
                 "x": True,
             },
         }
@@ -60,6 +62,7 @@ def test_kline_close_is_the_snapshot_trigger():
     kind = apply_market_message(state, payload, datetime.fromtimestamp(1_700_000_060, tz=timezone.utc))
     assert kind == "kline_close_1m"
     assert state.candles["1m"][-1].closed is True
+    assert state.candles["1m"][-1].taker_buy_volume == 3
 
 
 def test_crossed_book_is_dropped():
@@ -80,3 +83,39 @@ def test_rest_klines_skip_garbage():
     )
     assert len(candles) == 1
     assert candles[0].close == 1.5
+    assert candles[0].taker_buy_volume is None
+
+
+def test_rest_kline_keeps_taker_buy_volume():
+    candles = parse_rest_klines(
+        "BTCUSDT",
+        "1m",
+        [[1_700_000_000_000, "100", "101", "99", "100", "10", 1_700_000_059_999, "1000", 20, "3"]],
+    )
+    assert candles[0].taker_buy_volume == 3
+
+
+def test_taker_flow_is_negative_when_selling_dominates():
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles = []
+    for index in range(61):
+        open_time = start + timedelta(minutes=index)
+        candles.append(
+            Candle(
+                open_time=open_time,
+                close_time=open_time + timedelta(minutes=1) - timedelta(milliseconds=1),
+                open=100,
+                high=100.2,
+                low=99.8,
+                close=100,
+                volume=10,
+                closed=True,
+                timeframe="1m",
+                taker_buy_volume=3,
+            )
+        )
+    state = SymbolMarketState("BTCUSDT", "spot")
+    state.candles["1m"] = candles
+    features, _quality = compute_features(state, candles[-1].close_time, 110)
+    assert features["taker_flow_1m"] == -0.4
+    assert abs(features["return_60m"] - 0.1) < 1e-9

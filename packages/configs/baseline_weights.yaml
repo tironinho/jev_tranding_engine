@@ -10,7 +10,7 @@ weights:
   orderflow: 0.20
   structure: 0.15
   volatility: 0.00
-  liquidity: 0.10
+  liquidity: 0.00
 min_abs_score: 0.45
 max_spread_bps: 8.0
 min_volume_ratio: 0.40
@@ -19,5 +19,7 @@ high_atr_normalized: 0.02
 slope_scale: 0.001
 price_vs_ema_scale: 0.005
 roc_scale: 0.004
+# 1% in an hour maps to the edge of [-1, 1]. Scale only, not a fitted edge.
+return_60m_scale: 0.01
 imbalance_strong: 0.25
 volume_z_strong: 1.0

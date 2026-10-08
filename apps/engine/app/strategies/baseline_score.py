@@ -32,7 +32,7 @@ class BaselineResult:
     action: Action
     confidence: float
     composite: float
-    scores: dict[str, float]
+    scores: dict[str, float | None]
     reason_codes: list[str]
     version: str
 
@@ -46,7 +46,7 @@ def _num(features: dict, name: str) -> float | None:
     return None
 
 
-def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> dict[str, float] | None:
+def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> dict[str, float | None] | None:
     """Map explainable features into [-1, 1]. Scale constants are not fitted edges."""
     features = snapshot.features
     alignment = _num(features, "ema_alignment")
@@ -66,18 +66,27 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
 
     slope_n = clip((slope or 0.0) / config.slope_scale, -1, 1)
     extension_n = clip((price_vs or 0.0) / config.price_vs_ema_scale, -1, 1)
-    trend = clip(0.5 * alignment + 0.3 * slope_n + 0.2 * extension_n, -1, 1)
+    hour = _num(features, "return_60m")
+    if hour is None:
+        trend = clip(0.5 * alignment + 0.3 * slope_n + 0.2 * extension_n, -1, 1)
+    else:
+        hour_n = clip(hour / config.return_60m_scale, -1, 1)
+        trend = clip(0.4 * alignment + 0.25 * slope_n + 0.15 * extension_n + 0.2 * hour_n, -1, 1)
 
     rsi_n = clip((rsi_value - 50) / 20, -1, 1)
     roc_n = clip((roc_value or 0.0) / config.roc_scale, -1, 1)
     momentum = clip(0.6 * rsi_n + 0.4 * roc_n, -1, 1)
 
-    flow = delta_ratio if delta_ratio is not None else 0.0
+    taker_flow = _num(features, "taker_flow_1m")
+    flow = taker_flow if taker_flow is not None else delta_ratio
     volume_mag = clip((volume_ratio - 1) / 1.5, -1, 1)
-    volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
-
-    imb = imbalance if imbalance is not None else 0.0
-    orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)
+    if flow is None:
+        volume = None
+        orderflow = None
+    else:
+        volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
+        imb = imbalance if imbalance is not None else 0.0
+        orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)
 
     structure = 0.0
     if range_pos is not None:
@@ -97,9 +106,9 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     if spread_bps >= config.max_spread_bps:
         liquidity = -1.0
     else:
-        liquidity = clip(1 - (spread_bps / config.max_spread_bps), -1, 1)
+        liquidity = 0.0
 
-    return {
+    scores: dict[str, float | None] = {
         "trend_score": trend,
         "momentum_score": momentum,
         "volume_score": volume,
@@ -108,18 +117,21 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         "volatility_score": volatility,
         "liquidity_score": liquidity,
     }
+    return scores
 
 
-def combine_scores(scores: dict[str, float], config: BaselineWeightConfig) -> float:
-    return (
-        config.trend * scores["trend_score"]
-        + config.momentum * scores["momentum_score"]
-        + config.volume * scores["volume_score"]
-        + config.orderflow * scores["orderflow_score"]
-        + config.structure * scores["structure_score"]
-        + config.volatility * scores["volatility_score"]
-        + config.liquidity * scores["liquidity_score"]
+def combine_scores(scores: dict[str, float | None], config: BaselineWeightConfig) -> float:
+    """Missing flow components are left out. Their weight is not given to the rest."""
+    terms = (
+        (config.trend, scores.get("trend_score")),
+        (config.momentum, scores.get("momentum_score")),
+        (config.volume, scores.get("volume_score")),
+        (config.orderflow, scores.get("orderflow_score")),
+        (config.structure, scores.get("structure_score")),
+        (config.volatility, scores.get("volatility_score")),
+        (config.liquidity, scores.get("liquidity_score")),
     )
+    return sum(weight * value for weight, value in terms if value is not None)
 
 
 def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> BaselineResult:
@@ -134,7 +146,7 @@ def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> Ba
     spread_bps = float(features.get("spread_bps") or 0)
     if spread_bps > config.max_spread_bps:
         reasons.append(BAD_SPREAD)
-    if scores["liquidity_score"] < 0:
+    if (scores.get("liquidity_score") or 0) < 0:
         reasons.append(LOW_LIQUIDITY)
     atr_norm = float(features.get("atr_normalized") or 0)
     if atr_norm >= config.extreme_atr_normalized:

@@ -90,7 +90,19 @@ async def test_real_jev_calls_only_the_configured_url():
         symbol="BTCUSDT",
         market_type="futures",
         timestamp=clock(),
-        features={"ema_alignment": 1},
+        features={
+            "ema_alignment": 1,
+            "price": 50000,
+            "range_60m": 500,
+            "range_60m_frac": 0.01,
+            "taker_flow_1m": -0.2,
+            "return_60m": 0.004,
+            "breakout": False,
+            "breakdown": True,
+        },
+        baseline_action="SHORT",
+        baseline_confidence=0.7,
+        baseline_scores={"trend_score": -0.4},
     )
     missing = RealJevProvider(prompt_version="jev_market_v1", base_url="", api_key="", model="m")
     with pytest.raises(Exception):
@@ -103,11 +115,7 @@ async def test_real_jev_calls_only_the_configured_url():
             names = (
                 "trend_continuation_probability",
                 "reversal_probability",
-                "buying_pressure_probability",
-                "selling_pressure_probability",
                 "false_breakout_probability",
-                "volatility_expansion_probability",
-                "liquidity_sweep_probability",
             )
             return {"model": "jev-1.13.0", "answers": {name: {"type": "noul", "noul": 0.8 if name.startswith("trend") else 0.2} for name in names}}
 
@@ -123,6 +131,16 @@ async def test_real_jev_calls_only_the_configured_url():
             assert json["model"] == "m"
             assert json["state"]["symbol"] == "BTCUSDT"
             assert json["questions"]["trend_continuation_probability"]["type"] == "noul"
+            assert set(json["questions"]) == {
+                "trend_continuation_probability",
+                "reversal_probability",
+                "false_breakout_probability",
+            }
+            assert "`baseline_action`" in json["questions"]["trend_continuation_probability"]["instructions"]
+            assert "features" not in json["state"]
+            assert "price" not in json["state"]
+            assert json["state"]["range_60m"] == 0.01
+            assert json["state"]["taker_flow_1m"] == -0.2
             assert "symbol" not in json
             return _Response()
 
@@ -193,6 +211,29 @@ def test_jev_veto_is_explicit():
     vetoed, _, veto_reasons = apply_jev_veto(Action.LONG, 0.8, unsure.model_copy(update={"false_breakout_probability": 0.9}), CombinationConfig(), True)
     assert vetoed is Action.NO_TRADE
     assert "JEV_FALSE_BREAKOUT" in veto_reasons
+
+
+def test_uncertain_continuation_does_not_confirm():
+    assessment = JevAssessment(
+        provider="mock",
+        is_mock=True,
+        provider_version="test",
+        prompt_version="jev_market_v1",
+        trend_continuation_probability=0.55,
+        reversal_probability=0.40,
+        false_breakout_probability=0.10,
+        buying_pressure_probability=0.1,
+        selling_pressure_probability=0.9,
+    )
+    blocked, _, reasons = apply_jev_veto(Action.LONG, 0.8, assessment, CombinationConfig(), False)
+    assert blocked is Action.NO_TRADE
+    assert "JEV_LOW_CONTINUATION" in reasons
+    clear = assessment.model_copy(update={"trend_continuation_probability": 0.65, "reversal_probability": 0.64})
+    kept, _, kept_reasons = apply_jev_veto(Action.LONG, 0.8, clear, CombinationConfig(), False)
+    assert kept is Action.LONG
+    assert "JEV_CONFIRM" in kept_reasons
+    assert "JEV_PRESSURE_DISAGREES" not in kept_reasons
+    assert "JEV_LIQUIDITY_SWEEP" not in kept_reasons
 
 
 @pytest.mark.asyncio

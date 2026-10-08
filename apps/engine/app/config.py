@@ -31,7 +31,8 @@ class BaselineWeightConfig:
     orderflow: float = 0.20
     structure: float = 0.15
     volatility: float = 0.0
-    liquidity: float = 0.10
+    liquidity: float = 0.0
+    return_60m_scale: float = 0.01
     min_abs_score: float = 0.45
     max_spread_bps: float = 8.0
     min_volume_ratio: float = 0.40
@@ -50,8 +51,8 @@ class CombinationConfig:
     jev_rule_version: str = "jev_veto_only_v1"
     openai_rule_version: str = "openai_jev_veto_only_v1"
     failure_policy: str = "NO_TRADE"
-    min_trend_continuation: float = 0.55
-    max_reversal: float = 0.50
+    min_trend_continuation: float = 0.65
+    max_reversal: float = 0.65
     max_false_breakout: float = 0.80
     min_pressure_edge: float = 0.05
     max_liquidity_sweep: float = 0.75
@@ -146,7 +147,8 @@ def baseline_from_file(payload: dict) -> BaselineWeightConfig:
         orderflow=float(weights.get("orderflow", 0.20)),
         structure=float(weights.get("structure", 0.15)),
         volatility=float(weights.get("volatility", 0.0)),
-        liquidity=float(weights.get("liquidity", 0.10)),
+        liquidity=float(weights.get("liquidity", 0.0)),
+        return_60m_scale=float(payload.get("return_60m_scale", 0.01)),
         min_abs_score=float(payload.get("min_abs_score", 0.45)),
         max_spread_bps=float(payload.get("max_spread_bps", 8.0)),
         min_volume_ratio=float(payload.get("min_volume_ratio", 0.40)),
@@ -168,8 +170,8 @@ def combination_from_file(payload: dict) -> CombinationConfig:
         jev_rule_version=payload.get("jev_rule_version", "jev_veto_only_v1"),
         openai_rule_version=payload.get("openai_rule_version", "openai_jev_veto_only_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
-        min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
-        max_reversal=float(payload.get("max_reversal", 0.50)),
+        min_trend_continuation=float(payload.get("min_trend_continuation", 0.65)),
+        max_reversal=float(payload.get("max_reversal", 0.65)),
         max_false_breakout=float(payload.get("max_false_breakout", 0.80)),
         min_pressure_edge=float(payload.get("min_pressure_edge", 0.05)),
         max_liquidity_sweep=float(payload.get("max_liquidity_sweep", 0.75)),

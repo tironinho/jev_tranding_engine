@@ -184,7 +184,7 @@ class BaselineJevStrategy:
                 "error": assessment.error,
             }
         )
-        required = _continuation_floor(snapshot, context)
+        required = _continuation_floor(snapshot, context, result.action)
         metadata["jev_required_continuation"] = required
         action, confidence, vetoes = apply_jev_veto(
             result.action,
@@ -371,7 +371,7 @@ class BaselineOpenAIJevStrategy:
                 prompt_version=record.prompt_version,
                 started=started,
             )
-        required = _continuation_floor(snapshot, context)
+        required = _continuation_floor(snapshot, context, result.action)
         metadata["jev_required_continuation"] = required
         action, confidence, vetoes = apply_jev_veto(
             result.action,
@@ -417,8 +417,8 @@ def _quality_gate(context, snapshot, metadata, started, strategy):
     )
 
 
-def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext) -> float:
-    configured = context.combination.min_trend_continuation
+def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext, action: Action) -> float:
+    configured = context.combination.min_short_continuation if action is Action.SHORT else context.combination.min_trend_continuation
     if context.risk is None or snapshot.price <= 0:
         return configured
     atr = snapshot.features.get("atr")

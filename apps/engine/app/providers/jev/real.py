@@ -15,6 +15,7 @@ _NOULS = (
 _ONCHAIN = (
     " onchain.support is oriented to baseline_action: positive supports that side. "
     "onchain.class is SUPPORTIVE, NEUTRAL, HOSTILE, or UNKNOWN. "
+    "UNKNOWN means on-chain does not vote and must not move the answer. "
     "onchain.evidence is the share of on-chain weight that had data. "
     "A missing field is unknown, not zero. valuation_stretch and activity are not a side."
 )

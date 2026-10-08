@@ -52,6 +52,7 @@ class CombinationConfig:
     openai_rule_version: str = "openai_jev_veto_only_v1"
     failure_policy: str = "NO_TRADE"
     min_trend_continuation: float = 0.55
+    min_short_continuation: float = 0.40
     extra_entry_min_continuation: float = 0.80
     max_reversal: float = 0.65
     max_false_breakout: float = 0.80
@@ -173,6 +174,7 @@ def combination_from_file(payload: dict) -> CombinationConfig:
         openai_rule_version=payload.get("openai_rule_version", "openai_jev_veto_only_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
+        min_short_continuation=float(payload.get("min_short_continuation", 0.40)),
         extra_entry_min_continuation=float(payload.get("extra_entry_min_continuation", 0.80)),
         max_reversal=float(payload.get("max_reversal", 0.65)),
         max_false_breakout=float(payload.get("max_false_breakout", 0.80)),

@@ -724,6 +724,24 @@ def test_onchain_support_is_oriented_for_the_jev_veto():
     assert long_state["intelligence"]["onchain"]["weights"]["exchange_flow"] == pytest.approx(0.35)
 
 
+def test_thin_onchain_evidence_does_not_label_the_side():
+    from app.intelligence.context import _onchain_view
+
+    raw = {
+        "support_long": -0.57,
+        "evidence": 0.2,
+        "stablecoin_liquidity": -0.57,
+        "exchange_flow": None,
+    }
+    view = _onchain_view(raw, "LONG")
+    assert view["class"] == "UNKNOWN"
+    assert view["support"] is None
+    assert view["evidence"] == 0.2
+    labeled = _onchain_view({**raw, "evidence": 1.0}, "LONG")
+    assert labeled["class"] == "HOSTILE"
+    assert labeled["support"] < 0
+
+
 def test_stale_onchain_does_not_vote():
     now = _now()
     old = datetime(2019, 4, 22, tzinfo=timezone.utc)

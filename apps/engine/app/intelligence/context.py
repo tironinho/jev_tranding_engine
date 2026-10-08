@@ -30,6 +30,8 @@ _ONCHAIN_WEIGHTS = {
     "valuation": 0.20,
     "stablecoin_liquidity": 0.20,
 }
+# One or two components are not enough to stamp a side. Below this the vote is withheld.
+_ONCHAIN_MIN_EVIDENCE = 0.5
 
 
 def build_context(
@@ -318,8 +320,10 @@ def _onchain_view(raw, baseline_action: str | None) -> dict | None:
         if key not in {"exchange_netflow_btc", "exchange_flow_pressure", "stablecoin_reserve", "support_long", "source", "source_timestamp"}
     }
     support_long = raw.get("support_long")
+    evidence = raw.get("evidence")
     side = (baseline_action or "").upper()
-    if not isinstance(support_long, (int, float)):
+    thin = not isinstance(evidence, (int, float)) or float(evidence) < _ONCHAIN_MIN_EVIDENCE
+    if not isinstance(support_long, (int, float)) or thin:
         view["support"] = None
         view["class"] = "UNKNOWN"
         return view

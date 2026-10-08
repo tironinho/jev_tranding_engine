@@ -36,7 +36,10 @@ def apply_jev_veto(
 ) -> tuple[Action, float, list[str]]:
     """Veto-only v1. Jev cannot create or flip a trade."""
     reasons: list[str] = []
-    required = config.min_trend_continuation if min_continuation is None else min_continuation
+    if min_continuation is None:
+        required = config.min_short_continuation if action is Action.SHORT else config.min_trend_continuation
+    else:
+        required = min_continuation
     if assessment.trend_continuation_probability < required:
         reasons.append(JEV_LOW_CONTINUATION)
     if assessment.reversal_probability > config.max_reversal:

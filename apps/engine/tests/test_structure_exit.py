@@ -118,7 +118,8 @@ def test_continuation_cut_stays_at_least_the_configured_floor():
         combination=CombinationConfig(),
         round_trip_fee=0.001,
     )
-    assert _continuation_floor(snapshot, context) == 0.55
+    assert _continuation_floor(snapshot, context, Action.LONG) == 0.55
+    assert _continuation_floor(snapshot, context, Action.SHORT) == 0.40
 
 
 def test_meta_hit_probability_rises_when_the_stop_is_tight():

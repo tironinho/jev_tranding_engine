@@ -278,6 +278,13 @@ def test_uncertain_continuation_does_not_confirm():
     assert "JEV_CONFIRM" in kept_reasons
     assert "JEV_PRESSURE_DISAGREES" not in kept_reasons
     assert "JEV_LIQUIDITY_SWEEP" not in kept_reasons
+    short = assessment.model_copy(update={"trend_continuation_probability": 0.44, "reversal_probability": 0.40})
+    confirmed, _, short_reasons = apply_jev_veto(Action.SHORT, 0.8, short, CombinationConfig(), False)
+    assert confirmed is Action.SHORT
+    assert "JEV_CONFIRM" in short_reasons
+    still_long, _, long_reasons = apply_jev_veto(Action.LONG, 0.8, short, CombinationConfig(), False)
+    assert still_long is Action.NO_TRADE
+    assert "JEV_LOW_CONTINUATION" in long_reasons
 
 
 @pytest.mark.asyncio

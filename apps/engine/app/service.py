@@ -188,6 +188,9 @@ class TradingEngine:
         if isinstance(self.fee_provider, BinanceFeeProvider):
             self.fee_provider.client = self._http
         self.balance.client = self._http
+        if self.settings.service_role == "account":
+            self._log("engine", "account gateway started")
+            return
         self.intelligence.bind(self._http)
         await self.intelligence.start()
         if self.postgres is not None:

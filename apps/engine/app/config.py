@@ -273,6 +273,9 @@ class Settings(BaseSettings):
     jev_failure_policy: str = "NO_TRADE"
     jev_timeout_s: float = 3.0
     engine_api_secret: str = ""
+    service_role: str = "engine"
+    balance_upstream_url: str = ""
+    balance_share_token: str = ""
     environment: str = "development"
     trading_engine_enabled: bool = True
     trading_live_enabled: bool = False
@@ -331,6 +334,16 @@ class Settings(BaseSettings):
     min_jev_data_quality: float = 0.70
     jev_intelligence_gate: str = "FALLBACK_TO_BASELINE"
 
+    @field_validator("service_role", mode="before")
+    @classmethod
+    def normalize_service_role(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return "engine"
+        role = value.strip().lower()
+        if role not in {"engine", "account"}:
+            return "engine"
+        return role
+
     @field_validator(
         "database_url",
         "binance_futures_rest_url",
@@ -347,6 +360,9 @@ class Settings(BaseSettings):
         "coinmetrics_api_key",
         "openai_base_url",
         "web_origin",
+        "service_role",
+        "balance_upstream_url",
+        "balance_share_token",
         "market_type",
         "snapshot_trigger",
         mode="before",

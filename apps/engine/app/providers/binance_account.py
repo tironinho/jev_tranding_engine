@@ -40,6 +40,8 @@ class BinanceBalanceProvider:
     async def _fetch(self) -> dict:
         settings = self.settings
         base = {"status": "UNAVAILABLE", "market_type": settings.market_type, **_EMPTY}
+        if settings.balance_upstream_url:
+            return await self._fetch_upstream(base)
         if not settings.binance_api_key or not settings.binance_api_secret:
             return {**base, "status": "NO_CREDENTIALS"}
         if self.client is None:
@@ -74,6 +76,32 @@ class BinanceBalanceProvider:
         if settings.market_type == "spot":
             return _spot(body, settings.market_type)
         return _futures(body, settings.market_type)
+
+    async def _fetch_upstream(self, base: dict) -> dict:
+        settings = self.settings
+        token = settings.balance_share_token or settings.engine_api_secret
+        if not token:
+            return {**base, "status": "NO_CREDENTIALS", "detail": "upstream token missing"}
+        if self.client is None:
+            return {**base, "status": "UNAVAILABLE", "detail": "client not started"}
+        url = f"{settings.balance_upstream_url.rstrip('/')}/api/binance/balance"
+        try:
+            response = await self.client.get(
+                url,
+                headers={"authorization": f"Bearer {token}"},
+                timeout=8,
+            )
+        except Exception as exc:
+            return {**base, "status": "ERROR", "detail": type(exc).__name__}
+        if response.status_code != 200:
+            return {**base, "status": "ERROR", "detail": f"HTTP {response.status_code}"}
+        try:
+            body = response.json()
+        except Exception:
+            return {**base, "status": "ERROR", "detail": "INVALID_JSON"}
+        if not isinstance(body, dict):
+            return {**base, "status": "ERROR", "detail": "INVALID_JSON"}
+        return body
 
 
 def _signed(secret: str, params: dict) -> dict:

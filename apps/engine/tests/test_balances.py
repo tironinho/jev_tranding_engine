@@ -125,6 +125,49 @@ async def test_margin_balance_reads_the_cross_account_not_the_market_host():
 
 
 @pytest.mark.asyncio
+async def test_upstream_balance_reads_the_account_gateway():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "gateway.example"
+        assert request.url.path == "/api/binance/balance"
+        assert request.headers["authorization"] == "Bearer share"
+        assert "X-MBX-APIKEY" not in request.headers
+        return httpx.Response(
+            200,
+            json={"status": "ok", "market_type": "margin", "asset": "USDT", "wallet": 12, "available": 10, "unrealized": None, "assets": []},
+        )
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(
+        balance_upstream_url="https://gateway.example",
+        balance_share_token="share",
+        binance_api_key="k",
+        binance_api_secret="s",
+        market_type="margin",
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        payload = await BinanceBalanceProvider(cfg, client=client).snapshot()
+    assert payload["wallet"] == 12
+    assert payload["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_account_role_does_not_open_the_market():
+    eng = engine(service_role="account")
+
+    async def boom():
+        raise AssertionError("market started")
+
+    eng.feed.start = boom
+    eng.intelligence.start = boom
+    eng.evolution.start = boom
+    await eng.start()
+    try:
+        assert eng.balance.client is not None
+    finally:
+        await eng.stop()
+
+
+@pytest.mark.asyncio
 async def test_balance_http_error_has_no_invented_wallet():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"code": -2015, "msg": "rejected"})

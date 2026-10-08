@@ -360,6 +360,21 @@ async def resume(body: ConfirmBody, request: Request) -> dict:
     return {"trading_enabled": True}
 
 
+def _balance_actor(request: Request) -> str:
+    settings: Settings = request.app.state.settings
+    header = request.headers.get("authorization", "")
+    token = settings.balance_share_token
+    if token and header == f"Bearer {token}":
+        return "balance"
+    return _actor(request)
+
+
+@router.get("/api/binance/balance")
+async def binance_balance(request: Request) -> dict:
+    _balance_actor(request)
+    return await _engine(request).balance.snapshot()
+
+
 @router.get("/api/audit")
 async def audit(request: Request) -> dict:
     _actor(request)

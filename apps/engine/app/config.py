@@ -313,6 +313,23 @@ class Settings(BaseSettings):
     human_approval_required: bool = True
     openai_research_model: str = ""
     openai_research_prompt_version: str = "evolution_researcher_v1"
+    external_intelligence_enabled: bool = True
+    coinalyze_enabled: bool = True
+    coinalyze_api_key: str = ""
+    coinalyze_base_host: str = "api.coinalyze.net"
+    coinalyze_requests_per_minute: float = 40
+    alternative_me_enabled: bool = True
+    alternative_me_base_host: str = "api.alternative.me"
+    cryptoquant_enabled: bool = False
+    cryptoquant_api_key: str = ""
+    cryptoquant_base_host: str = "api.cryptoquant.com"
+    coinmetrics_enabled: bool = False
+    coinmetrics_api_key: str = ""
+    coinmetrics_community: bool = True
+    coinmetrics_base_host: str = "community-api.coinmetrics.io"
+    jev_feature_set_version: str = "jev_feature_set_v1"
+    min_jev_data_quality: float = 0.70
+    jev_intelligence_gate: str = "FALLBACK_TO_BASELINE"
 
     @field_validator(
         "database_url",
@@ -321,6 +338,13 @@ class Settings(BaseSettings):
         "binance_account_rest_url",
         "binance_futures_ws_url",
         "binance_spot_ws_url",
+        "coinalyze_base_host",
+        "coinalyze_api_key",
+        "alternative_me_base_host",
+        "cryptoquant_base_host",
+        "cryptoquant_api_key",
+        "coinmetrics_base_host",
+        "coinmetrics_api_key",
         "openai_base_url",
         "web_origin",
         "market_type",

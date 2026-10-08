@@ -43,6 +43,7 @@ class StrategyContext:
     risk: RiskLimits | None = None
     round_trip_fee: float = 0.001
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    intelligence: dict | None = None
 
 
 def _decision(
@@ -124,7 +125,11 @@ class BaselineJevStrategy:
             baseline_action=result.action.value,
             baseline_confidence=result.confidence,
             baseline_scores=result.scores,
+            intelligence=context.intelligence,
         )
+        blocked = _quality_gate(context, snapshot, metadata, started, self.key)
+        if blocked is not None:
+            return blocked
         try:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
@@ -305,7 +310,11 @@ class BaselineOpenAIJevStrategy:
             baseline_confidence=result.confidence,
             baseline_scores=result.scores,
             market_state=state.model_dump(),
+            intelligence=context.intelligence,
         )
+        blocked = _quality_gate(context, snapshot, metadata, started, self.key)
+        if blocked is not None:
+            return blocked
         try:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
@@ -387,6 +396,26 @@ class BaselineOpenAIJevStrategy:
             prompt_version=record.prompt_version,
             started=started,
         )
+
+
+def _quality_gate(context, snapshot, metadata, started, strategy):
+    intel = context.intelligence
+    if not isinstance(intel, dict) or intel.get("gate") != "NO_TRADE":
+        return None
+    metadata["intelligence_gate"] = "NO_TRADE"
+    metadata["jev_context_hash"] = intel.get("context_hash")
+    return _decision(
+        context=context,
+        snapshot=snapshot,
+        strategy=strategy,
+        action=Action.NO_TRADE,
+        confidence=0,
+        reasons=["INTELLIGENCE_QUALITY"],
+        metadata=metadata,
+        model_version=None,
+        prompt_version=None,
+        started=started,
+    )
 
 
 def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext) -> float:

@@ -38,6 +38,7 @@ from app.domain.enums import (
 from app.domain.mathutil import utcnow
 from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, RiskDecision, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
+from app.intelligence.runner import IntelligenceRunner
 from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, execution_of
 from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed, stepped_stop
 from app.execution.slippage import SlippageConfig
@@ -153,6 +154,7 @@ class TradingEngine:
         self.jev = build_jev_provider(settings)
         self.fee_provider = BinanceFeeProvider(settings, self.fee_config) if settings.binance_api_key else ConfigFeeProvider(self.fee_config)
         self.balance = BinanceBalanceProvider(settings)
+        self.intelligence = IntelligenceRunner(settings)
         self._locks = {key: asyncio.Lock() for key in STRATEGY_KEYS}
         self.strategies = {
             "baseline": BaselineStrategy(),
@@ -186,6 +188,8 @@ class TradingEngine:
         if isinstance(self.fee_provider, BinanceFeeProvider):
             self.fee_provider.client = self._http
         self.balance.client = self._http
+        self.intelligence.bind(self._http)
+        await self.intelligence.start()
         if self.postgres is not None:
             ok = await self.postgres.connect()
             self.persistence_mode = "postgres" if ok else "postgres_error"
@@ -206,6 +210,7 @@ class TradingEngine:
         self._log("engine", "engine started")
 
     async def stop(self) -> None:
+        await self.intelligence.stop()
         await self.evolution.stop()
         await self.feed.stop()
         for task in list(self._background):
@@ -397,6 +402,7 @@ class TradingEngine:
                 risk=self.risk.limits,
                 round_trip_fee=self.fee_config.taker_fee_rate * 2,
             )
+            context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
             budget_ms = cfg.max_signal_age_ms
             if key == "baseline_jev":
                 budget_ms = max(budget_ms, 12_000)

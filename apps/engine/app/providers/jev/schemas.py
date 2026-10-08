@@ -16,6 +16,7 @@ class JevMarketRequest(BaseModel):
     baseline_confidence: float | None = None
     baseline_scores: dict[str, float] | None = None
     market_state: dict[str, Any] | None = None
+    intelligence: dict[str, Any] | None = None
     questions: list[str] = Field(
         default_factory=lambda: [
             "trend_continuation_probability",

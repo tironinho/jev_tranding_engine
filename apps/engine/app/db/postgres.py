@@ -9,6 +9,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import app.intelligence.models  # noqa: F401  registers intelligence tables on Base.metadata
+
 from app.db.models import (
     AuditLogRow,
     Base,

@@ -107,7 +107,7 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     """Scores and unitless features only. Dollar prices stay off the request."""
     features = payload.get("features") or {}
     frac = features.get("range_60m_frac")
-    return {
+    state = {
         "symbol": payload.get("symbol"),
         "market_type": payload.get("market_type"),
         "baseline_action": payload.get("baseline_action"),
@@ -119,6 +119,10 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "breakout": features.get("breakout"),
         "breakdown": features.get("breakdown"),
     }
+    intelligence = payload.get("intelligence")
+    if isinstance(intelligence, dict):
+        state["intelligence"] = intelligence
+    return state
 
 
 def _noul_probabilities(body: object) -> dict[str, float]:

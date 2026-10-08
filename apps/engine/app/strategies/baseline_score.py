@@ -61,7 +61,8 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     range_pos = _num(features, "range_position")
     atr_norm = _num(features, "atr_normalized")
     spread_bps = _num(features, "spread_bps")
-    if None in (alignment, rsi_value, volume_ratio, spread_bps, atr_norm):
+    # Spread and volume can be missing for a minute. Candles are the history.
+    if None in (alignment, rsi_value, atr_norm):
         return None
 
     slope_n = clip((slope or 0.0) / config.slope_scale, -1, 1)
@@ -79,11 +80,11 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
 
     taker_flow = _num(features, "taker_flow_1m")
     flow = taker_flow if taker_flow is not None else delta_ratio
-    volume_mag = clip((volume_ratio - 1) / 1.5, -1, 1)
-    if flow is None:
+    if volume_ratio is None or flow is None:
         volume = None
         orderflow = None
     else:
+        volume_mag = clip((volume_ratio - 1) / 1.5, -1, 1)
         volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
         imb = imbalance if imbalance is not None else 0.0
         orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)
@@ -103,7 +104,9 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     else:
         volatility = clip(1 - (atr_norm / config.high_atr_normalized), 0, 1)
 
-    if spread_bps >= config.max_spread_bps:
+    if spread_bps is None:
+        liquidity = None
+    elif spread_bps >= config.max_spread_bps:
         liquidity = -1.0
     else:
         liquidity = 0.0
@@ -140,7 +143,19 @@ def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> Ba
         return BaselineResult(Action.NO_TRADE, 0.0, 0.0, {}, [STALE_MARKET_DATA], config.version)
     scores = score_components(snapshot, config)
     if scores is None:
-        return BaselineResult(Action.NO_TRADE, 0.0, 0.0, {}, [INSUFFICIENT_HISTORY], config.version)
+        missing = [
+            name
+            for name in ("ema_alignment", "rsi", "atr_normalized")
+            if snapshot.features.get(name) is None
+        ]
+        return BaselineResult(
+            Action.NO_TRADE,
+            0.0,
+            0.0,
+            {},
+            [INSUFFICIENT_HISTORY, *missing],
+            config.version,
+        )
 
     features = snapshot.features
     spread_bps = float(features.get("spread_bps") or 0)

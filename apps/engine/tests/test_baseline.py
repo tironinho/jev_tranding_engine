@@ -38,6 +38,14 @@ def test_wide_spread_blocks():
     assert BAD_SPREAD in result.reason_codes
 
 
+def test_missing_spread_and_volume_do_not_wipe_the_candle_score():
+    eng = engine()
+    snapshot, _book = long_snapshot(spread_bps=None, volume_ratio=None)
+    result = score_baseline(snapshot, eng.weights)
+    assert "INSUFFICIENT_HISTORY" not in result.reason_codes
+    assert result.scores["trend_score"] is not None
+
+
 def test_flat_scores_do_not_trade():
     eng = engine()
     snapshot, _book = long_snapshot(

@@ -108,11 +108,15 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["ema_200_slope"] = ema_slope(closes, 200)
     ema20 = features["ema_20"]
     features["price_vs_ema20"] = (price / ema20 - 1) if ema20 else None
-    ema9, ema50, ema200 = features["ema_9"], features["ema_50"], features["ema_200"]
-    if None not in (ema9, ema20, ema50, ema200):
-        ordered = [ema9, ema20, ema50, ema200]
-        bull = all(ordered[i] > ordered[i + 1] for i in range(3))
-        bear = all(ordered[i] < ordered[i + 1] for i in range(3))
+    ordered = [
+        value
+        for value in (features["ema_9"], ema20, features["ema_50"], features["ema_200"])
+        if isinstance(value, (int, float))
+    ]
+    if len(ordered) >= 2:
+        steps = len(ordered) - 1
+        bull = all(ordered[i] > ordered[i + 1] for i in range(steps))
+        bear = all(ordered[i] < ordered[i + 1] for i in range(steps))
         if bull:
             features["ema_alignment"] = 1.0
         elif bear:
@@ -121,7 +125,7 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
             pairwise = 0
             for left, right in zip(ordered, ordered[1:], strict=False):
                 pairwise += 1 if left > right else -1
-            features["ema_alignment"] = pairwise / 3
+            features["ema_alignment"] = pairwise / steps
     else:
         features["ema_alignment"] = None
 

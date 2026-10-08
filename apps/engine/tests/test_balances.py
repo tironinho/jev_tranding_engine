@@ -218,6 +218,50 @@ async def test_account_curve_keeps_the_start_and_skips_unmarked_borrow_cash():
     assert [point["equity"] for point in track["points"]] == pytest.approx([19.79, marked])
 
 
+def test_account_sample_keeps_the_mark_the_coins_and_the_open_position():
+    eng = engine()
+    eng.states["BTCUSDT"].last_price = 100
+    eng.accounts.open_position(
+        strategy="baseline_jev",
+        symbol="BTCUSDT",
+        side=Action.SHORT,
+        quantity=0.02,
+        entry_price=100,
+        stop=103,
+        target=97,
+        opened_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
+        decision_id=uuid4(),
+        entry_fee=0.01,
+        initial_net_risk=0.06,
+        margin=0.4,
+        mode="live",
+    )
+    sample = eng.account_sample(
+        {
+            "status": "ok",
+            "market_type": "margin",
+            "wallet": 47.23,
+            "available": 19.61,
+            "margin_level": 1.74,
+            "assets": [
+                {"asset": "USDT", "free": 19.61, "total": 47.23},
+                {"asset": "BTC", "free": 0.0, "total": -0.02},
+                {"asset": "ETH", "free": 0.0, "total": 0.0},
+            ],
+        },
+        45.23,
+    )
+    assert sample["equity"] == 45.23
+    assert sample["available"] == 19.61
+    assert sample["margin_level"] == 1.74
+    assert sample["marks"] == {"BTCUSDT": 100}
+    assert [item["asset"] for item in sample["assets"]] == ["USDT", "BTC"]
+    assert sample["positions"][0]["symbol"] == "BTCUSDT"
+    assert sample["positions"][0]["side"] == "SHORT"
+    assert sample["positions"][0]["mode"] == "live"
+    assert "secret" not in sample
+
+
 def test_paper_book_and_open_trade_money():
     eng = engine()
     eng.states["BTCUSDT"].last_price = 105

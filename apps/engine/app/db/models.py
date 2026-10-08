@@ -187,6 +187,19 @@ class FutureLabelRow(Base):
     payload: Mapped[dict] = mapped_column(JSONB)
 
 
+class AccountSampleRow(Base):
+    """One marked reading of the real margin account. The curve is a view of this table."""
+
+    __tablename__ = "account_samples"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_id)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    equity: Mapped[float] = mapped_column(Float)
+    wallet: Mapped[float | None] = mapped_column(Float, nullable=True)
+    available: Mapped[float | None] = mapped_column(Float, nullable=True)
+    margin_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB)
+
+
 class EngineEventRow(Base):
     __tablename__ = "engine_events"
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_id)

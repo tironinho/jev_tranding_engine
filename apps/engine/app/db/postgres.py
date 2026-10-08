@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import app.intelligence.models  # noqa: F401  registers intelligence tables on Base.metadata
 
 from app.db.models import (
+    AccountSampleRow,
     AuditLogRow,
     Base,
     ConsensusRow,
@@ -208,26 +209,57 @@ class PostgresMirror:
             )
         )
 
+    async def save_account_sample(self, sample: dict) -> None:
+        equity = sample.get("equity")
+        if not isinstance(equity, (int, float)):
+            return
+        wallet = sample.get("wallet")
+        available = sample.get("available")
+        level = sample.get("margin_level")
+        await self._write(
+            AccountSampleRow(
+                timestamp=datetime.now(timezone.utc),
+                equity=float(equity),
+                wallet=float(wallet) if isinstance(wallet, (int, float)) else None,
+                available=float(available) if isinstance(available, (int, float)) else None,
+                margin_level=float(level) if isinstance(level, (int, float)) else None,
+                payload=sample,
+            )
+        )
+
     async def load_balance_points(self) -> list[dict]:
         if not self.factory or not self.healthy:
             return []
         try:
             async with self.factory() as session:
-                rows = (
+                samples = (
+                    await session.execute(
+                        select(AccountSampleRow).order_by(AccountSampleRow.timestamp.desc()).limit(2000)
+                    )
+                ).scalars().all()
+                events = (
                     await session.execute(
                         select(EngineEventRow)
                         .where(EngineEventRow.kind == "balance")
-                        .order_by(EngineEventRow.timestamp.asc())
+                        .order_by(EngineEventRow.timestamp.desc())
                         .limit(2000)
                     )
                 ).scalars().all()
             points = []
-            for row in rows:
-                body = row.payload or {}
-                equity = body.get("equity")
+            seen: set[str] = set()
+            for row in samples:
+                stamp = row.timestamp.isoformat()
+                seen.add(stamp)
+                points.append({"t": stamp, "wallet": float(row.equity)})
+            for row in events:
+                stamp = row.timestamp.isoformat()
+                if stamp in seen:
+                    continue
+                equity = (row.payload or {}).get("equity")
                 if isinstance(equity, (int, float)):
-                    points.append({"t": row.timestamp.isoformat(), "wallet": float(equity)})
-            return points
+                    points.append({"t": stamp, "wallet": float(equity)})
+            points.sort(key=lambda point: point["t"])
+            return points[-2000:]
         except Exception as exc:
             self.last_error = str(exc)
             log.warning("balance history load failed: %s", exc)

@@ -1150,7 +1150,7 @@ class TradingEngine:
             if then.tzinfo is None:
                 then = then.replace(tzinfo=timezone.utc)
             same = abs(float(previous["wallet"]) - float(value)) < 0.005
-            if same and (now - then).total_seconds() < 900:
+            if same and (now - then).total_seconds() < 60:
                 self._last_wallet = float(value)
                 return
         point = {"t": now.isoformat(), "wallet": float(value)}
@@ -1158,11 +1158,55 @@ class TradingEngine:
         self.balance_points = self.balance_points[-2000:]
         self._last_wallet = float(value)
         if self.postgres and self.postgres.healthy:
-            await self.postgres.save_event(
-                "balance",
-                "equity",
-                {"equity": float(value), "wallet": float(wallet) if isinstance(wallet, (int, float)) else None},
+            await self.postgres.save_account_sample(self.account_sample(payload, float(value)))
+
+    def account_sample(self, payload: dict, equity: float) -> dict:
+        """Everything needed to rebuild this reading later. No secrets."""
+        assets = []
+        marks: dict[str, float] = {}
+        for asset in payload.get("assets") or []:
+            name = str(asset.get("asset") or "")
+            total = float(asset.get("total") or 0)
+            free = asset.get("free")
+            free_value = float(free) if isinstance(free, (int, float)) else None
+            if abs(total) < 1e-8 and (free_value is None or abs(free_value) < 1e-8):
+                continue
+            assets.append({"asset": name, "free": free_value, "total": total})
+            if name != "USDT" and abs(total) >= 1e-8:
+                state = self.states.get(f"{name}USDT")
+                if state is not None and isinstance(state.last_price, (int, float)):
+                    marks[f"{name}USDT"] = float(state.last_price)
+        positions = []
+        for row in self.positions_payload():
+            positions.append(
+                {
+                    "strategy": row.get("strategy"),
+                    "symbol": row.get("symbol"),
+                    "side": row.get("side"),
+                    "quantity": row.get("quantity"),
+                    "entry": row.get("entry"),
+                    "mark": row.get("mark"),
+                    "notional": row.get("notional"),
+                    "margin": row.get("margin"),
+                    "leverage": row.get("leverage"),
+                    "mode": row.get("mode"),
+                    "unrealized": row.get("unrealized"),
+                    "target_pnl": row.get("target_pnl"),
+                    "stop_pnl": row.get("stop_pnl"),
+                    "opened_at": row.get("opened_at"),
+                }
             )
+        return {
+            "equity": equity,
+            "wallet": payload.get("wallet"),
+            "available": payload.get("available"),
+            "unrealized": payload.get("unrealized"),
+            "margin_level": payload.get("margin_level"),
+            "market_type": payload.get("market_type"),
+            "assets": assets,
+            "marks": marks,
+            "positions": positions,
+        }
 
     async def _balance_loop(self) -> None:
         while True:

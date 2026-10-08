@@ -173,6 +173,8 @@ class TradingEngine:
         self.evolution = EvolutionService(settings)
         self.evolution.bind_trades(self._all_trades)
         self._evaluating: set[str] = set()
+        self._close_batch: list[tuple[str, datetime, str]] = []
+        self._close_flush: asyncio.Task | None = None
         self._quotes: dict[str, list[dict]] = {}
         self._quotes_dirty: set[str] = set()
         self._quote_tasks: dict[str, asyncio.Task] = {}
@@ -327,9 +329,22 @@ class TradingEngine:
             self._log("queue", f"{symbol} {QUEUE_SATURATED}")
             return
         self._evaluating.add(symbol)
-        task = asyncio.create_task(self.evaluate_symbol(symbol, as_of, trigger))
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
+        self._close_batch.append((symbol, as_of, trigger))
+        if self._close_flush is None or self._close_flush.done():
+            self._close_flush = asyncio.create_task(self._flush_closes())
+            self._background.add(self._close_flush)
+            self._close_flush.add_done_callback(self._background.discard)
+
+    async def _flush_closes(self) -> None:
+        """Candle closes of the same minute arrive a few messages apart. Start them together."""
+        await asyncio.sleep(0.3)
+        while self._close_batch:
+            batch = self._close_batch
+            self._close_batch = []
+            await asyncio.gather(
+                *(self.evaluate_symbol(symbol, as_of, trigger) for symbol, as_of, trigger in batch),
+                return_exceptions=True,
+            )
 
     async def evaluate_symbol(self, symbol: str, as_of: datetime, trigger: str) -> list[StrategyDecision]:
         try:

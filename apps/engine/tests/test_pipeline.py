@@ -266,6 +266,28 @@ async def test_two_symbols_ask_jev_at_the_same_time():
 
 
 @pytest.mark.asyncio
+async def test_candle_closes_in_one_burst_start_together():
+    eng = engine()
+    inflight = 0
+    max_inflight = 0
+
+    async def _fake(symbol, as_of, trigger):
+        nonlocal inflight, max_inflight
+        inflight += 1
+        max_inflight = max(max_inflight, inflight)
+        await asyncio.sleep(0.05)
+        inflight -= 1
+        eng._evaluating.discard(symbol)
+
+    eng.evaluate_symbol = _fake
+    moment = clock()
+    await eng.on_snapshot_trigger("BTCUSDT", moment, "kline_close_1m")
+    await eng.on_snapshot_trigger("ETHUSDT", moment, "kline_close_1m")
+    await eng._close_flush
+    assert max_inflight == 2
+
+
+@pytest.mark.asyncio
 async def test_jev_review_shows_the_state_that_was_sent_and_the_answer():
     eng = engine()
     snapshot, book = long_snapshot()

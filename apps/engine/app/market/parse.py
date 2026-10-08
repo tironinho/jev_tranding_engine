@@ -211,6 +211,10 @@ def parse_exchange_filters(payload: dict, symbols: set[str]) -> dict[str, dict[s
                 step = _f(filt.get("stepSize"))
                 if step:
                     rules["step_size"] = step
+            if filt.get("filterType") in {"MIN_NOTIONAL", "NOTIONAL"}:
+                minimum = _f(filt.get("minNotional") or filt.get("notional"))
+                if minimum:
+                    rules["min_notional"] = minimum
         if rules:
             found[name] = rules
     return found

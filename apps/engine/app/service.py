@@ -946,7 +946,9 @@ class TradingEngine:
         account = self.accounts.accounts[strategy]
         marks = {snapshot.symbol: snapshot.price}
         self.accounts.roll_day(strategy, snapshot.timestamp, marks)
-        step = self.feed.rules.get(snapshot.symbol, {}).get("step_size")
+        rules = self.feed.rules.get(snapshot.symbol, {})
+        step = rules.get("step_size")
+        min_notional = rules.get("min_notional")
         return RiskContext(
             equity=account.equity(marks),
             cash=account.cash,
@@ -965,6 +967,7 @@ class TradingEngine:
             live_armed=self.settings.live_armed,
             market_type=self.settings.market_type,
             step_size=step,
+            min_notional=min_notional,
             rules_required=live,
         )
 

@@ -28,7 +28,7 @@ from app.domain.enums import (
     Action,
     MarketType,
 )
-from app.domain.mathutil import round_down_to_step
+from app.domain.mathutil import round_down_to_step, round_up_to_step
 from app.domain.schemas import MarketSnapshot, RiskDecision, StrategyDecision, TradeEconomics
 from app.execution.slippage import SlippageConfig, simulate_fill
 from app.market.state import OrderBook
@@ -60,6 +60,7 @@ class RiskContext:
     live_armed: bool
     market_type: str
     step_size: float | None = None
+    min_notional: float | None = None
     rules_required: bool = False
     last_stop_at: datetime | None = None
 
@@ -180,8 +181,13 @@ class RiskEngine:
                 return self._reject(decision, [INSUFFICIENT_LIQUIDITY])
             entry = preview.estimated_fill_price
         qty = preview.filled_quantity
-        if entry * abs(qty) < self.limits.min_order_notional:
-            return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL])
+        floor = self._min_notional(context)
+        if entry * abs(qty) + 1e-9 < floor:
+            lifted = self._lift_to_notional(floor, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book)
+            if lifted is None:
+                return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL])
+            preview, entry = lifted
+            qty = preview.filled_quantity
         # Re-plan geometry off the actual estimated entry so stop distance matches the fill.
         geometry = plan_geometry(decision.action, entry, snapshot.features, self.limits)
         if isinstance(geometry, str):
@@ -267,6 +273,30 @@ class RiskEngine:
         if preview.filled_quantity <= 0 or preview.estimated_fill_price <= 0:
             return None
         return preview
+
+    def _min_notional(self, context: RiskContext) -> float:
+        floor = self.limits.min_order_notional
+        if context.min_notional and context.min_notional > floor:
+            floor = context.min_notional
+        return floor
+
+    def _lift_to_notional(self, floor, entry, stop, context, entry_rate, exit_rate, side, snapshot, book):
+        if entry <= 0:
+            return None
+        needed = floor / entry
+        if context.step_size:
+            needed = round_up_to_step(needed, context.step_size)
+        lifted = self._fit_to_capital(needed, entry, context, entry_rate)
+        if lifted <= 0 or entry * lifted + 1e-9 < floor:
+            return None
+        price_risk = abs(entry - stop) * lifted
+        fee_risk = entry * lifted * entry_rate + abs(stop) * lifted * exit_rate
+        if price_risk + fee_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
+            return None
+        preview = self._fill(side, lifted, snapshot, book)
+        if preview is None or entry * preview.filled_quantity + 1e-9 < floor:
+            return None
+        return preview, preview.estimated_fill_price
 
     def _leverage(self) -> float:
         return max(self.limits.max_leverage, 0.0)

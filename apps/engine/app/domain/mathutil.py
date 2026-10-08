@@ -25,6 +25,13 @@ def round_down_to_step(value: float, step: float) -> float:
     return round(steps * step, 12)
 
 
+def round_up_to_step(value: float, step: float) -> float:
+    if step <= 0:
+        return value
+    steps = math.ceil((value / step) - 1e-9)
+    return round(steps * step, 12)
+
+
 def bps(fraction: float) -> float:
     return fraction * 10_000
 

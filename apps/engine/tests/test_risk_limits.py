@@ -46,6 +46,44 @@ def _decision_from_snapshot(eng, snapshot):
     return decisions
 
 
+def test_small_account_clears_the_exchange_minimum_and_not_the_old_fifty():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    from app.domain.schemas import StrategyDecision
+    from app.domain.enums import OperatingMode, ORDER_BELOW_MIN_NOTIONAL
+
+    decision = StrategyDecision(
+        correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        strategy="baseline",
+        symbol="BTCUSDT",
+        timestamp=snapshot.timestamp,
+        action=Action.LONG,
+        confidence=0.8,
+        reason_codes=["TREND_UP"],
+        mode=OperatingMode.PAPER,
+    )
+    eng.risk.update_limits(min_order_notional=50)
+    blocked = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(equity=19.79, cash=19.79, day_start_equity=19.79),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert ORDER_BELOW_MIN_NOTIONAL in blocked.reject_reasons
+    eng.risk.update_limits(min_order_notional=5)
+    opened = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(equity=19.79, cash=19.79, day_start_equity=19.79),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert opened.accepted
+
+
 def test_drawdown_and_daily_loss_reject():
     eng = engine()
     snapshot, book = long_snapshot()

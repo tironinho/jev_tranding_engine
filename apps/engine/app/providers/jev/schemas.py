@@ -14,7 +14,7 @@ class JevMarketRequest(BaseModel):
     features: dict[str, Any]
     baseline_action: str | None = None
     baseline_confidence: float | None = None
-    baseline_scores: dict[str, float] | None = None
+    baseline_scores: dict[str, float | None] | None = None
     market_state: dict[str, Any] | None = None
     intelligence: dict[str, Any] | None = None
     questions: list[str] = Field(

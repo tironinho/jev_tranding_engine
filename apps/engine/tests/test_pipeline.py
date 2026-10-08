@@ -237,6 +237,20 @@ async def test_abstain_does_not_call_jev_and_does_not_open():
 
 
 @pytest.mark.asyncio
+async def test_a_long_with_no_volume_score_still_asks_jev():
+    eng = engine()
+    snapshot, book = long_snapshot(volume_ratio=None, taker_flow_1m=None, orderflow_delta_ratio=None)
+    attach_book(eng, book)
+    for cfg in eng.strategy_settings.values():
+        cfg.mode = OperatingMode.SHADOW
+    decisions = await eng.evaluate_snapshot(snapshot)
+    jev = next(item for item in decisions if item.strategy == "baseline_jev")
+    assert "STRATEGY_ERROR" not in jev.reason_codes
+    assert jev.metadata.get("jev_effect") in {"confirm", "veto"}
+    assert eng.store.jev_calls
+
+
+@pytest.mark.asyncio
 async def test_two_symbols_ask_jev_at_the_same_time():
     eng = engine()
     first, book = long_snapshot()

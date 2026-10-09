@@ -23,11 +23,10 @@ def reconcile(balance: dict, positions: list[dict], marks: dict, rules: dict) ->
         # Interest is a liability separate from strategy principal.
         delta = actual + float(row.get("interest") or 0) - expected
         value = abs(delta * price) if price else None
-        step = float((rules.get(symbol) or {}).get("step_size") or 1e-8)
         minimum = float((rules.get(symbol) or {}).get("min_notional") or 5)
         status = "CASH" if asset == "USDT" else (
             "UNPRICED" if price is None else
-            "MATCHED" if abs(delta) < step else
+            "MATCHED" if abs(delta) <= 1e-12 else
             "RESIDUAL" if value < minimum else "MISMATCH")
         rows.append({**row, "symbol": symbol, "mark": price, "net_quantity": actual,
                      "value_usdt": actual * price if price else None,

@@ -4,6 +4,8 @@ import { EngineStatus, Panel } from "@/components/Shell";
 import { StrategyCard, type StrategyCardData } from "@/components/StrategyCard";
 import { SymbolTicker } from "@/components/SymbolTicker";
 import { engineFetch } from "@/lib/engine";
+import { DecisionDiagnostics } from "@/components/DecisionDiagnostics";
+import { ExchangeExposure, type ExchangeState } from "@/components/ExchangeExposure";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +29,10 @@ type Overview = {
 };
 
 export default async function OverviewPage() {
-  const [overview, decisions] = await Promise.all([
+  const [overview, decisions, positions] = await Promise.all([
     engineFetch<Overview>("/api/overview"),
-    engineFetch<{ rows: Parameters<typeof DecisionTable>[0]["rows"] }>("/api/decisions?limit=12"),
+    engineFetch<{ rows: Parameters<typeof DecisionTable>[0]["rows"] }>("/api/decisions?limit=200"),
+    engineFetch<{ exchange: ExchangeState }>("/api/positions"),
   ]);
   if (!overview.ok || !overview.data) {
     return (
@@ -45,6 +48,7 @@ export default async function OverviewPage() {
   return (
     <div className="grid gap-4">
       <EngineStatus status={data.status} />
+      <DecisionDiagnostics rows={decisions.ok ? decisions.data?.rows ?? [] : null} />
       <div className="grid gap-3 lg:grid-cols-2">
         <BinanceBalancePanel balance={data.binance_balance} track={data.account} />
         <RealAccountPanel balance={data.binance_balance} />
@@ -62,8 +66,9 @@ export default async function OverviewPage() {
       <Panel title="POSITIONS">
         <PositionTable rows={data.positions} />
       </Panel>
+      <Panel title="CONTA BINANCE · TODAS AS EXPOSIÇÕES E DÍVIDAS"><ExchangeExposure data={positions.ok ? positions.data?.exchange : undefined} /></Panel>
       <Panel title="LATEST DECISIONS">
-        <DecisionTable rows={decisions.ok ? (decisions.data?.rows ?? []) : null} />
+        <DecisionTable rows={decisions.ok ? (decisions.data?.rows ?? []).slice(0, 12) : null} />
       </Panel>
     </div>
   );

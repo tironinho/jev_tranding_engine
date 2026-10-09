@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -26,6 +27,7 @@ from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevPr
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
+from app.risk.plans import candidate_plans, score_probability
 
 
 @dataclass
@@ -132,6 +134,8 @@ class BaselineJevStrategy:
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return blocked
+        if context.risk and context.risk.dynamic_rr_enabled:
+            return await _dynamic_decision(context, snapshot, result, metadata, started)
         try:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
@@ -198,6 +202,52 @@ class BaselineJevStrategy:
             prompt_version=assessment.prompt_version,
             started=started,
         )
+
+
+async def _dynamic_decision(context, snapshot, result, metadata, started):
+    plans = candidate_plans(snapshot, result.action, context.risk, context.round_trip_fee / 2, context.intelligence)
+    metadata.update(candidate_plans=plans, combination_rule_version="jev_dynamic_rr_v1",
+                    probability_status="UNCALIBRATED")
+    metadata.pop("jev_trade_plan", None)
+    eligible = [p for p in plans if p["eligible"]][-3:]
+
+    async def assess(plan):
+        request = _jev_request(context, snapshot, result).model_copy(update={"trade_plan": dict(plan)})
+        try:
+            assessment = await asyncio.wait_for(context.jev.evaluate_market_state(request), timeout=8)
+        except Exception as exc:
+            plan.update(eligible=False, reason="JEV_UNAVAILABLE")
+            context.artifacts.append({"kind": "jev", "plan_id": plan["plan_id"],
+                "request": request.model_dump(mode="json"), "error": str(exc)})
+            return None
+        context.artifacts.append({"kind": "jev", "plan_id": plan["plan_id"],
+            "request": request.model_dump(mode="json"), "response": assessment.model_dump(mode="json"),
+            "latency_ms": assessment.latency_ms, "provider_version": assessment.provider_version,
+            "is_mock": assessment.is_mock, "error": assessment.error})
+        plan.update(score_probability(plan, assessment.trend_continuation_probability, context.risk.probability_haircut))
+        configured = context.combination.min_short_continuation if result.action is Action.SHORT else context.combination.min_trend_continuation
+        required = max(configured, plan["break_even_probability"] + context.risk.probability_haircut)
+        action, confidence, reasons = apply_jev_veto(result.action, result.confidence, assessment,
+            context.combination, breakout=_class_has_break(result), min_continuation=required)
+        accepted = action is not Action.NO_TRADE and plan["expected_net_r"] > 0
+        plan.update(eligible=accepted, reason="JEV_CONFIRM" if accepted else ",".join(reasons), required_probability=required)
+        return (plan, assessment, confidence) if accepted else None
+
+    evaluated = await asyncio.gather(*(assess(plan) for plan in eligible))
+    choices = [choice for choice in evaluated if choice is not None]
+    if not choices:
+        reason = "NO_ECONOMIC_PLAN" if not eligible else "NO_POSITIVE_EXPECTANCY_PLAN"
+        metadata["jev_effect"] = "veto" if eligible else "not_called"
+        return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=Action.NO_TRADE,
+            confidence=result.confidence, reasons=[reason, *result.reason_codes], metadata=metadata,
+            model_version=result.version, prompt_version=None, started=started)
+    plan, assessment, confidence = max(choices, key=lambda item: item[0]["expected_net_r"])
+    metadata.update(jev_trade_plan=dict(plan), selected_plan_id=plan["plan_id"],
+                    jev_stress_probability=plan["stress_probability"], jev_required_continuation=plan["required_probability"])
+    _remember_jev(metadata, assessment, "confirm")
+    return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=result.action,
+        confidence=confidence, reasons=["JEV_CONFIRM", "DYNAMIC_PLAN_SELECTED", *result.reason_codes], metadata=metadata,
+        model_version=assessment.provider_version, prompt_version=assessment.prompt_version, started=started)
 
 
 class BaselineOpenAIJevStrategy:

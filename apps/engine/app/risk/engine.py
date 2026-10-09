@@ -66,6 +66,7 @@ class RiskContext:
     margin_level: float | None = None
     rules_required: bool = False
     last_stop_at: datetime | None = None
+    open_stop_risk: float = 0.0
 
 
 @dataclass
@@ -189,7 +190,9 @@ class RiskEngine:
 
         entry_rate = rate_for(self._entry_liquidity(), fees.maker, fees.taker)
         exit_rate = rate_for(self._exit_liquidity(), fees.maker, fees.taker)
-        exit_slip = entry_guess * (max(probe.slippage_bps, 0) / 10_000)
+        stress_bps = float((plan or {}).get("stress_bps", 0))
+        interest_per_unit = float((plan or {}).get("interest_estimate_per_unit", 0))
+        exit_slip = entry_guess * (max(probe.slippage_bps, stress_bps, 0) / 10_000) + interest_per_unit
         ideal = size_quantity(
             equity=context.equity,
             risk_fraction=min(self.limits.risk_per_trade, self.limits.max_risk_per_trade) * _size_scale(decision),
@@ -245,12 +248,14 @@ class RiskEngine:
         funding_rate = snapshot.features.get("funding_rate")
         funding_rate_f = float(funding_rate) if isinstance(funding_rate, (int, float)) else None
         funding = funding_cashflow(decision.action, funding_rate_f, notional, periods)
+        if context.market_type == MarketType.MARGIN.value:
+            funding = -interest_per_unit * qty
         extra_spread = 0.0
         extra_slip = 0.0
         included = preview.model in {SlippageModelNameValue.ORDERBOOK, SlippageModelNameValue.SPREAD}
         if preview.model == "fixed_bps":
             included = False
-        slip_per_unit = entry * max(preview.slippage_bps, 0) / 10_000
+        slip_per_unit = entry * max(preview.slippage_bps, stress_bps, 0) / 10_000
         economics = compute_trade_economics(
             side=decision.action,
             entry=entry,
@@ -275,8 +280,11 @@ class RiskEngine:
             )
         if economics.net_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
             return self._reject(decision, [MAX_RISK_PER_TRADE], economics=economics)
+        if context.open_stop_risk + economics.net_risk > context.equity * self.limits.max_portfolio_stop_risk + 1e-6:
+            return self._reject(decision, ["MAX_PORTFOLIO_STOP_RISK"], economics=economics,
+                                details={"open_stop_risk": context.open_stop_risk})
 
-        probability = decision.metadata.get("jev_continuation")
+        probability = decision.metadata.get("jev_stress_probability", decision.metadata.get("jev_continuation"))
         if isinstance(probability, (int, float)):
             expected = probability * economics.net_reward - (1 - probability) * economics.net_risk
             if expected <= 0:

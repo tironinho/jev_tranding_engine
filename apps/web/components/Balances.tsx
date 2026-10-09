@@ -103,7 +103,7 @@ export function AccountEvolution({ track }: { track: AccountTrack | null | undef
 }
 
 function held(item: { total: number; free?: number | null }) {
-  return Math.abs(item.total) >= 0.0001 || Math.abs(item.free ?? 0) >= 0.0001;
+  return item.total !== 0 || (item.free ?? 0) !== 0;
 }
 
 export function BinanceBalancePanel({ balance, track }: { balance: BinanceBalance | null | undefined; track?: AccountTrack | null }) {
@@ -141,7 +141,7 @@ export function BinanceBalancePanel({ balance, track }: { balance: BinanceBalanc
           </dl>
           {others.length ? (
             <div className="border-t border-line pt-2 font-mono text-[11px] text-mute">
-              {others.map((item) => `${item.asset} ${num(item.total, 4)}`).join(" · ")}
+              {others.map((item) => `${item.asset} ${num(item.total, 8)}`).join(" · ")}
             </div>
           ) : null}
         </div>
@@ -173,8 +173,8 @@ export function RealAccountPanel({ balance }: { balance: BinanceBalance | null |
               {rows.map((row) => (
                 <tr key={row.asset} className="border-b border-line/70 font-mono">
                   <td className="px-2 py-2">{row.asset}</td>
-                  <td className="px-2 py-2">{num(row.free, row.asset === "USDT" ? 2 : 4)}</td>
-                  <td className={`px-2 py-2 ${signedClass(row.total)}`}>{num(row.total, row.asset === "USDT" ? 2 : 4)}</td>
+                  <td className="px-2 py-2">{num(row.free, row.asset === "USDT" ? 2 : 8)}</td>
+                  <td className={`px-2 py-2 ${signedClass(row.total)}`}>{num(row.total, row.asset === "USDT" ? 2 : 8)}</td>
                 </tr>
               ))}
             </tbody>

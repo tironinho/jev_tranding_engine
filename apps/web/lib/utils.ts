@@ -37,5 +37,5 @@ export function shortTime(value: string | null | undefined): string {
   if (!value) return "NO DATA";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toISOString().slice(11, 19);
+  return date.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour12: false });
 }

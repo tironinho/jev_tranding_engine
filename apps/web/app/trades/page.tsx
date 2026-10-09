@@ -1,4 +1,5 @@
 import { PositionTable } from "@/components/DecisionTable";
+import Link from "next/link";
 import { ExchangeExposure, type ExchangeState } from "@/components/ExchangeExposure";
 import { Empty, Panel } from "@/components/Shell";
 import { engineFetch } from "@/lib/engine";
@@ -7,6 +8,8 @@ import { money, num, pct, shortTime, sidePnl, signedClass } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 type Trade = {
+  decision_id?: string;
+  exit_reason?: string;
   trade_id: string;
   symbol: string;
   strategy: string;
@@ -142,7 +145,7 @@ export default async function TradesPage({
             <table className="w-full text-left text-[11px]">
               <thead className="text-mute">
                 <tr className="border-b border-line">
-                  {["SYMBOL", "STRATEGY", "SIDE", "QTY", "NOTIONAL", "ENTRY", "EXIT", "GROSS", "FEES", "NET", "ALVO BRUTO $", "STOP BRUTO $", "R"].map((head) => (
+                  {["SYMBOL", "ABRIU / FECHOU · BRASÍLIA", "SAÍDA", "STRATEGY", "SIDE", "QTY", "NOTIONAL", "ENTRY", "EXIT", "GROSS", "FEES", "NET", "ALVO BRUTO $", "STOP BRUTO $", "R"].map((head) => (
                     <th key={head} className="px-2 py-2 font-normal tracking-[0.08em]">{head}</th>
                   ))}
                 </tr>
@@ -155,7 +158,9 @@ export default async function TradesPage({
                   const stop = sidePnl(trade.side, trade.entry_price, trade.stop, qty);
                   return (
                     <tr key={trade.trade_id} className="border-b border-line/70 font-mono">
-                      <td className="px-2 py-2">{trade.symbol}</td>
+                      <td className="px-2 py-2">{trade.decision_id ? <Link className="underline" href={`/decisions/${trade.decision_id}`}>{trade.symbol}</Link> : trade.symbol}</td>
+                      <td className="px-2 py-2 whitespace-nowrap">{new Date(trade.opened_at).toLocaleString("pt-BR", {timeZone:"America/Sao_Paulo"})}<br />{new Date(trade.closed_at).toLocaleString("pt-BR", {timeZone:"America/Sao_Paulo"})}</td>
+                      <td className="px-2 py-2">{trade.exit_reason ?? "—"}</td>
                       <td className="px-2 py-2">{trade.strategy}</td>
                       <td className="px-2 py-2">{trade.side}</td>
                       <td className="px-2 py-2">{num(qty, 8)}</td>

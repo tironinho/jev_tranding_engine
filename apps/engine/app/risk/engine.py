@@ -74,6 +74,24 @@ class FeeQuote:
     source: str
 
 
+def margin_borrow_room(equity: float, margin_level: float | None, min_level: float) -> float:
+    """Quote still borrowable on cross margin without crossing the level floor.
+
+    Equity is assets minus liabilities. A full new borrow of this size lands on min_level.
+    USDT net can be negative while the coins are the collateral; that net is not the room.
+    """
+    if equity <= 0 or min_level <= 1:
+        return 0.0
+    if margin_level is None:
+        return equity / (min_level - 1)
+    if margin_level <= min_level:
+        return 0.0
+    span = margin_level - 1
+    assets = equity * margin_level / span
+    liabilities = equity / span
+    return max(0.0, (assets - min_level * liabilities) / (min_level - 1))
+
+
 def _size_scale(decision) -> float:
     """1 keeps the planned risk. A break with soft continuation passes a smaller fraction."""
     raw = (getattr(decision, "metadata", None) or {}).get("size_scale")

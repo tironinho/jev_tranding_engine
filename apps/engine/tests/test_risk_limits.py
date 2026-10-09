@@ -14,7 +14,7 @@ from app.domain.enums import (
     Action,
 )
 from app.execution.slippage import SlippageConfig
-from app.risk.engine import FeeQuote, RiskContext, RiskEngine
+from app.risk.engine import FeeQuote, RiskContext, RiskEngine, margin_borrow_room
 from app.strategies.baseline_score import score_baseline
 from tests.conftest import attach_book, clock, engine, long_snapshot
 
@@ -46,6 +46,14 @@ def _decision_from_snapshot(eng, snapshot):
 
     decisions = asyncio.get_event_loop().run_until_complete(eng.evaluate_snapshot(snapshot)) if False else None
     return decisions
+
+
+def test_borrowed_usdt_still_leaves_room_above_the_margin_floor():
+    # 20.37 marked, level 5.58: the USDT net is the open borrow, and about 16 USDT can still be borrowed.
+    room = margin_borrow_room(20.37, 5.58, 2.0)
+    assert room == pytest.approx(15.92, abs=0.02)
+    assert margin_borrow_room(20.37, 1.74, 2.0) == 0.0
+    assert margin_borrow_room(20.0, None, 2.0) == pytest.approx(20.0)
 
 
 def test_a_tight_margin_level_blocks_a_new_live_entry():
@@ -276,8 +284,7 @@ def test_low_net_rr_rejects_without_moving_the_target():
     assert not rejected.accepted
     assert NET_RR_TOO_LOW in rejected.reject_reasons
     assert rejected.economics is not None
-    distance = rejected.economics.entry - rejected.economics.stop
-    assert abs(rejected.economics.target - (rejected.economics.entry + 2.5 * distance)) < 1e-9
+    assert abs(rejected.economics.target - (rejected.economics.entry + 30.0)) < 1e-6
 
 
 def test_a_fresh_stop_blocks_the_same_symbol():

@@ -154,7 +154,7 @@ O mock do Jev é determinístico, marcado `is_mock=true`, e existe para testar e
 
 Entradas: decisão, snapshot, conta, posições, taxas, book, funding.
 
-1. Stop estrutural a partir do swing recente e de um buffer de ATR. Se o swing estiver do lado errado, há fallback ATR explícito na razão `STOP_ATR_FALLBACK`. Stop largo demais rejeita `STOP_TOO_WIDE`. O alvo não é afastado só para fabricar 1:3.
+1. Stop estrutural a partir do swing recente e de um buffer de ATR. Se o swing estiver do lado errado, há fallback ATR explícito na razão `STOP_ATR_FALLBACK`. Stop largo demais rejeita `STOP_TOO_WIDE`. O alvo é a faixa da última hora. Hora estreita fica aquém de 2,5R. Hora larga senta nessa faixa. O múltiplo de 2,5R continua só no piso de continuação.
 2. Alvo: `structure` (default), `fixed` ou `rr`. Arquitetura de saída futura (trailing, parcial, break-even) fica no modelo de posição sem estar ativa.
 3. Custos separados: fee de entrada, fee de saída, slippage, funding. O spread entra no preço estimado de execução quando o modelo é `spread_based` ou `orderbook_based`, sem cobrar de novo.
 4. `gross_rr` e `net_rr` são campos distintos. Abaixo de `MIN_NET_RR`: `NET_RR_TOO_LOW`.

@@ -71,7 +71,7 @@ def plan_geometry(
             structural = entry - floor
             distance = floor
             reasons.append(STOP_WIDENED_TO_MIN)
-        target = _fit_target(side, entry, distance, features, limits)
+        target = _fit_target(side, entry, distance, features)
         if isinstance(target, str):
             return target
         return Geometry(stop=structural, target=target, reasons=tuple(reasons))
@@ -91,7 +91,7 @@ def plan_geometry(
         structural = entry + floor
         distance = floor
         reasons.append(STOP_WIDENED_TO_MIN)
-    target = _fit_target(side, entry, distance, features, limits)
+    target = _fit_target(side, entry, distance, features)
     if isinstance(target, str):
         return target
     return Geometry(stop=structural, target=target, reasons=tuple(reasons))
@@ -104,12 +104,16 @@ def _stop_floor(entry: float, atr: float, features: dict, limits: RiskLimits) ->
     return max(limits.min_stop_pct * entry, limits.atr_stop_mult * atr, span)
 
 
-def _fit_target(side: Action, entry: float, distance: float, features: dict, limits: RiskLimits) -> float | str:
-    """The target sits inside the last hour and never farther than the planned multiple."""
+def _fit_target(side: Action, entry: float, distance: float, features: dict) -> float | str:
+    """The target is the last hour's range.
+
+    A narrow hour stays inside 2.5R. A wider hour sits on that range, past the old cap.
+    The 2.5 multiple still raises the continuation floor. It no longer shortens the target.
+    """
     hour = features.get("range_60m")
     if not isinstance(hour, (int, float)) or hour <= 0 or distance <= 0:
         return HOUR_RANGE_UNAVAILABLE
-    reward = min(distance * limits.rr_target_multiple, float(hour))
+    reward = float(hour)
     if reward <= 0:
         return HOUR_RANGE_UNAVAILABLE
     if side is Action.LONG:

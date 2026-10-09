@@ -49,7 +49,7 @@ from app.providers.fees import BinanceFeeProvider, ConfigFeeProvider
 from app.providers.jev.factory import build_jev_provider
 from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
-from app.risk.engine import RiskContext, RiskEngine
+from app.risk.engine import RiskContext, RiskEngine, margin_borrow_room
 from app.strategies.runners import BaselineJevStrategy, BaselineStrategy, StrategyContext
 
 log = logging.getLogger(__name__)
@@ -539,22 +539,32 @@ class TradingEngine:
             return
         context = self._risk_context(decision.strategy, snapshot, live=True)
         if self.settings.market_type == "margin":
-            balance = await self.balance.snapshot()
+            balance = self.mark_account(await self.balance.snapshot())
+            equity = balance.get("equity_usdt")
             wallet = balance.get("wallet")
-            available = balance.get("available")
-            if balance.get("status") != "ok" or not isinstance(wallet, (int, float)) or wallet <= 0:
+            if balance.get("status") != "ok":
                 self._log("live_blocked", "NO_REAL_EQUITY")
                 return
-            context.equity = float(wallet)
-            context.cash = float(available) if isinstance(available, (int, float)) and available > 0 else float(wallet)
+            # USDT net is the borrow. The collateral is the marked account, and the order borrows against it.
+            if not isinstance(equity, (int, float)) or equity <= 0:
+                if isinstance(wallet, (int, float)) and wallet > 0 and not self._holds_coin(balance):
+                    equity = float(wallet)
+                else:
+                    self._log("live_blocked", "NO_REAL_EQUITY")
+                    return
+            level = balance.get("margin_level")
+            level_value = float(level) if isinstance(level, (int, float)) else None
+            room = margin_borrow_room(float(equity), level_value, self.risk.limits.min_margin_level)
+            leverage = self.risk.limits.max_leverage
+            context.equity = float(equity)
+            context.cash = room / leverage if leverage > 0 else 0.0
+            context.margin_level = level_value
             day = snapshot.timestamp.astimezone(timezone.utc).date()
             if self._real_day != day or self._real_day_start is None:
                 self._real_day = day
-                self._real_day_start = float(wallet)
+                self._real_day_start = float(equity)
             context.day_start_equity = self._real_day_start
             context.realized_pnl_today = 0.0
-            level = balance.get("margin_level")
-            context.margin_level = float(level) if isinstance(level, (int, float)) else None
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:

@@ -2,7 +2,8 @@
 # A alavancagem só vale no livro simulado.
 
 target_mode: structure
-# O alvo cabe na faixa de 60 minutos e não passa de 2,5R. Se depois da taxa não paga 1,5R, a entrada não abre.
+# O alvo é a faixa da última hora. Hora estreita fica aquém de 2,5R. Hora larga senta nessa faixa.
+# 2,5R continua só no piso de continuação. Se depois da taxa não paga 1,5R, a entrada não abre.
 target_fallback: rr
 fixed_target_pct: 0.01
 rr_target_multiple: 2.5

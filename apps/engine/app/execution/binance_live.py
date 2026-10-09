@@ -317,10 +317,7 @@ def held_quantity(side: str, symbol: str, executed: float, payload: dict) -> flo
 
 
 def sellable_quantity(quantity: float, free: float | None, step: float | None) -> float:
-    """Step a sell down only when the free base is the same fill minus the fee.
-
-    A much smaller free balance is an older snapshot, not the position.
-    """
+    """Cap a sell by a freshly fetched free balance; unknown means no sale."""
     capped = min(quantity, max(0.0, free)) if free is not None else 0.0
     if step and step > 0:
         capped = round_down_to_step(capped, step)

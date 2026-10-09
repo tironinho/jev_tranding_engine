@@ -121,3 +121,42 @@ def test_signal_age_and_book_age_checked_after_decision(monkeypatch):
     assert eng._live_signal_fresh(decision, snapshot)
     eng.states["BTCUSDT"].last_book_at = clock() - timedelta(seconds=10)
     assert not eng._live_signal_fresh(decision, snapshot)
+
+
+@pytest.mark.asyncio
+async def test_failed_protection_attempts_close_and_retains_pending_balance(monkeypatch):
+    from tests.test_runtime import _arm_live, _Exchange
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
+    _arm_live(eng)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    eng.live.client = _Exchange()
+    eng.live.submit_stop = AsyncMock(side_effect=RuntimeError("rejected"))
+    eng.live.fetch_verified = AsyncMock(return_value={"status": "NOT_FOUND"})
+    eng.live.submit_close = AsyncMock(side_effect=TimeoutError())
+    await eng.evaluate_snapshot(snapshot)
+    p = eng.accounts.accounts["baseline"].sole("BTCUSDT")
+    assert p.protection_status == "UNPROTECTED"
+    eng.live.submit_close.assert_awaited_once()
+    await eng.evaluate_snapshot(snapshot)
+    assert any("UNPROTECTED_POSITION" in r["reject_reasons"] for r in eng.store.risks.values())
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_entry_is_recovered_without_second_buy(monkeypatch):
+    from tests.test_runtime import _arm_live, _Exchange
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
+    _arm_live(eng)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    eng.live.client = _Exchange()
+    eng.live.submit = AsyncMock(side_effect=TimeoutError())
+    await eng.evaluate_snapshot(snapshot)
+    assert len(eng.pending_entries) == 1
+    eng.live.fetch_verified = AsyncMock(return_value={"status": "FILLED", "executedQty": "1", "avgPrice": "100.01"})
+    await eng._recover_pending_entries()
+    assert not eng.pending_entries
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == 1
+    eng.live.submit.assert_awaited_once()

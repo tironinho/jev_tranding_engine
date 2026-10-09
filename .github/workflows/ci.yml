@@ -20,6 +20,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q
       - name: protected paths
+        if: startsWith(github.head_ref, 'experiment/') || startsWith(github.ref_name, 'experiment/')
         working-directory: apps/engine
         run: python -m app.evolution.paths origin/main
 

@@ -43,9 +43,8 @@ def apply_jev_veto(
 ) -> tuple[Action, float, list[str]]:
     """Decide the classified candidate. Jev cannot create or flip a trade.
 
-    Without a break, continuation under the floor is NO_TRADE. With a break
-    named in the class, that reading only scales size. Reversal and a clear
-    false breakout still veto.
+    Continuation below the floor vetoes every candidate, including breaks.
+    Reversal and a clear false breakout also veto.
     """
     reasons: list[str] = []
     if min_continuation is None:

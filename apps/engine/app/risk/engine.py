@@ -181,7 +181,7 @@ class RiskEngine:
         plan = decision.metadata.get("jev_trade_plan")
         if plan:
             stop, target = float(plan["stop"]), float(plan["target"])
-            candidate_entry = entry_guess if "entry" not in locals() else entry
+            candidate_entry = entry_guess
             valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
             if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
                 return self._reject(decision, ["JEV_PLAN_CHANGED"])
@@ -234,7 +234,7 @@ class RiskEngine:
         plan = decision.metadata.get("jev_trade_plan")
         if plan:
             stop, target = float(plan["stop"]), float(plan["target"])
-            candidate_entry = entry_guess if "entry" not in locals() else entry
+            candidate_entry = entry
             valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
             if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
                 return self._reject(decision, ["JEV_PLAN_CHANGED"])

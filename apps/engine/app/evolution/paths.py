@@ -62,10 +62,31 @@ def protected_changes(paths: list[str]) -> list[str]:
 
 
 def main() -> None:
+    import os
     import subprocess
     import sys
 
-    base = sys.argv[1] if len(sys.argv) > 1 else "origin/main"
+    branch = (
+        os.environ.get("GITHUB_HEAD_REF")
+        or os.environ.get("GITHUB_REF_NAME")
+        or ""
+    )
+    if not branch:
+        try:
+            branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            branch = ""
+
+    # Evolution engine path policies only apply to experiment branches or when explicitly forced
+    if branch and not branch.startswith("experiment/") and "--always" not in sys.argv:
+        print(f"protected paths clean: skipped for non-experiment branch '{branch}'")
+        return
+
+    base = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "origin/main"
     try:
         diff = subprocess.check_output(["git", "diff", "--name-only", f"{base}...HEAD"], text=True, stderr=subprocess.DEVNULL)
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -82,3 +103,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

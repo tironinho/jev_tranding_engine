@@ -11,6 +11,7 @@ import httpx
 
 from app.config import Settings
 from app.domain.enums import LIVE_LOCKED, NO_CREDENTIALS, OrderStatus, OrderType
+from app.domain.mathutil import round_down_to_step
 from app.domain.schemas import OrderRecord
 from app.execution.paper import OrderIntent
 
@@ -34,6 +35,7 @@ class BinanceExecutionProvider:
         self.settings = settings
         self.client = client
         self._sent: dict[str, OrderRecord] = {}
+        self._close_attempts: dict[UUID, int] = {}
 
     def _margin(self) -> bool:
         return self.settings.market_type == "margin"
@@ -117,7 +119,8 @@ class BinanceExecutionProvider:
 
     async def submit_close(self, intent: OrderIntent) -> OrderRecord:
         """Flatten a position this process opened. Does not require the arm flags."""
-        client_id = _suffixed(intent.decision_id, "C")
+        attempt = self._close_attempts.get(intent.decision_id, 0)
+        client_id = _close_client_id(intent.decision_id, attempt)
         existing = self._sent.get(client_id)
         if existing is not None and existing.status is OrderStatus.FILLED:
             return existing
@@ -135,7 +138,11 @@ class BinanceExecutionProvider:
             params["isIsolated"] = "FALSE"
         elif self.settings.market_type != "spot":
             params["reduceOnly"] = "true"
-        payload = await self._signed("POST", params)
+        try:
+            payload = await self._signed("POST", params)
+        except LiveExecutionBlocked:
+            self._close_attempts[intent.decision_id] = attempt + 1
+            raise
         order = _order_from_payload(intent, payload, client_id, OrderType.MARKET)
         self._sent[client_id] = order
         return order
@@ -192,7 +199,7 @@ class BinanceExecutionProvider:
         else:
             response = await self.client.get(url, params=signed, headers=headers)
         if response.status_code >= 400:
-            raise LiveExecutionBlocked(f"HTTP {response.status_code}")
+            raise LiveExecutionBlocked(_http_failure(response))
         return response.json()
 
     async def _relay(self, method: str, params: dict) -> dict:
@@ -206,7 +213,7 @@ class BinanceExecutionProvider:
             timeout=15,
         )
         if response.status_code >= 400:
-            raise LiveExecutionBlocked(f"HTTP {response.status_code}")
+            raise LiveExecutionBlocked(_http_failure(response))
         body = response.json()
         if not isinstance(body, dict):
             raise LiveExecutionBlocked("INVALID_JSON")
@@ -270,8 +277,54 @@ def _spot_limit(stop_price: float, closing_side: str) -> float:
     return stop_price * (1 + 0.002)
 
 
+def base_asset(symbol: str) -> str:
+    if symbol.endswith("USDT"):
+        return symbol[:-4]
+    return symbol
+
+
+def held_quantity(side: str, symbol: str, executed: float, payload: dict) -> float:
+    """A buy paid in the base asset holds less than the executed quantity."""
+    if side != "BUY" or executed <= 0:
+        return executed
+    base = base_asset(symbol)
+    paid = 0.0
+    fills = payload.get("fills")
+    if isinstance(fills, list):
+        for item in fills:
+            if not isinstance(item, dict) or str(item.get("commissionAsset") or "") != base:
+                continue
+            try:
+                paid += float(item.get("commission") or 0)
+            except (TypeError, ValueError):
+                continue
+    net = executed - paid
+    return net if net > 0 else executed
+
+
+def sellable_quantity(quantity: float, free: float | None, step: float | None) -> float:
+    """Sell the free base when the fee already took a slice, and stay on the lot step."""
+    capped = quantity if free is None or free >= quantity else free
+    if step and step > 0:
+        capped = round_down_to_step(capped, step)
+    return capped if capped > 0 else 0.0
+
+
+def _close_client_id(decision_id: UUID, attempt: int) -> str:
+    suffix = "C" if attempt <= 0 else f"C{attempt}"
+    return decision_id.hex[: 36 - len(suffix)] + suffix
+
+
+def _http_failure(response) -> str:
+    detail = " ".join(response.text.split())[:160]
+    if not detail:
+        return f"HTTP {response.status_code}"
+    return f"HTTP {response.status_code} {detail}"
+
+
 def _order_from_payload(intent: OrderIntent, payload: dict, client_id: str, order_type: OrderType) -> OrderRecord:
     qty, price = execution_of(payload)
+    qty = held_quantity(intent.side, intent.symbol, qty, payload)
     raw_status = str(payload.get("status") or "NEW")
     try:
         status = OrderStatus(raw_status)

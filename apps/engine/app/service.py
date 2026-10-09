@@ -37,7 +37,7 @@ from app.domain.mathutil import utcnow
 from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.intelligence.runner import IntelligenceRunner
-from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, execution_of
+from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, base_asset, execution_of, sellable_quantity
 from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed, stepped_stop
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
@@ -585,13 +585,19 @@ class TradingEngine:
             self._log("live_unfilled", order.client_order_id)
             await self._checkpoint(decision.strategy, positions=[], orders=[order_payload], fills=[])
             return
-        fee = order.average_fill_price * order.filled_quantity * econ.costs.fee_rate_entry
+        step = self.feed.rules.get(snapshot.symbol, {}).get("step_size")
+        held = order.filled_quantity
+        if decision.action is Action.LONG and self.settings.market_type == "margin":
+            held = sellable_quantity(order.filled_quantity, await self._free_base(snapshot.symbol), step)
+            if held <= 0:
+                held = order.filled_quantity
+        fee = order.average_fill_price * held * econ.costs.fee_rate_entry
         position = self._open_from_fill(
             decision,
             snapshot,
             econ,
             order.average_fill_price,
-            order.filled_quantity,
+            held,
             fee,
             "live",
             None,
@@ -600,7 +606,7 @@ class TradingEngine:
             order_id=order.order_id,
             decision_id=decision.decision_id,
             price=order.average_fill_price,
-            quantity=order.filled_quantity,
+            quantity=held,
             fee=fee,
             slippage_bps=0,
             liquidity="taker",
@@ -608,7 +614,7 @@ class TradingEngine:
         )
         fill_payload = self.store.add_fill(fill)
         tick = self.feed.rules.get(snapshot.symbol, {}).get("tick_size")
-        intent.quantity = order.filled_quantity
+        intent.quantity = held
         try:
             stop = await self.live.submit_stop(intent, position.stop, tick=tick)
         except Exception as exc:
@@ -740,6 +746,13 @@ class TradingEngine:
             except Exception as exc:
                 self._log("live_stop_cancel", str(exc))
         side = "SELL" if position.side is Action.LONG else "BUY"
+        quantity = position.quantity
+        if position.side is Action.LONG and self.settings.market_type == "margin":
+            step = self.feed.rules.get(symbol, {}).get("step_size")
+            quantity = sellable_quantity(position.quantity, await self._free_base(symbol), step)
+        if quantity <= 0:
+            self._log("live_exit", "NO_FREE_BASE")
+            return
         intent = OrderIntent(
             decision_id=position.decision_id,
             risk_id=None,
@@ -747,7 +760,7 @@ class TradingEngine:
             symbol=symbol,
             side=side,
             order_type=OrderType.MARKET,
-            quantity=position.quantity,
+            quantity=quantity,
             limit_price=None,
             mode="live",
             created_at=as_of,
@@ -766,6 +779,7 @@ class TradingEngine:
             self._log("live_exit", "unfilled")
             return
         exit_price = order.average_fill_price
+        position.quantity = order.filled_quantity
         exit_fee = _exit_fee(position, exit_price, order.filled_quantity, self.fee_config)
         fill = FillRecord(
             order_id=order.order_id,
@@ -1370,6 +1384,24 @@ class TradingEngine:
         dumped = self.store.add_audit(record)
         if self.postgres and self.postgres.healthy:
             await self.postgres.save_audit(dumped)
+
+    async def _free_base(self, symbol: str) -> float | None:
+        """Free base on the margin account. None when the snapshot cannot be read."""
+        try:
+            balance = await self.balance.snapshot()
+        except Exception:
+            return None
+        if balance.get("status") != "ok":
+            return None
+        name = base_asset(symbol)
+        for asset in balance.get("assets") or []:
+            if str(asset.get("asset") or "") != name:
+                continue
+            free = asset.get("free")
+            if isinstance(free, (int, float)):
+                return float(free)
+            return 0.0
+        return 0.0
 
     def _log(self, kind: str, message: str) -> None:
         item = {"kind": kind, "message": message, "timestamp": utcnow().isoformat()}

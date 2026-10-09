@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked
+from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, sellable_quantity
 from app.execution.paper import OrderIntent
 from app.domain.enums import OrderType
 from app.providers.jev.real import RealJevProvider
@@ -120,6 +120,64 @@ async def test_oregon_relays_the_margin_order_to_singapore():
     assert seen["host"] == "gateway.example"
     assert seen["path"] == "/api/binance/order"
     assert order.filled_quantity == 0.01
+
+
+def test_sellable_quantity_steps_down_to_the_free_base():
+    assert sellable_quantity(0.00029, 0.00028985, 0.00001) == pytest.approx(0.00028)
+    assert sellable_quantity(0.00029, 0.00029, 0.00001) == pytest.approx(0.00029)
+    assert sellable_quantity(0.00029, None, 0.00001) == pytest.approx(0.00029)
+
+
+@pytest.mark.asyncio
+async def test_a_buy_paid_in_base_holds_the_net_quantity():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "FILLED",
+                "executedQty": "0.00029",
+                "cummulativeQuoteQty": "23.6",
+                "fills": [{"price": "81409", "qty": "0.00029", "commission": "0.00000015", "commissionAsset": "BTC"}],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(
+        market_type="margin",
+        trading_live_enabled=True,
+        allow_real_orders=True,
+        binance_api_key="k",
+        binance_api_secret="s",
+        binance_account_rest_url="https://api.binance.com",
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        order = await BinanceExecutionProvider(cfg, client=client).submit(_intent())
+    assert order.filled_quantity == pytest.approx(0.00028985)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_close_keeps_the_exchange_reason_and_rotates_the_id():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params["newClientOrderId"])
+        if len(calls) == 1:
+            return httpx.Response(400, text='{"code":-2010,"msg":"Account has insufficient balance for requested action."}')
+        return httpx.Response(200, json={"status": "FILLED", "executedQty": "0.00028", "cummulativeQuoteQty": "23"})
+
+    transport = httpx.MockTransport(handler)
+    cfg = settings(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s", binance_account_rest_url="https://api.binance.com")
+    intent = _intent()
+    intent.side = "SELL"
+    async with httpx.AsyncClient(transport=transport) as client:
+        provider = BinanceExecutionProvider(cfg, client=client)
+        with pytest.raises(LiveExecutionBlocked) as caught:
+            await provider.submit_close(intent)
+        order = await provider.submit_close(intent)
+    assert "insufficient balance" in caught.value.reason
+    assert calls[0] != calls[1]
+    assert calls[0].endswith("C")
+    assert order.filled_quantity == pytest.approx(0.00028)
 
 
 @pytest.mark.asyncio

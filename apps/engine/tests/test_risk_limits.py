@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+import pytest
+
 from app.domain.enums import (
     ENGINE_DISABLED,
     EXISTING_POSITION,
@@ -348,7 +350,7 @@ def test_a_narrow_hour_that_cannot_pay_is_rejected():
     assert NET_RR_TOO_LOW in result.reject_reasons
 
 
-def _order(snapshot, action: Action):
+def _order(snapshot, action: Action, metadata: dict | None = None):
     from app.domain.enums import OperatingMode
     from app.domain.schemas import StrategyDecision
 
@@ -362,6 +364,7 @@ def _order(snapshot, action: Action):
         action=action,
         confidence=0.8,
         reason_codes=["TREND_UP"],
+        metadata=metadata or {},
         mode=OperatingMode.PAPER,
     )
 
@@ -381,6 +384,22 @@ def test_tight_stop_is_sized_to_the_account_and_clears_fees():
     assert accepted.economics.net_rr is not None and accepted.economics.net_rr >= 1.5
     assert accepted.economics.entry * accepted.economics.quantity <= 10_000 * 0.02 * eng.risk.limits.max_leverage * 1.001
     assert accepted.details["quantity_capped"] is True
+
+
+def test_soft_continuation_on_a_break_cuts_the_quantity():
+    eng = engine(max_symbol_exposure=1)
+    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, range_1m=2.0, range_60m=30.0)
+    full = eng.risk.evaluate(_order(snapshot, Action.LONG), snapshot, _context(), FeeQuote(0.0002, 0.0005, "config"), book)
+    half = eng.risk.evaluate(
+        _order(snapshot, Action.LONG, {"size_scale": 0.5}),
+        snapshot,
+        _context(),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert full.accepted and half.accepted
+    assert full.economics is not None and half.economics is not None
+    assert half.economics.quantity == pytest.approx(full.economics.quantity * 0.5, rel=0.02)
 
 
 def test_margin_short_opens_and_spot_boot_uses_the_spot_book():

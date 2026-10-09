@@ -337,6 +337,48 @@ def test_uncertain_continuation_does_not_confirm():
     assert "JEV_LOW_CONTINUATION" in long_reasons
 
 
+def test_named_break_keeps_the_side_and_shrinks_size():
+    from app.strategies.rules import break_size_scale
+
+    soft = JevAssessment(
+        provider="mock",
+        is_mock=True,
+        provider_version="test",
+        prompt_version="jev_market_v1",
+        trend_continuation_probability=0.28,
+        reversal_probability=0.28,
+        false_breakout_probability=0.61,
+        buying_pressure_probability=0.5,
+        selling_pressure_probability=0.5,
+    )
+    blocked, _, reasons = apply_jev_veto(Action.LONG, 0.64, soft, CombinationConfig(), False)
+    assert blocked is Action.NO_TRADE
+    assert "JEV_LOW_CONTINUATION" in reasons
+    kept, _, kept_reasons = apply_jev_veto(Action.LONG, 0.64, soft, CombinationConfig(), True)
+    assert kept is Action.LONG
+    assert "JEV_CONFIRM" in kept_reasons
+    assert break_size_scale(0.28, 0.55, True) == pytest.approx(0.28 / 0.55)
+    assert break_size_scale(0.28, 0.55, False) == 1.0
+    reversed_break, _, reversal_reasons = apply_jev_veto(
+        Action.LONG,
+        0.64,
+        soft.model_copy(update={"reversal_probability": 0.70}),
+        CombinationConfig(),
+        True,
+    )
+    assert reversed_break is Action.NO_TRADE
+    assert "JEV_HIGH_REVERSAL" in reversal_reasons
+    false_break, _, false_reasons = apply_jev_veto(
+        Action.LONG,
+        0.64,
+        soft.model_copy(update={"false_breakout_probability": 0.85}),
+        CombinationConfig(),
+        True,
+    )
+    assert false_break is Action.NO_TRADE
+    assert "JEV_FALSE_BREAKOUT" in false_reasons
+
+
 @pytest.mark.asyncio
 async def test_openai_invalid_body_is_rejected(monkeypatch):
     cfg = settings(openai_api_key="test-key", openai_model="gpt-test")

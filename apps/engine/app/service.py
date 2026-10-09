@@ -1294,6 +1294,7 @@ class TradingEngine:
                     "confidence": decision.get("confidence"),
                     "effect": meta.get("jev_effect"),
                     "required_continuation": meta.get("jev_required_continuation"),
+                    "size_scale": meta.get("size_scale"),
                     "reason_codes": decision.get("reason_codes") or [],
                     "state": _normalized_state(request),
                     "response": {

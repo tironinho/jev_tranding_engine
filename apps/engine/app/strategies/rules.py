@@ -26,6 +26,13 @@ def meta_hit_probability(rr: float, round_trip_fee: float, stop_pct: float) -> f
     return (1.0 + cost_r) / (rr + 1.0)
 
 
+def break_size_scale(continuation: float, required: float, breakout: bool) -> float:
+    """A named break still trades. Continuation under the floor only shrinks size."""
+    if not breakout or required <= 0 or continuation >= required:
+        return 1.0
+    return max(0.0, continuation / required)
+
+
 def apply_jev_veto(
     action: Action,
     confidence: float,
@@ -34,13 +41,18 @@ def apply_jev_veto(
     breakout: bool,
     min_continuation: float | None = None,
 ) -> tuple[Action, float, list[str]]:
-    """Decide the classified candidate. Jev cannot create or flip a trade."""
+    """Decide the classified candidate. Jev cannot create or flip a trade.
+
+    Without a break, continuation under the floor is NO_TRADE. With a break
+    named in the class, that reading only scales size. Reversal and a clear
+    false breakout still veto.
+    """
     reasons: list[str] = []
     if min_continuation is None:
         required = config.min_short_continuation if action is Action.SHORT else config.min_trend_continuation
     else:
         required = min_continuation
-    if assessment.trend_continuation_probability < required:
+    if not breakout and assessment.trend_continuation_probability < required:
         reasons.append(JEV_LOW_CONTINUATION)
     if assessment.reversal_probability > config.max_reversal:
         reasons.append(JEV_HIGH_REVERSAL)

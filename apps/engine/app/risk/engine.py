@@ -74,6 +74,14 @@ class FeeQuote:
     source: str
 
 
+def _size_scale(decision) -> float:
+    """1 keeps the planned risk. A break with soft continuation passes a smaller fraction."""
+    raw = (getattr(decision, "metadata", None) or {}).get("size_scale")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool) or raw <= 0:
+        return 1.0
+    return min(float(raw), 1.0)
+
+
 class RiskEngine:
     def __init__(self, limits: RiskLimits, slippage: SlippageConfig) -> None:
         self.limits = limits
@@ -157,7 +165,7 @@ class RiskEngine:
         exit_slip = entry_guess * (max(probe.slippage_bps, 0) / 10_000)
         ideal = size_quantity(
             equity=context.equity,
-            risk_fraction=min(self.limits.risk_per_trade, self.limits.max_risk_per_trade),
+            risk_fraction=min(self.limits.risk_per_trade, self.limits.max_risk_per_trade) * _size_scale(decision),
             entry=entry_guess,
             stop=geometry.stop,
             entry_fee_rate=entry_rate,

@@ -25,7 +25,7 @@ from app.domain.schemas import MarketSnapshot, StrategyDecision
 from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
-from app.strategies.rules import apply_jev_veto, apply_openai_veto, meta_hit_probability
+from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
 
 
 @dataclass
@@ -174,14 +174,16 @@ class BaselineJevStrategy:
         )
         required = _continuation_floor(snapshot, context, result.action)
         metadata["jev_required_continuation"] = required
+        broke = _class_has_break(result)
         action, confidence, vetoes = apply_jev_veto(
             result.action,
             result.confidence,
             assessment,
             context.combination,
-            breakout=_class_has_break(result),
+            breakout=broke,
             min_continuation=required,
         )
+        _stamp_size(metadata, assessment, required, broke, action)
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
         return _decision(
             context=context,
@@ -348,14 +350,16 @@ class BaselineOpenAIJevStrategy:
         )
         required = _continuation_floor(snapshot, context, result.action)
         metadata["jev_required_continuation"] = required
+        broke = _class_has_break(result)
         action, confidence, vetoes = apply_jev_veto(
             result.action,
             result.confidence,
             assessment,
             context.combination,
-            breakout=_class_has_break(result),
+            breakout=broke,
             min_continuation=required,
         )
+        _stamp_size(metadata, assessment, required, broke, action)
         metadata["openai_effect"] = "confirm"
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
         return _decision(
@@ -386,6 +390,12 @@ def _class_metadata(result: BaselineResult) -> dict[str, Any]:
 
 def _class_has_break(result: BaselineResult) -> bool:
     return "BREAKOUT" in result.market_class.labels or "BREAKDOWN" in result.market_class.labels
+
+
+def _stamp_size(metadata: dict, assessment, required: float, broke: bool, action: Action) -> None:
+    if action is Action.NO_TRADE:
+        return
+    metadata["size_scale"] = break_size_scale(assessment.trend_continuation_probability, required, broke)
 
 
 def _jev_request(

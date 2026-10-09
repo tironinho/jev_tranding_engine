@@ -10,6 +10,7 @@ export type JevReview = {
   confidence?: number;
   effect?: string;
   required_continuation?: number | null;
+  size_scale?: number | null;
   reason_codes?: string[];
   state?: {
     symbol?: string;
@@ -134,7 +135,9 @@ function Reading({ review }: { review: JevReview }) {
             <p className="text-[11px] text-mute">
               {required == null
                 ? "O corte de continuação não foi gravado nesta leitura."
-                : `Confirmar exige continuação de pelo menos ${pct(required)}. Abaixo disso o Jev veta.`}
+                : state.breakout || state.breakdown
+                  ? `Rompimento na classe: continuação abaixo de ${pct(required)} reduz o tamanho. Reversão alta e falso rompimento ainda vetam.`
+                  : `Sem rompimento, confirmar exige continuação de pelo menos ${pct(required)}.`}
             </p>
             {answer.error ? <p className="font-mono text-[11px] text-[#ff6b6b]">{answer.error}</p> : null}
           </div>

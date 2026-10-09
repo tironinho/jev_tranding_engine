@@ -18,11 +18,12 @@ strategies:
 
 combination:
   baseline_version: baseline_classified_v1
-  jev_rule_version: jev_classified_v1
-  openai_rule_version: openai_jev_classified_v1
+  jev_rule_version: jev_break_size_v1
+  openai_rule_version: openai_jev_break_size_v1
   # Peso e classe ficam na baseline. O Jev lê o candidato e não cria outro lado.
   failure_policy: NO_TRADE
-  # Long confirma em 0,55. Short confirma em 0,40, acima do zero a zero deste payoff.
+  # Sem rompimento, long confirma em 0,55 e short em 0,40.
+  # Com rompimento na classe, continuação abaixo do piso só reduz o tamanho.
   # Os dois pisos ainda sobem quando o stop apertado pede mais acerto para pagar o custo.
   min_trend_continuation: 0.55
   min_short_continuation: 0.40

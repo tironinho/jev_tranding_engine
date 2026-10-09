@@ -137,14 +137,14 @@ Se Postgres foi configurado e está indisponível, não abre trade (`PERSISTENCE
 Versões gravadas em toda decisão:
 
 - `baseline_classified_v1`
-- `jev_classified_v1`
-- `openai_jev_classified_v1`
+- `jev_break_size_v1`
+- `openai_jev_break_size_v1`
 - `market_interpreter_v1` (prompt OpenAI; versão nova = chave nova, sem edição silenciosa)
 - `jev_market_v1` (rótulo do prompt Jev; o host vem só de `JEV_BASE_URL`)
 
 `score_baseline` pesa cada família em `[-1, +1]`, combina o composto e só então classifica. A ordem sai depois da classe. A classe recusa o lado do composto quando os componentes divergem, quando um único componente carrega o score, ou quando o fluxo vai contra esse lado. Hard blocks (spread, volatilidade extrema, histórico insuficiente) continuam `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
 
-`baseline_jev` chama o Jev só quando a classe deixou um candidato `LONG` ou `SHORT`. O pedido leva os pesos e a classe. O Jev responde continuação, reversão e falso rompimento sobre esse candidato, num único passe. Pode vetar para `NO_TRADE` ou ajustar confiança. Não cria um lado que a classe recusou e não inverte LONG/SHORT. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
+`baseline_jev` chama o Jev só quando a classe deixou um candidato `LONG` ou `SHORT`. O pedido leva os pesos e a classe. O Jev responde continuação, reversão e falso rompimento sobre esse candidato, num único passe. Sem rompimento na classe, continuação abaixo do piso veta. Com rompimento, o lado passa e o tamanho cai na proporção da continuação. Reversão alta e falso rompimento claro continuam vetando. Não cria um lado que a classe recusou e não inverte LONG/SHORT. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
 
 `baseline_openai_jev` faz o mesmo, com um passo anterior: a OpenAI devolve `MarketState` validado por Pydantic. Schema inválido rejeita. A interpretação pode vetar por regime/anomalia antes do passe do Jev. Sem chave, ou com chamadas desligadas, a estratégia fica em standby e não finge decisão. Cache de estado de mercado existe como interface e nasce desligado.
 

@@ -26,6 +26,7 @@ class OrderIntent:
     best_ask: float | None
     book: OrderBook | None
     fee_rate: float
+    close_sequence: int = 0
 
 
 class PaperExecutionProvider:
@@ -198,7 +199,7 @@ def position_exit(
     reason = exit_reason(side, bid, ask, stop, target)
     if reason is not None:
         return reason
-    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes and _clock_closes_a_loser(side, bid, ask, entry):
+    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
         return "TIME"
     return None
 
@@ -236,6 +237,6 @@ def position_exit_observed(
             return "TARGET"
     mark_bid = bid if bid is not None else max_bid
     mark_ask = ask if ask is not None else min_ask
-    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes and _clock_closes_a_loser(side, mark_bid, mark_ask, entry):
+    if max_hold_minutes > 0 and hold_minutes >= max_hold_minutes:
         return "TIME"
     return None

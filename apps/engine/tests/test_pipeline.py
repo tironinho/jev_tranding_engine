@@ -311,9 +311,8 @@ async def test_jev_review_shows_the_state_that_was_sent_and_the_answer():
     assert rows
     review = rows[0]
     assert review["symbol"] == "BTCUSDT"
-    assert "price" not in review["state"]
-    assert review["state"]["baseline_action"] in {"LONG", "SHORT"}
-    assert review["state"]["baseline_class"] == "CLASS_ALIGNED"
+    assert review["state"] is None  # mock is not an HTTP request
+    assert review["request_recorded"] is False
     assert isinstance(review["response"]["trend_continuation_probability"], float)
     assert isinstance(review["response"]["reversal_probability"], float)
     assert isinstance(review["response"]["false_breakout_probability"], float)

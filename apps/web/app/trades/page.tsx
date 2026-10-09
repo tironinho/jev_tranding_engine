@@ -1,4 +1,5 @@
 import { PositionTable } from "@/components/DecisionTable";
+import { ExchangeExposure, type ExchangeState } from "@/components/ExchangeExposure";
 import { Empty, Panel } from "@/components/Shell";
 import { engineFetch } from "@/lib/engine";
 import { money, num, pct, shortTime, sidePnl, signedClass } from "@/lib/utils";
@@ -40,7 +41,7 @@ export default async function TradesPage({
   params.set("mode", "live");
   const [result, positions] = await Promise.all([
     engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`),
-    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"] }>("/api/positions"),
+    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"]; exchange: ExchangeState }>("/api/positions"),
   ]);
   const open = (positions.ok ? positions.data?.rows ?? [] : []).filter((row) => row?.mode === "live");
   const rows = result.ok ? result.data?.rows ?? [] : null;
@@ -81,11 +82,12 @@ export default async function TradesPage({
         <input name="regime" placeholder="regime" defaultValue={query.regime} className="border border-line bg-ink px-2 py-1" />
         <button className="border border-line px-2 py-1">filtrar</button>
       </form>
-      {open.length ? (
-        <Panel title="ABERTAS — PRODUÇÃO">
-          <PositionTable rows={open} />
-        </Panel>
-      ) : null}
+      <Panel title="CONTA BINANCE — TODAS AS EXPOSIÇÕES E DÍVIDAS">
+        <ExchangeExposure data={positions.ok ? positions.data?.exchange : undefined} />
+      </Panel>
+      <Panel title={`ABERTAS — CONTROLE DO ROBÔ (${open.length})`}>
+        {!positions.ok ? <Empty label="FALHA AO CONSULTAR POSIÇÕES" /> : open.length ? <PositionTable rows={open} /> : <Empty label="NENHUM TRADE NO CONTROLE INTERNO — CONSULTE A CONTA ACIMA" />}
+      </Panel>
       <Panel title="FECHADAS — PRODUÇÃO">
         {!rows ? <Empty /> : !rows.length ? <Empty label="NENHUM TRADE DE PRODUÇÃO FECHADO" /> : (
           <div className="overflow-x-auto">
@@ -129,18 +131,18 @@ export default async function TradesPage({
                 <dd className="font-mono">{num(totals?.notional, 2)}</dd>
               </div>
               <div>
-                <dt className="text-mute">SE O ALVO</dt>
+                <dt className="text-mute">ALVO BRUTO</dt>
                 <dd className={`font-mono ${signedClass(totals?.target)}`}>{money(totals?.target)}</dd>
               </div>
               <div>
-                <dt className="text-mute">SE O STOP</dt>
+                <dt className="text-mute">STOP BRUTO</dt>
                 <dd className={`font-mono ${signedClass(totals?.stop)}`}>{money(totals?.stop)}</dd>
               </div>
             </dl>
             <table className="w-full text-left text-[11px]">
               <thead className="text-mute">
                 <tr className="border-b border-line">
-                  {["SYMBOL", "STRATEGY", "SIDE", "QTY", "NOTIONAL", "ENTRY", "EXIT", "GROSS", "FEES", "NET", "TARGET $", "STOP $", "R"].map((head) => (
+                  {["SYMBOL", "STRATEGY", "SIDE", "QTY", "NOTIONAL", "ENTRY", "EXIT", "GROSS", "FEES", "NET", "ALVO BRUTO $", "STOP BRUTO $", "R"].map((head) => (
                     <th key={head} className="px-2 py-2 font-normal tracking-[0.08em]">{head}</th>
                   ))}
                 </tr>
@@ -156,7 +158,7 @@ export default async function TradesPage({
                       <td className="px-2 py-2">{trade.symbol}</td>
                       <td className="px-2 py-2">{trade.strategy}</td>
                       <td className="px-2 py-2">{trade.side}</td>
-                      <td className="px-2 py-2">{num(qty, 4)}</td>
+                      <td className="px-2 py-2">{num(qty, 8)}</td>
                       <td className="px-2 py-2">{num(notional, 2)}</td>
                       <td className="px-2 py-2">{num(trade.entry_price, 4)}</td>
                       <td className="px-2 py-2">{num(trade.exit_price, 4)}</td>
@@ -172,7 +174,7 @@ export default async function TradesPage({
               </tbody>
             </table>
             <div className="px-2 py-2 text-[10px] text-mute">
-              Só ordens reais fechadas, já com taxa. A posição ainda aberta fica na overview. último evento {rows[0] ? shortTime(rows[0].closed_at) : "NO DATA"}
+              Resultado registrado após taxas; custos estimados podem divergir da corretora. Alvo e stop desta tabela são brutos. Posições e resíduos aparecem acima. Último evento {rows[0] ? shortTime(rows[0].closed_at) : "NO DATA"}
             </div>
           </div>
         )}

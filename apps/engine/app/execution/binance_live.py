@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import math
 import time
+from datetime import datetime, timezone
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -81,7 +82,7 @@ class BinanceExecutionProvider:
         existing = self._sent.get(client_id)
         if existing is not None:
             return existing
-        self._require_entry(intent)
+        self._require_reduce(intent)
         closing_side = "SELL" if intent.side == "BUY" else "BUY"
         aligned = _align_stop(stop_price, tick, direction=-1 if closing_side == "SELL" else 1)
         if self._margin() or self.settings.market_type == "spot":
@@ -111,7 +112,8 @@ class BinanceExecutionProvider:
                 "newOrderRespType": "RESULT",
             }
         payload = await self._signed("POST", params)
-        order = _order_from_payload(intent, payload, client_id, OrderType.STOP_MARKET)
+        actual_type = OrderType.STOP_LOSS_LIMIT if self._margin() or self.settings.market_type == "spot" else OrderType.STOP_MARKET
+        order = _order_from_payload(intent, payload, client_id, actual_type)
         order.side = closing_side  # type: ignore[assignment]
         order.price = aligned
         self._sent[client_id] = order
@@ -119,7 +121,7 @@ class BinanceExecutionProvider:
 
     async def submit_close(self, intent: OrderIntent) -> OrderRecord:
         """Flatten a position this process opened. Does not require the arm flags."""
-        attempt = self._close_attempts.get(intent.decision_id, 0)
+        attempt = intent.close_sequence
         client_id = _close_client_id(intent.decision_id, attempt)
         existing = self._sent.get(client_id)
         if existing is not None and existing.status is OrderStatus.FILLED:
@@ -131,25 +133,29 @@ class BinanceExecutionProvider:
             "type": "MARKET",
             "quantity": _qty(intent.quantity),
             "newClientOrderId": client_id,
-            "newOrderRespType": "RESULT",
+            "newOrderRespType": "FULL" if self._margin() or self.settings.market_type == "spot" else "RESULT",
         }
         if self._margin():
             params["sideEffectType"] = "AUTO_REPAY"
             params["isIsolated"] = "FALSE"
         elif self.settings.market_type != "spot":
             params["reduceOnly"] = "true"
+        # Same durable client ID across timeouts/restarts. Unknown status is never a new order.
         try:
+            payload = await self._signed("GET", {"symbol": intent.symbol, "origClientOrderId": client_id})
+        except LiveExecutionBlocked as exc:
+            if "-2013" not in str(exc):
+                raise
             payload = await self._signed("POST", params)
-        except LiveExecutionBlocked:
-            self._close_attempts[intent.decision_id] = attempt + 1
-            raise
         order = _order_from_payload(intent, payload, client_id, OrderType.MARKET)
         self._sent[client_id] = order
         return order
 
-    async def cancel(self, symbol: str, client_order_id: str) -> None:
+    async def cancel(self, symbol: str, client_order_id: str) -> dict:
         self._require_credentials()
-        await self._signed("DELETE", {"symbol": symbol, "origClientOrderId": client_order_id})
+        result = await self._signed("DELETE", {"symbol": symbol, "origClientOrderId": client_order_id})
+        self._sent.pop(client_order_id, None)
+        return result
 
     async def fetch(self, symbol: str, client_order_id: str) -> dict | None:
         try:
@@ -157,6 +163,14 @@ class BinanceExecutionProvider:
             return await self._signed("GET", {"symbol": symbol, "origClientOrderId": client_order_id})
         except Exception:
             return None
+
+    async def fetch_verified(self, symbol: str, client_order_id: str) -> dict:
+        try:
+            return await self._signed("GET", {"symbol": symbol, "origClientOrderId": client_order_id})
+        except LiveExecutionBlocked as exc:
+            if "-2013" in str(exc):
+                return {"status": "NOT_FOUND", "executedQty": "0"}
+            raise
 
     def known(self, decision_id: UUID) -> OrderRecord | None:
         return self._sent.get(decision_id.hex)
@@ -307,9 +321,7 @@ def sellable_quantity(quantity: float, free: float | None, step: float | None) -
 
     A much smaller free balance is an older snapshot, not the position.
     """
-    capped = quantity
-    if free is not None and quantity > 0 and free < quantity and free >= quantity * 0.99:
-        capped = free
+    capped = min(quantity, max(0.0, free)) if free is not None else 0.0
     if step and step > 0:
         capped = round_down_to_step(capped, step)
     return capped if capped > 0 else 0.0
@@ -338,7 +350,11 @@ def _http_failure(response) -> str:
 
 def _order_from_payload(intent: OrderIntent, payload: dict, client_id: str, order_type: OrderType) -> OrderRecord:
     qty, price = execution_of(payload)
-    qty = held_quantity(intent.side, intent.symbol, qty, payload)
+    commissions = {}
+    for item in payload.get("fills") or []:
+        asset = str(item.get("commissionAsset") or "")
+        commissions[asset] = commissions.get(asset, 0) + float(item.get("commission") or 0)
+    stamp = payload.get("transactTime") or payload.get("updateTime") or payload.get("time")
     raw_status = str(payload.get("status") or "NEW")
     try:
         status = OrderStatus(raw_status)
@@ -359,4 +375,7 @@ def _order_from_payload(intent: OrderIntent, payload: dict, client_id: str, orde
         price=intent.limit_price,
         average_fill_price=price if qty > 0 and price > 0 else None,
         created_at=intent.created_at,
+        exchange_at=datetime.fromtimestamp(float(stamp) / 1000, timezone.utc) if stamp else None,
+        received_at=datetime.now(timezone.utc),
+        commissions=commissions,
     )

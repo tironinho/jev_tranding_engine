@@ -231,7 +231,13 @@ async def decisions(request: Request, limit: int = 100, symbol: str | None = Non
 @router.get("/api/decisions/{decision_id}")
 async def decision_detail(decision_id: str, request: Request) -> dict:
     _actor(request)
-    found = _engine(request).store.inspector(decision_id)
+    engine = _engine(request)
+    found = engine.store.inspector(decision_id)
+    if found is None and engine.postgres and engine.postgres.healthy:
+        try:
+            found = await engine.postgres.inspector(decision_id)
+        except Exception as exc:
+            raise HTTPException(503, "HISTORY_UNAVAILABLE") from exc
     if found is None:
         raise HTTPException(404, "NO DATA")
     return found
@@ -262,7 +268,11 @@ async def trades(
 @router.get("/api/positions")
 async def positions(request: Request) -> dict:
     _actor(request)
-    return {"rows": _engine(request).positions_payload()}
+    engine = _engine(request)
+    from app.execution.reconciliation import reconcile
+    balance = await engine.balance.snapshot()
+    rows = engine.positions_payload()
+    return {"rows": rows, "exchange": reconcile(balance, rows, engine._marks(), engine.feed.rules)}
 
 
 @router.get("/api/performance")
@@ -379,9 +389,9 @@ def _balance_actor(request: Request) -> str:
 
 
 @router.get("/api/binance/balance")
-async def binance_balance(request: Request) -> dict:
+async def binance_balance(request: Request, fresh: bool = False) -> dict:
     _balance_actor(request)
-    return await _engine(request).balance.snapshot()
+    return await _engine(request).balance.snapshot(fresh=fresh)
 
 
 _ORDER_METHODS = {"POST", "DELETE", "GET"}

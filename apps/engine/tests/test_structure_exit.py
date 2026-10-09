@@ -141,11 +141,11 @@ def test_a_favorable_print_leaves_the_original_stop():
     assert stepped_stop(short, 98.0) is None
 
 
-def test_a_winner_stays_open_when_the_clock_ends():
+def test_max_hold_is_a_hard_limit():
     assert position_exit(Action.LONG, bid=100, ask=100.1, stop=95, target=120, hold_minutes=59, max_hold_minutes=60) is None
     assert position_exit(Action.LONG, bid=100, ask=100.1, stop=95, target=120, hold_minutes=60, max_hold_minutes=60, entry=100) == "TIME"
-    assert position_exit(Action.LONG, bid=101, ask=101.1, stop=95, target=120, hold_minutes=60, max_hold_minutes=60, entry=100) is None
-    assert position_exit(Action.SHORT, bid=99, ask=99.4, stop=105, target=90, hold_minutes=60, max_hold_minutes=60, entry=100) is None
+    assert position_exit(Action.LONG, bid=101, ask=101.1, stop=95, target=120, hold_minutes=60, max_hold_minutes=60, entry=100) == "TIME"
+    assert position_exit(Action.SHORT, bid=99, ask=99.4, stop=105, target=90, hold_minutes=60, max_hold_minutes=60, entry=100) == "TIME"
     assert position_exit(Action.SHORT, bid=100.2, ask=100.3, stop=105, target=90, hold_minutes=60, max_hold_minutes=60, entry=100) == "TIME"
     assert position_exit(Action.LONG, bid=94, ask=94.1, stop=95, target=120, hold_minutes=90, max_hold_minutes=60) == "STOP"
 

@@ -32,16 +32,16 @@ class BinanceBalanceProvider:
         now = time.monotonic()
         if not fresh and self._cached is not None and now - self._cached_at < self.ttl_s:
             return self._cached
-        payload = await self._fetch()
+        payload = await self._fetch(fresh=fresh)
         self._cached = payload
         self._cached_at = now
         return payload
 
-    async def _fetch(self) -> dict:
+    async def _fetch(self, *, fresh: bool = False) -> dict:
         settings = self.settings
         base = {"status": "UNAVAILABLE", "market_type": settings.market_type, **_EMPTY}
         if settings.balance_upstream_url:
-            return await self._fetch_upstream(base)
+            return await self._fetch_upstream(base, fresh=fresh)
         if not settings.binance_api_key or not settings.binance_api_secret:
             return {**base, "status": "NO_CREDENTIALS"}
         if self.client is None:
@@ -77,7 +77,7 @@ class BinanceBalanceProvider:
             return _spot(body, settings.market_type)
         return _futures(body, settings.market_type)
 
-    async def _fetch_upstream(self, base: dict) -> dict:
+    async def _fetch_upstream(self, base: dict, *, fresh: bool = False) -> dict:
         settings = self.settings
         token = settings.balance_share_token or settings.engine_api_secret
         if not token:
@@ -85,6 +85,8 @@ class BinanceBalanceProvider:
         if self.client is None:
             return {**base, "status": "UNAVAILABLE", "detail": "client not started"}
         url = f"{settings.balance_upstream_url.rstrip('/')}/api/binance/balance"
+        if fresh:
+            url += "?fresh=true"
         try:
             response = await self.client.get(
                 url,
@@ -145,7 +147,7 @@ def _spot(body: Any, market_type: str) -> dict:
         "wallet": wallet,
         "available": available,
         "unrealized": None,
-        "assets": assets[:8],
+        "assets": assets,
         "detail": None,
     }
 
@@ -164,11 +166,13 @@ def _margin(body: Any, market_type: str) -> dict:
         free = _num(row.get("free"))
         locked = _num(row.get("locked"))
         borrowed = _num(row.get("borrowed"))
+        interest = _num(row.get("interest"))
         net = _num(row.get("netAsset"))
-        if net == 0 and free == 0 and locked == 0 and borrowed == 0:
+        if net == 0 and free == 0 and locked == 0 and borrowed == 0 and interest == 0:
             continue
         asset = str(row.get("asset") or "")
-        assets.append({"asset": asset, "free": free, "locked": locked, "total": net})
+        assets.append({"asset": asset, "free": free, "locked": locked, "total": net,
+                       "borrowed": borrowed, "interest": interest, "gross": free + locked})
         if asset == "USDT":
             found = True
             wallet = net
@@ -186,7 +190,8 @@ def _margin(body: Any, market_type: str) -> dict:
         "available": available,
         "unrealized": None,
         "margin_level": _num(level) if level not in (None, "") else None,
-        "assets": assets[:8],
+        "assets": assets,
+        "observed_at": time.time(),
         "detail": None,
     }
 
@@ -231,6 +236,6 @@ def _futures(body: Any, market_type: str) -> dict:
         "wallet": wallet,
         "available": available,
         "unrealized": unrealized,
-        "assets": assets[:8],
+        "assets": assets,
         "detail": None,
     }

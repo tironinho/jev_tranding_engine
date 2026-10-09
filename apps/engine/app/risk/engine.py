@@ -38,6 +38,7 @@ from app.risk.economics import (
     funding_cashflow,
     funding_periods,
     plan_geometry,
+    Geometry,
     rate_for,
     size_quantity,
 )
@@ -177,6 +178,14 @@ class RiskEngine:
         geometry = plan_geometry(decision.action, entry_guess, snapshot.features, self.limits)
         if isinstance(geometry, str):
             return self._reject(decision, [geometry])
+        plan = decision.metadata.get("jev_trade_plan")
+        if plan:
+            stop, target = float(plan["stop"]), float(plan["target"])
+            candidate_entry = entry_guess if "entry" not in locals() else entry
+            valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
+            if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
+                return self._reject(decision, ["JEV_PLAN_CHANGED"])
+            geometry = Geometry(stop=stop, target=target, reasons=("JEV_ASSESSED_PLAN",))
 
         entry_rate = rate_for(self._entry_liquidity(), fees.maker, fees.taker)
         exit_rate = rate_for(self._exit_liquidity(), fees.maker, fees.taker)
@@ -222,6 +231,14 @@ class RiskEngine:
         geometry = plan_geometry(decision.action, entry, snapshot.features, self.limits)
         if isinstance(geometry, str):
             return self._reject(decision, [geometry])
+        plan = decision.metadata.get("jev_trade_plan")
+        if plan:
+            stop, target = float(plan["stop"]), float(plan["target"])
+            candidate_entry = entry_guess if "entry" not in locals() else entry
+            valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
+            if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
+                return self._reject(decision, ["JEV_PLAN_CHANGED"])
+            geometry = Geometry(stop=stop, target=target, reasons=("JEV_ASSESSED_PLAN",))
 
         notional = entry * qty
         periods = funding_periods(self.limits)
@@ -258,6 +275,14 @@ class RiskEngine:
             )
         if economics.net_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
             return self._reject(decision, [MAX_RISK_PER_TRADE], economics=economics)
+
+        probability = decision.metadata.get("jev_continuation")
+        if isinstance(probability, (int, float)):
+            expected = probability * economics.net_reward - (1 - probability) * economics.net_risk
+            if expected <= 0:
+                return self._reject(decision, ["JEV_NONPOSITIVE_EXPECTANCY"], economics=economics,
+                                    details={"expected_net": expected, "break_even_probability":
+                                             economics.net_risk / (economics.net_risk + economics.net_reward)})
 
         projected_symbol = context.symbol_exposure_notional + notional
         projected_total = context.total_exposure_notional + notional

@@ -12,7 +12,7 @@ def test_restarted_exit_fill_uses_the_stored_order_id():
 
 
 @pytest.mark.asyncio
-async def test_a_failed_checkpoint_does_not_freeze_later_trades():
+async def test_a_failed_checkpoint_blocks_new_live_entries():
     mirror = PostgresMirror("postgresql://unused")
     mirror.healthy = True
 
@@ -25,5 +25,5 @@ async def test_a_failed_checkpoint_does_not_freeze_later_trades():
 
     mirror.factory = lambda: Boom()
     await mirror.save_checkpoint("baseline", {"cash": 1, "equity": 1}, [], [], [])
-    assert mirror.healthy is True
+    assert mirror.healthy is False
     assert "fills_order_id_fkey" in (mirror.last_error or "")

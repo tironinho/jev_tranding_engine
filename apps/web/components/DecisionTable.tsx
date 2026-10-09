@@ -134,7 +134,7 @@ export function PositionTable({
               <td className="px-2 py-2">{row.strategy}</td>
               <td className="px-2 py-2">{row.symbol}</td>
               <td className="px-2 py-2">{row.side}</td>
-              <td className="px-2 py-2">{row.quantity.toFixed(4)}</td>
+                <td className="px-2 py-2">{row.quantity.toFixed(8)}</td>
               <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
               <td className="px-2 py-2">{leverageLabel(row.leverage)}</td>
               <td className="px-2 py-2">{row.entry.toFixed(4)}</td>

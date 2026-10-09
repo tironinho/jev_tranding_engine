@@ -48,6 +48,7 @@ from app.execution.binance_live import (
 )
 from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed, stepped_stop
 from app.execution.slippage import SlippageConfig
+from app.execution.reconciliation import reconcile
 from app.evolution.service import EvolutionService
 from app.features.engine import build_snapshot
 from app.market.feed import MarketFeed
@@ -59,7 +60,6 @@ from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
 from app.risk.engine import RiskContext, RiskEngine, margin_borrow_room
 from app.strategies.runners import BaselineJevStrategy, BaselineStrategy, StrategyContext
-
 log = logging.getLogger(__name__)
 
 STRATEGY_KEYS = ("baseline", "baseline_jev")
@@ -179,8 +179,10 @@ class TradingEngine:
         self.evolution = EvolutionService(settings)
         self.evolution.bind_trades(self._all_trades)
         self._evaluating: set[str] = set()
+        self.pending_entries: dict[str, dict] = {}
         self._real_day = None
         self._real_day_start: float | None = None
+        self._stop_checked: dict[str, float] = {}
         self._repaired_longs: set[str] = set()
         self.balance_points: list[dict] = []
         self._last_wallet: float | None = None
@@ -254,7 +256,7 @@ class TradingEngine:
         return self.db_healthy and (self.postgres is None or self.postgres.healthy)
 
     def allows_new_live(self) -> bool:
-        return self.persistence_mode == "postgres" and self.db_healthy and self.settings.live_armed
+        return self.persistence_mode == "postgres" and self.db_healthy and (self.postgres is None or self.postgres.healthy) and self.settings.live_armed
 
     async def kill_switch(self, actor: str) -> None:
         self.trading_enabled = False
@@ -443,7 +445,9 @@ class TradingEngine:
         )
         self.intelligence.note_marks(self._marks(), snapshot.timestamp)
         context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
-        budget_ms = max(cfg.max_signal_age_ms, 12_000)
+        budget_ms = cfg.max_signal_age_ms
+        if cfg.mode is OperatingMode.LIVE:
+            waited_ms = max(waited_ms, (utcnow() - snapshot.timestamp).total_seconds() * 1000)
         if key == "baseline_openai_jev":
             budget_ms = max(budget_ms, int((self.settings.openai_timeout_s + 4) * 1000))
         if waited_ms > budget_ms:
@@ -465,6 +469,10 @@ class TradingEngine:
             self.health[key]["status"] = "error"
             decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, STRATEGY_ERROR)
             context.artifacts.append({"kind": "error", "error": str(exc)})
+        if cfg.mode is OperatingMode.LIVE:
+            decision.metadata["snapshot_at"] = snapshot.timestamp.isoformat()
+            decision.metadata["decided_at"] = utcnow().isoformat()
+            decision.timestamp = utcnow()
         return decision, context, budget_ms
 
     async def _persist_strategy(self, key: str, snapshot: MarketSnapshot, decision, context, started: float):
@@ -536,19 +544,48 @@ class TradingEngine:
         await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=fill_payloads)
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
+    def _live_signal_fresh(self, decision, snapshot) -> bool:
+        age = (utcnow() - snapshot.timestamp).total_seconds() * 1000
+        state = self.states[snapshot.symbol]
+        price = state.best_ask if decision.action is Action.LONG else state.best_bid
+        reference = snapshot.best_ask if decision.action is Action.LONG else snapshot.best_bid
+        book_age = (utcnow() - state.last_book_at).total_seconds() * 1000 if state.last_book_at else float("inf")
+        return (0 <= age <= self.strategy_settings[decision.strategy].max_signal_age_ms
+                and 0 <= book_age <= self.settings.stale_after_ms
+                and price is not None and reference is not None
+                and abs(price / reference - 1) <= 0.001)
+
+    def _order_fee(self, order, estimate: float) -> float:
+        if not order.commissions:
+            return estimate
+        total = 0.0
+        for asset, quantity in order.commissions.items():
+            mark = 1 if asset == "USDT" else self._marks().get(f"{asset}USDT")
+            if mark is None:
+                return estimate
+            total += quantity * mark
+        return total
+
     async def _execute_live(self, decision: StrategyDecision, snapshot: MarketSnapshot, extra_slot: bool = False) -> None:
         fees = await self.fee_provider.get_fees(snapshot.symbol)
         async with self._locks[decision.strategy]:
             await self._execute_live_locked(decision, snapshot, fees, extra_slot)
 
     async def _execute_live_locked(self, decision: StrategyDecision, snapshot: MarketSnapshot, fees, extra_slot: bool = False) -> None:
+        if any(p.mode == "live" and p.protection_status not in {"PROTECTED", "RESIDUAL"}
+               for a in self.accounts.accounts.values() for p in a.positions.values()):
+            await self._record_risk(self.risk._reject(decision, ["UNPROTECTED_POSITION"]))
+            return
+        if self.pending_entries:
+            await self._record_risk(self.risk._reject(decision, ["PENDING_ENTRY_RECONCILIATION"]))
+            return
         if not self.allows_new_live():
             self._log("live_blocked", "LIVE_LOCKED")
             self.store.add_event("live_blocked", "LIVE_LOCKED", {"decision_id": str(decision.decision_id)})
             return
         context = self._risk_context(decision.strategy, snapshot, live=True)
         if self.settings.market_type == "margin":
-            balance = self.mark_account(await self.balance.snapshot())
+            balance = self.mark_account(await self.balance.snapshot(fresh=True))
             equity = balance.get("equity_usdt")
             wallet = balance.get("wallet")
             if balance.get("status") != "ok":
@@ -573,14 +610,43 @@ class TradingEngine:
                 self._real_day = day
                 self._real_day_start = float(equity)
             context.day_start_equity = self._real_day_start
-            context.realized_pnl_today = 0.0
+            points = [point for point in self.balance_points if datetime.fromisoformat(point["t"]).astimezone(timezone.utc).date() == day]
+            if points:
+                self._real_day_start = float(points[0]["wallet"])
+            context.day_start_equity = self._real_day_start
+            context.realized_pnl_today = sum(
+                trade.net_pnl for account in self.accounts.accounts.values() for trade in account.trades
+                if trade.mode == "live" and trade.closed_at.astimezone(timezone.utc).date() == day)
+            report = reconcile(balance, self.positions_payload(), self._marks(), self.feed.rules)
+            if report["blocks_entry"]:
+                await self._record_risk(self.risk._reject(decision, ["ACCOUNT_RECONCILIATION_REQUIRED"], details=report))
+                return
+            exposures = [row for row in report["rows"] if row["status"] != "CASH"]
+            context.total_exposure_notional = sum(abs(row["value_usdt"] or 0) for row in exposures)
+            context.symbol_exposure_notional = sum(abs(row["value_usdt"] or 0) for row in exposures if row["symbol"] == snapshot.symbol)
+            await self.note_balance(balance)
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
         if not risk.accepted or risk.economics is None:
             return
         econ = risk.economics
         side = "BUY" if decision.action is Action.LONG else "SELL"
+        if not self._live_signal_fresh(decision, snapshot):
+            await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL]))
+            return
         intent = self._intent(decision, snapshot, risk, side, "live")
+        pending = {"decision": decision.model_dump(mode="json"), "snapshot": snapshot.model_dump(mode="json"),
+                   "risk": risk.model_dump(mode="json"), "created_at": utcnow().isoformat()}
+        self.pending_entries[str(decision.decision_id)] = pending
+        if self.postgres:
+            await self.postgres.save_event("live_entry_intent", str(decision.decision_id), pending)
+            if not self.postgres.healthy:
+                self._log("live_blocked", "ENTRY_INTENT_NOT_DURABLE")
+                return
+        if not self._live_signal_fresh(decision, snapshot):
+            await self._resolve_entry(str(decision.decision_id))
+            await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL]))
+            return
         try:
             order = await self.live.submit(intent)
         except LiveExecutionBlocked as exc:
@@ -589,16 +655,59 @@ class TradingEngine:
         except Exception as exc:
             self._log("live_error", str(exc))
             return
+        await self._record_live_entry(decision, snapshot, risk, order)
+
+    async def _resolve_entry(self, decision_id: str) -> None:
+        if self.postgres:
+            await self.postgres.save_event("live_entry_resolved", decision_id, {"decision_id": decision_id})
+            if not self.postgres.healthy:
+                return
+        self.pending_entries.pop(decision_id, None)
+
+    async def _recover_pending_entries(self) -> None:
+        from app.domain.schemas import RiskDecision
+        from app.execution.binance_live import _order_from_payload
+        for identity, pending in list(self.pending_entries.items()):
+            decision = StrategyDecision.model_validate(pending["decision"])
+            async with self._locks[decision.strategy]:
+                existing = any(str(p.decision_id) == identity for a in self.accounts.accounts.values() for p in a.positions.values())
+                closed = any(str(t.decision_id) == identity for a in self.accounts.accounts.values() for t in a.trades)
+                if existing or closed:
+                    await self._resolve_entry(identity)
+                    continue
+                try:
+                    found = await self.live.fetch_verified(decision.symbol, decision.decision_id.hex)
+                except Exception as exc:
+                    self._log("live_recovery", f"{decision.symbol} decision={identity} {exc}")
+                    continue
+                if found.get("status") == "NOT_FOUND":
+                    # Do not clear a very recent ambiguous request while the exchange may still process it.
+                    age = (utcnow() - datetime.fromisoformat(pending["created_at"])).total_seconds()
+                    if age > 60:
+                        await self._resolve_entry(identity)
+                    continue
+                if found.get("status") not in {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}:
+                    continue
+                snapshot = MarketSnapshot.model_validate(pending["snapshot"])
+                risk = RiskDecision.model_validate(pending["risk"])
+                intent = self._intent(decision, snapshot, risk, "BUY" if decision.action is Action.LONG else "SELL", "live")
+                order = _order_from_payload(intent, found, decision.decision_id.hex, OrderType.MARKET)
+                await self._record_live_entry(decision, snapshot, risk, order)
+
+    async def _record_live_entry(self, decision, snapshot, risk, order) -> None:
+        econ = risk.economics
         order_payload = self.store.add_order(order)
         if order.filled_quantity <= 0 or not order.average_fill_price:
             self._log("live_unfilled", order.client_order_id)
             await self._checkpoint(decision.strategy, positions=[], orders=[order_payload], fills=[])
+            if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+                await self._resolve_entry(str(decision.decision_id))
             return
         step = self.feed.rules.get(snapshot.symbol, {}).get("step_size")
         held = lot_quantity(order.filled_quantity, step)
         if held <= 0:
             held = order.filled_quantity
-        fee = order.average_fill_price * held * econ.costs.fee_rate_entry
+        fee = self._order_fee(order, order.average_fill_price * held * econ.costs.fee_rate_entry)
         position = self._open_from_fill(
             decision,
             snapshot,
@@ -617,21 +726,39 @@ class TradingEngine:
             fee=fee,
             slippage_bps=0,
             liquidity="taker",
-            filled_at=snapshot.timestamp,
+            filled_at=order.exchange_at or order.received_at or utcnow(),
         )
+        position.opened_at = fill.filled_at
         fill_payload = self.store.add_fill(fill)
+        position.protection_status = "UNPROTECTED"
+        position.stop_client_order_id = decision.decision_id.hex[:31] + "S"
+        # Persist the filled position before attempting exchange protection.
+        await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=[fill_payload])
         tick = self.feed.rules.get(snapshot.symbol, {}).get("tick_size")
+        intent = self._intent(decision, snapshot, risk, "BUY" if decision.action is Action.LONG else "SELL", "live")
         intent.quantity = held
+        if decision.action is Action.LONG and self.settings.market_type == "margin":
+            intent.quantity = sellable_quantity(held, await self._free_base(snapshot.symbol, fresh=True), step)
+        if intent.quantity <= 0:
+            await self._exit_live(decision.strategy, snapshot.symbol, position, "PROTECTION_FAILED", utcnow(), self.states[snapshot.symbol])
+            return
+        position.stop_client_order_id = decision.decision_id.hex[:31] + "S"
         try:
             stop = await self.live.submit_stop(intent, position.stop, tick=tick)
         except Exception as exc:
-            self._log("live_stop", str(exc))
+            self._log("live_stop", f"{snapshot.symbol} decision={decision.decision_id} {exc}")
             stop = None
         orders = [order_payload]
         if stop is not None:
+            position.protection_status = "PROTECTED"
             position.stop_client_order_id = stop.client_order_id
             orders.append(self.store.add_order(stop))
         await self._checkpoint(decision.strategy, positions=[position], orders=orders, fills=[fill_payload])
+        await self._resolve_entry(str(decision.decision_id))
+        if stop is None:
+            position.protection_status = "UNPROTECTED"
+            await self._checkpoint(decision.strategy, positions=[position], orders=[], fills=[])
+            await self._exit_live(decision.strategy, snapshot.symbol, position, "PROTECTION_FAILED", utcnow(), self.states[snapshot.symbol])
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
     async def manage_positions(self, symbol: str, as_of: datetime | None = None, extreme: dict | None = None) -> None:
@@ -652,7 +779,30 @@ class TradingEngine:
             await self._manage_position(key, symbol, position, state, as_of, extreme)
 
     async def _manage_position(self, key: str, symbol: str, position, state, as_of: datetime, extreme: dict | None) -> None:
-        await self._repair_live_long(key, position)
+        if position.mode == "live":
+            if position.protection_status == "RESIDUAL":
+                return
+            if position.protection_status == "UNPROTECTED" or not position.stop_client_order_id:
+                await self._exit_live(key, symbol, position, "PROTECTION_FAILED", as_of, state)
+                return
+            identity = str(position.position_id)
+            if time.monotonic() - self._stop_checked.get(identity, 0) >= 5:
+                self._stop_checked[identity] = time.monotonic()
+                try:
+                    found = await self.live.fetch_verified(symbol, position.stop_client_order_id)
+                except Exception:
+                    position.protection_status = "UNKNOWN"
+                    found = None
+                if found:
+                    if found.get("status") in {"FILLED", "PARTIALLY_FILLED"}:
+                        await self._exit_live(key, symbol, position, "STOP", as_of, state)
+                        return
+                    if found.get("status") == "NEW":
+                        position.protection_status = "PROTECTED"
+                    else:
+                        position.protection_status = "UNPROTECTED"
+                        await self._exit_live(key, symbol, position, "PROTECTION_FAILED", as_of, state)
+                        return
         observed = _observed_quotes(state, extreme)
         position_id = str(position.position_id)
         self.accounts.update_excursion(key, position_id, observed["min_bid"] or state.last_price)
@@ -740,81 +890,93 @@ class TradingEngine:
         )
 
     async def _exit_live(self, key: str, symbol: str, position, reason: str, as_of: datetime, state) -> None:
-        if reason == "STOP" and position.stop_client_order_id:
-            found = await self.live.fetch(symbol, position.stop_client_order_id)
-            if found and str(found.get("status")) == "FILLED":
-                qty, price = execution_of(found)
-                if qty > 0 and price > 0:
-                    exit_fee = _exit_fee(position, price, qty, self.fee_config)
-                    await self._finish_exit(key, symbol, position, reason, as_of, state, price, qty, exit_fee, 0.0, None, None)
-                    return
+        tag = f"{symbol} decision={position.decision_id} position={position.position_id}"
+        # Reconcile the stop on EVERY exit path, including time and target exits.
         if position.stop_client_order_id:
+            client_id = position.stop_client_order_id
             try:
-                await self.live.cancel(symbol, position.stop_client_order_id)
+                found = await self.live.fetch_verified(symbol, client_id)
+                if found.get("status") in {"NEW", "PARTIALLY_FILLED"}:
+                    try:
+                        await self.live.cancel(symbol, client_id)
+                    except Exception:
+                        pass  # A cancellation race must be resolved by a subsequent read.
+                    found = await self.live.fetch_verified(symbol, client_id)
+                if found.get("status") not in {"FILLED", "CANCELED", "EXPIRED", "REJECTED", "NOT_FOUND"}:
+                    self._log("live_exit_blocked", f"{tag} STOP_STATUS_UNKNOWN")
+                    return
             except Exception as exc:
-                self._log("live_stop_cancel", str(exc))
-        side = "SELL" if position.side is Action.LONG else "BUY"
+                self._log("live_exit_blocked", f"{tag} STOP_RECONCILIATION {exc}")
+                return
+            qty, price = execution_of(found)
+            already = position.exit_processed.get(client_id, 0)
+            quantity = max(0, qty - already)
+            position.stop_client_order_id = None
+            position.protection_status = "UNPROTECTED"
+            # Persist the exchange order lifecycle, preserving its identity.
+            updated = []
+            for stored in self.store.orders.values():
+                if stored.get("client_order_id") == client_id and found.get("status") != "NOT_FOUND":
+                    stored.update(status=found["status"], filled_quantity=qty, average_fill_price=price or None)
+                    updated.append(stored)
+            if quantity > 0 and price > 0:
+                position.exit_processed[client_id] = qty
+                await self._finish_exit(key, symbol, position, "STOP", utcnow(), state, price,
+                                        min(quantity, position.quantity), _exit_fee(position, price, quantity, self.fee_config), 0, None, None)
+                await self._checkpoint(key, positions=[position], orders=updated, fills=[])
+                if str(position.position_id) not in self.accounts.accounts[key].positions:
+                    return
+            else:
+                await self._checkpoint(key, positions=[position], orders=updated, fills=[])
         quantity = position.quantity
-        if position.side is Action.LONG and self.settings.market_type == "margin":
-            step = self.feed.rules.get(symbol, {}).get("step_size")
-            quantity = sellable_quantity(position.quantity, await self._free_base(symbol, fresh=True), step)
+        if self.settings.market_type == "margin":
+            balance = await self.balance.snapshot(fresh=True)
+            if balance.get("status") != "ok":
+                self._log("live_exit_blocked", f"{tag} ACCOUNT_UNAVAILABLE")
+                return
+            asset = next((r for r in balance.get("assets", []) if r.get("asset") == base_asset(symbol)), {})
+            if position.side is Action.LONG:
+                quantity = sellable_quantity(quantity, float(asset.get("free") or 0), self.feed.rules.get(symbol, {}).get("step_size"))
+            else:
+                # Never buy the original short again after an external/stop close.
+                debt_exposure = max(0, -float(asset.get("total") or 0))
+                quantity = lot_quantity(min(quantity, debt_exposure), self.feed.rules.get(symbol, {}).get("step_size"))
         if quantity <= 0:
-            self._log("live_exit", "NO_FREE_BASE")
+            self._log("live_exit_blocked", f"{tag} NO_CLOSABLE_BALANCE_RECONCILE")
             return
         intent = OrderIntent(
-            decision_id=position.decision_id,
-            risk_id=None,
-            strategy=position.strategy,
-            symbol=symbol,
-            side=side,
-            order_type=OrderType.MARKET,
-            quantity=quantity,
-            limit_price=None,
-            mode="live",
-            created_at=as_of,
-            best_bid=state.best_bid,
-            best_ask=state.best_ask,
-            book=state.book,
-            fee_rate=position.exit_fee_rate,
-        )
+            decision_id=position.decision_id, risk_id=None, strategy=position.strategy,
+            symbol=symbol, side="SELL" if position.side is Action.LONG else "BUY",
+            order_type=OrderType.MARKET, quantity=quantity, limit_price=None, mode="live",
+            created_at=utcnow(), best_bid=state.best_bid, best_ask=state.best_ask,
+            book=state.book, fee_rate=position.exit_fee_rate, close_sequence=position.close_sequence)
+        # The sequence is checkpointed with the position; ambiguous retries retain the ID.
+        await self._checkpoint(key, positions=[position], orders=[], fills=[])
         try:
             order = await self.live.submit_close(intent)
         except Exception as exc:
-            self._log("live_exit", str(exc))
+            self._log("live_exit", f"{tag} {exc}")
             return
-        if order.filled_quantity <= 0 or not order.average_fill_price:
-            self.store.add_order(order)
-            self._log("live_exit", "unfilled")
+        order_payload = self.store.add_order(order)
+        if order.status not in {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+            await self._checkpoint(key, positions=[position], orders=[order_payload], fills=[])
             return
+        already = position.exit_processed.get(order.client_order_id, 0)
+        quantity = min(position.quantity, max(0, order.filled_quantity - already))
+        position.close_sequence += 1
+        if quantity <= 0 or not order.average_fill_price:
+            await self._checkpoint(key, positions=[position], orders=[order_payload], fills=[])
+            return
+        position.exit_processed[order.client_order_id] = order.filled_quantity
         exit_price = order.average_fill_price
-        position.quantity = order.filled_quantity
-        exit_fee = _exit_fee(position, exit_price, order.filled_quantity, self.fee_config)
-        fill = FillRecord(
-            order_id=order.order_id,
-            decision_id=position.decision_id,
-            price=exit_price,
-            quantity=order.filled_quantity,
-            fee=exit_fee,
-            slippage_bps=0,
-            liquidity="taker",
-            filled_at=as_of,
-        )
+        exit_fee = self._order_fee(order, _exit_fee(position, exit_price, quantity, self.fee_config))
+        moment = order.exchange_at or order.received_at or utcnow()
+        fill = FillRecord(order_id=order.order_id, decision_id=position.decision_id,
+                          price=exit_price, quantity=quantity, fee=exit_fee, slippage_bps=0,
+                          liquidity="taker", filled_at=moment)
         touch = position.stop if reason == "STOP" else position.target if reason == "TARGET" else exit_price
-        slippage_quote = abs(exit_price - touch) * order.filled_quantity
-        await self._finish_exit(
-            key,
-            symbol,
-            position,
-            reason,
-            as_of,
-            state,
-            exit_price,
-            order.filled_quantity,
-            exit_fee,
-            slippage_quote,
-            order,
-            fill,
-        )
+        await self._finish_exit(key, symbol, position, reason, moment, state, exit_price,
+                                quantity, exit_fee, abs(exit_price - touch) * quantity, order, fill)
 
     async def _step_stop(self, key: str, symbol: str, position, observed: dict) -> None:
         favorable = observed["max_bid"] if position.side is Action.LONG else observed["min_ask"]
@@ -858,7 +1020,13 @@ class TradingEngine:
             exit_reason=reason,
             quantitative_regime=position.quantitative_regime,
             market_regime=position.market_regime,
+            quantity=quantity,
         )
+        remaining = self.accounts.accounts[key].positions.get(str(position.position_id))
+        if remaining is not None and remaining.mode == "live":
+            minimum = float(self.feed.rules.get(symbol, {}).get("min_notional") or self.risk.limits.min_order_notional)
+            if remaining.quantity * exit_price < minimum:
+                remaining.protection_status = "RESIDUAL"
         trade_payload = self.store.add_trade(trade)
         orders = []
         fills = []
@@ -882,7 +1050,7 @@ class TradingEngine:
             quantity=econ.quantity,
             limit_price=None,
             mode=mode,
-            created_at=snapshot.timestamp,
+            created_at=utcnow() if mode == "live" else snapshot.timestamp,
             best_bid=snapshot.best_bid,
             best_ask=snapshot.best_ask,
             book=self.states[snapshot.symbol].book,
@@ -900,7 +1068,7 @@ class TradingEngine:
             entry_price=price,
             stop=econ.stop,
             target=econ.target,
-            opened_at=snapshot.timestamp,
+            opened_at=utcnow() if mode == "live" else snapshot.timestamp,
             decision_id=decision.decision_id,
             entry_fee=fee,
             initial_net_risk=econ.net_risk,
@@ -949,6 +1117,7 @@ class TradingEngine:
         self._log("live", "baseline_jev live")
 
     def apply_runtime(self, runtime: dict) -> None:
+        self.pending_entries = runtime.get("pending_entries") or {}
         saved_accounts = set()
         accounts = runtime.get("accounts") or {}
         if accounts:
@@ -976,8 +1145,9 @@ class TradingEngine:
             if "max_signal_age_ms" in config:
                 current.max_signal_age_ms = int(config["max_signal_age_ms"])
             mode = item.get("mode")
-            if current.key == "baseline" and mode in {"paper", "live"}:
-                self._log("restore", "baseline stays shadow")
+            if current.key == "baseline" and mode == "live":
+                current.mode = OperatingMode.PAPER
+                self._log("restore", "baseline comparison stays paper")
             elif mode == "live" and not self.settings.live_armed:
                 self._log("restore", f"{current.key} live config left disarmed")
             elif mode:
@@ -1243,7 +1413,10 @@ class TradingEngine:
     async def _balance_loop(self) -> None:
         while True:
             try:
+                await self._recover_pending_entries()
                 await self.note_balance(self.mark_account(await self.balance.snapshot()))
+                for symbol in self.states:
+                    await self.manage_positions(symbol)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1281,6 +1454,7 @@ class TradingEngine:
                         "mfe": position.mfe,
                         "mae": position.mae,
                         "opened_at": position.opened_at.isoformat(),
+                        "protection_status": position.protection_status,
                     }
                 )
         return rows
@@ -1328,7 +1502,8 @@ class TradingEngine:
                     "required_continuation": meta.get("jev_required_continuation"),
                     "size_scale": meta.get("size_scale"),
                     "reason_codes": decision.get("reason_codes") or [],
-                    "state": _normalized_state(request),
+                    "state": response.get("sent_request", {}).get("state") if response.get("sent_request") else None,
+                    "request_recorded": bool(response.get("sent_request")),
                     "response": {
                         "trend_continuation_probability": response.get("trend_continuation_probability"),
                         "reversal_probability": response.get("reversal_probability"),

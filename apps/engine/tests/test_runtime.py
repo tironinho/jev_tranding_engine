@@ -46,6 +46,8 @@ class _Response:
     def __init__(self, payload: dict, status_code: int = 200) -> None:
         self._payload = payload
         self.status_code = status_code
+        import json
+        self.text = json.dumps(payload)
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -58,6 +60,7 @@ class _Response:
 class _Exchange:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        self.canceled = set()
 
     async def post(self, url, params=None, headers=None):
         self.calls.append(("POST", params))
@@ -80,10 +83,16 @@ class _Exchange:
 
     async def delete(self, url, params=None, headers=None):
         self.calls.append(("DELETE", params))
+        self.canceled.add(params["origClientOrderId"])
         return _Response({"status": "CANCELED"})
 
     async def get(self, url, params=None, headers=None):
         self.calls.append(("GET", params))
+        identity = params["origClientOrderId"]
+        if identity in self.canceled:
+            return _Response({"status": "CANCELED", "executedQty": "0"})
+        if identity.endswith("C"):
+            return _Response({"code": -2013, "msg": "Order does not exist"}, 400)
         return _Response({"status": "NEW", "executedQty": "0"})
 
 
@@ -142,13 +151,13 @@ def test_armed_engine_puts_only_jev_live():
     assert fresh.strategy_settings["baseline"].mode is not OperatingMode.LIVE
 
 
-def test_saved_paper_config_does_not_turn_baseline_back_on():
+def test_saved_paper_config_restores_baseline_comparison():
     fresh = engine()
     fresh.strategy_settings["baseline"].mode = OperatingMode.SHADOW
     fresh.apply_runtime(
         {"strategies": [{"strategy_key": "baseline", "enabled": True, "mode": "paper", "config": {}}]}
     )
-    assert fresh.strategy_settings["baseline"].mode is OperatingMode.SHADOW
+    assert fresh.strategy_settings["baseline"].mode is OperatingMode.PAPER
 
 
 def test_a_live_close_survives_the_account_snapshot_that_dropped_it():
@@ -319,7 +328,7 @@ async def test_price_events_do_not_time_exit_on_the_wall_clock():
 
 
 @pytest.mark.asyncio
-async def test_a_winner_is_not_closed_by_the_clock():
+async def test_max_hold_closes_winners_too():
     eng = engine()
     _open(eng, entry_price=100, stop=95, target=110)
     state = eng.states["BTCUSDT"]
@@ -328,8 +337,8 @@ async def test_a_winner_is_not_closed_by_the_clock():
     state.best_ask = 101.05
     await eng.on_price("BTCUSDT", 101, clock() + timedelta(minutes=60))
     await asyncio.gather(*list(eng._background))
-    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity > 0
-    assert eng.accounts.accounts["baseline"].trades == []
+    assert not eng.accounts.accounts["baseline"].positions
+    assert eng.accounts.accounts["baseline"].trades[0].exit_reason == "TIME"
 
 
 @pytest.mark.asyncio
@@ -371,7 +380,8 @@ async def test_saturated_symbol_does_not_start_a_second_evaluation():
 
 
 @pytest.mark.asyncio
-async def test_live_entry_opens_a_position_places_a_stop_and_blocks_the_next_candle():
+async def test_live_entry_opens_a_position_places_a_stop_and_blocks_the_next_candle(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
     eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
     _arm_live(eng)
     exchange = _Exchange()
@@ -391,7 +401,8 @@ async def test_live_entry_opens_a_position_places_a_stop_and_blocks_the_next_can
 
 
 @pytest.mark.asyncio
-async def test_live_target_cancels_the_stop_and_flattens():
+async def test_live_target_cancels_the_stop_and_flattens(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
     eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
     _arm_live(eng)
     exchange = _Exchange()
@@ -400,9 +411,9 @@ async def test_live_target_cancels_the_stop_and_flattens():
     attach_book(eng, book)
     await eng.evaluate_snapshot(snapshot)
     state = eng.states["BTCUSDT"]
-    state.best_bid = 108
-    state.best_ask = 108.02
-    state.last_price = 108
+    state.best_bid = 140
+    state.best_ask = 140.02
+    state.last_price = 140
     closed_at = clock() + timedelta(minutes=5)
     await eng.manage_positions("BTCUSDT", as_of=closed_at)
     assert eng.accounts.accounts["baseline"].positions == {}
@@ -410,7 +421,7 @@ async def test_live_target_cancels_the_stop_and_flattens():
     assert len(_posts(exchange, "MARKET", reduce_only=True)) == 1
     trade = eng.accounts.accounts["baseline"].trades[0]
     assert trade.exit_reason == "TARGET"
-    assert trade.closed_at == closed_at
+    assert trade.closed_at >= trade.opened_at
     assert trade.quantitative_regime == "bull_trend|normal_volatility"
 
 

@@ -136,7 +136,7 @@ function Reading({ review }: { review: JevReview }) {
               {required == null
                 ? "O corte de continuação não foi gravado nesta leitura."
                 : state.breakout || state.breakdown
-                  ? `Rompimento na classe: continuação abaixo de ${pct(required)} reduz o tamanho. Reversão alta e falso rompimento ainda vetam.`
+                  ? `Rompimentos respeitam o piso de ${pct(required)}. O risco também verifica a expectativa líquida.`
                   : `Sem rompimento, confirmar exige continuação de pelo menos ${pct(required)}.`}
             </p>
             {answer.error ? <p className="font-mono text-[11px] text-[#ff6b6b]">{answer.error}</p> : null}

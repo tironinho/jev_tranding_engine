@@ -23,7 +23,8 @@ _ONCHAIN = (
 _INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
-        "It is not an order. That side reaches the target before the stop."
+        "It is not an order. Using trade_plan, that side reaches target before stop within horizon_minutes. "
+        "A timeout without reaching target is not a success."
     )
     + _ONCHAIN,
     "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
@@ -115,6 +116,7 @@ class RealJevProvider:
                     "model": parsed.get("model") if isinstance(parsed, dict) else self.model,
                     "latency_ms": (time.perf_counter() - started) * 1000,
                     "error": None,
+                    "sent_request": body,
                 }
             )
         except Exception as exc:
@@ -145,6 +147,7 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "symbol": payload.get("symbol"),
         "market_type": payload.get("market_type"),
         "baseline_action": payload.get("baseline_action"),
+        "trade_plan": payload.get("trade_plan"),
         "baseline_confidence": payload.get("baseline_confidence"),
         "baseline_scores": payload.get("baseline_scores") or {},
         "baseline_class": payload.get("baseline_class"),

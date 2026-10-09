@@ -50,7 +50,7 @@ async def test_dashboard_cannot_select_live_while_disarmed():
     eng = engine()
     with pytest.raises(PermissionError, match="LIVE_LOCKED"):
         await eng.update_strategy("baseline", enabled=None, mode="live", call_model=None, actor="test")
-    assert eng.strategy_settings["baseline"].mode.value == "shadow"
+    assert eng.strategy_settings["baseline"].mode.value == "paper"
 
 
 @pytest.mark.asyncio
@@ -125,13 +125,13 @@ async def test_oregon_relays_the_margin_order_to_singapore():
 def test_sellable_quantity_steps_down_to_the_free_base():
     assert sellable_quantity(0.00029, 0.00028985, 0.00001) == pytest.approx(0.00028)
     assert sellable_quantity(0.00029, 0.00029, 0.00001) == pytest.approx(0.00029)
-    assert sellable_quantity(0.00029, None, 0.00001) == pytest.approx(0.00029)
-    assert sellable_quantity(0.139, 0.0074, 0.001) == pytest.approx(0.139)
+    assert sellable_quantity(0.00029, None, 0.00001) == 0
+    assert sellable_quantity(0.139, 0.0074, 0.001) == pytest.approx(0.007)
     assert lot_quantity(0.139, 0.001) == pytest.approx(0.139)
 
 
 @pytest.mark.asyncio
-async def test_a_buy_paid_in_base_holds_the_net_quantity():
+async def test_exchange_fill_and_base_commission_are_recorded_separately():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -154,14 +154,17 @@ async def test_a_buy_paid_in_base_holds_the_net_quantity():
     )
     async with httpx.AsyncClient(transport=transport) as client:
         order = await BinanceExecutionProvider(cfg, client=client).submit(_intent())
-    assert order.filled_quantity == pytest.approx(0.00028985)
+    assert order.filled_quantity == pytest.approx(0.00029)
+    assert order.commissions == {"BTC": 0.00000015}
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_close_keeps_the_exchange_reason_and_rotates_the_id():
+async def test_a_rejected_close_keeps_the_exchange_reason_and_retries_same_id():
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(400, json={"code": -2013, "msg": "Order does not exist"})
         calls.append(request.url.params["newClientOrderId"])
         if len(calls) == 1:
             return httpx.Response(400, text='{"code":-2010,"msg":"Account has insufficient balance for requested action."}')
@@ -177,7 +180,7 @@ async def test_a_rejected_close_keeps_the_exchange_reason_and_rotates_the_id():
             await provider.submit_close(intent)
         order = await provider.submit_close(intent)
     assert "insufficient balance" in caught.value.reason
-    assert calls[0] != calls[1]
+    assert calls[0] == calls[1]
     assert calls[0].endswith("C")
     assert order.filled_quantity == pytest.approx(0.00028)
 
@@ -397,7 +400,7 @@ def test_uncertain_continuation_does_not_confirm():
     assert "JEV_LOW_CONTINUATION" in long_reasons
 
 
-def test_named_break_keeps_the_side_and_shrinks_size():
+def test_named_break_cannot_bypass_continuation_floor():
     from app.strategies.rules import break_size_scale
 
     soft = JevAssessment(
@@ -415,8 +418,8 @@ def test_named_break_keeps_the_side_and_shrinks_size():
     assert blocked is Action.NO_TRADE
     assert "JEV_LOW_CONTINUATION" in reasons
     kept, _, kept_reasons = apply_jev_veto(Action.LONG, 0.64, soft, CombinationConfig(), True)
-    assert kept is Action.LONG
-    assert "JEV_CONFIRM" in kept_reasons
+    assert kept is Action.NO_TRADE
+    assert "JEV_LOW_CONTINUATION" in kept_reasons
     assert break_size_scale(0.28, 0.55, True) == pytest.approx(0.28 / 0.55)
     assert break_size_scale(0.28, 0.55, False) == 1.0
     reversed_break, _, reversal_reasons = apply_jev_veto(

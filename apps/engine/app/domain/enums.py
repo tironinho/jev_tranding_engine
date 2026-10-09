@@ -32,6 +32,7 @@ class OrderType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
     STOP_MARKET = "STOP_MARKET"
+    STOP_LOSS_LIMIT = "STOP_LOSS_LIMIT"
 
 
 class OrderStatus(StrEnum):

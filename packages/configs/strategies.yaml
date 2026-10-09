@@ -1,12 +1,8 @@
-# Defaults de boot. O dashboard persiste override no banco.
-# Pesos e limiares NÃO foram otimizados. Calibrar com backtest antes de live.
-# A baseline fica em shadow. O Jev abre na Binance quando os dois flags de live estão ligados.
-# O tamanho usa o USDT real da margem, e a ordem sai por Singapura.
 
 strategies:
   baseline:
     enabled: true
-    mode: shadow
+    mode: paper
     max_signal_age_ms: 2000
     call_model: false
 
@@ -18,18 +14,13 @@ strategies:
 
 combination:
   baseline_version: baseline_classified_v1
-  jev_rule_version: jev_break_size_v1
-  openai_rule_version: openai_jev_break_size_v1
-  # Peso e classe ficam na baseline. O Jev lê o candidato e não cria outro lado.
+  jev_rule_version: jev_economic_gate_v2
+  openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
-  # Sem rompimento, long confirma em 0,55 e short em 0,40.
-  # Com rompimento na classe, continuação abaixo do piso só reduz o tamanho.
-  # Os dois pisos ainda sobem quando o stop apertado pede mais acerto para pagar o custo.
   min_trend_continuation: 0.55
   min_short_continuation: 0.40
   extra_entry_min_continuation: 0.80
   max_reversal: 0.65
-  # Noul near 0.5 is uncertainty. A false-breakout veto needs a clear yes, and only when a breakout exists.
   max_false_breakout: 0.80
   min_pressure_edge: 0.05
   max_liquidity_sweep: 0.75

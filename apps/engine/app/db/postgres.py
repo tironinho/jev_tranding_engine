@@ -117,7 +117,40 @@ class PostgresMirror:
                 await session.commit()
         except Exception as exc:
             self.last_error = str(exc)
+            self.healthy = False
             log.warning("postgres write failed: %s", exc)
+
+    async def inspector(self, decision_id: str) -> dict | None:
+        if not self.factory or not self.healthy:
+            return None
+        try:
+            identity = uuid.UUID(decision_id)
+        except ValueError:
+            return None
+        async with self.factory() as session:
+            decision = await session.get(StrategyDecisionRow, identity)
+            if decision is None:
+                return None
+            snapshot = await session.get(MarketSnapshotRow, decision.snapshot_id)
+            async def rows(model, condition):
+                return list((await session.execute(select(model).where(condition))).scalars().all())
+            risks = await rows(RiskDecisionRow, RiskDecisionRow.decision_id == identity)
+            orders = await rows(OrderRow, OrderRow.decision_id == identity)
+            fills = await rows(FillRow, FillRow.decision_id == identity)
+            artifacts = await rows(JevCallRow, JevCallRow.decision_id == identity)
+            artifacts += await rows(OpenAICallRow, OpenAICallRow.decision_id == identity)
+            consensus = await rows(ConsensusRow, ConsensusRow.opportunity_id == decision.opportunity_id)
+            labels = await rows(FutureLabelRow, FutureLabelRow.snapshot_id == decision.snapshot_id)
+            trades = await rows(TradeRow, TradeRow.payload["decision_id"].astext == decision_id)
+            return {"decision": decision.payload, "snapshot": snapshot.payload if snapshot else None,
+                    "features": snapshot.payload.get("features") if snapshot else None,
+                    "artifacts": [row.payload for row in artifacts],
+                    "risk": risks[-1].payload if risks else None,
+                    "orders": [row.payload for row in orders], "fills": [row.payload for row in fills],
+                    "trade": trades[-1].payload if trades else None,
+                    "trades": [row.payload for row in trades],
+                    "consensus": consensus[0].payload if consensus else None,
+                    "labels": labels[-1].payload if labels else None, "source": "postgres"}
 
     async def save_snapshot(self, payload: dict) -> None:
         snapshot_id = uuid.UUID(payload["snapshot_id"])
@@ -345,6 +378,7 @@ class PostgresMirror:
                 await session.commit()
         except Exception as exc:
             self.last_error = str(exc)
+            self.healthy = False
             log.warning("postgres checkpoint failed: %s", exc)
 
     async def save_risk_limits(self, payload: dict) -> None:
@@ -374,6 +408,15 @@ class PostgresMirror:
                     )
                 ).scalars().first()
                 trades = (await session.execute(select(TradeRow))).scalars().all()
+                entry_events = (await session.execute(select(EngineEventRow).where(
+                    EngineEventRow.kind.in_(["live_entry_intent", "live_entry_resolved"])
+                ).order_by(EngineEventRow.timestamp))).scalars().all()
+            pending_entries = {}
+            for event in entry_events:
+                if event.kind == "live_entry_intent":
+                    pending_entries[event.message] = event.payload
+                else:
+                    pending_entries.pop(event.message, None)
             saved = {row.strategy: row.payload for row in accounts}
             grouped: dict[str, list] = {}
             for row in trades:
@@ -381,6 +424,7 @@ class PostgresMirror:
             orphans = {key: value for key, value in grouped.items() if key not in saved}
             return {
                 "accounts": saved,
+                "pending_entries": pending_entries,
                 "trades": grouped,
                 "strategies": [
                     {

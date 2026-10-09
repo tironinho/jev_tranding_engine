@@ -142,6 +142,9 @@ class OrderRecord(BaseModel):
     expected_price: float | None = None
     average_fill_price: float | None = None
     created_at: datetime
+    exchange_at: datetime | None = None
+    received_at: datetime | None = None
+    commissions: dict[str, float] = Field(default_factory=dict)
 
 
 class FillRecord(BaseModel):
@@ -181,6 +184,9 @@ class PositionRecord(BaseModel):
     market_regime: str | None = None
     mode: Literal["paper", "live"] = "paper"
     stop_client_order_id: str | None = None
+    close_sequence: int = 0
+    exit_processed: dict[str, float] = Field(default_factory=dict)
+    protection_status: str = "UNKNOWN"
 
 
 class TradeRecord(BaseModel):

@@ -162,12 +162,31 @@ class AccountBook:
         exit_reason: str,
         quantitative_regime: str | None,
         market_regime: str | None,
+        quantity: float | None = None,
     ) -> TradeRecord:
         account = self.accounts[strategy]
-        position = account.positions.pop(position_id)
-        margin = account.margin_locked.pop(position_id, None)
+        original = account.positions[position_id]
+        closed_quantity = original.quantity if quantity is None else min(quantity, original.quantity)
+        if closed_quantity <= 0:
+            raise ValueError("close quantity must be positive")
+        fraction = closed_quantity / original.quantity
+        partial = fraction < 1 - 1e-10
+        position = original.model_copy(deep=True) if partial else account.positions.pop(position_id)
+        position.quantity = closed_quantity
+        position.entry_fee *= fraction
+        position.initial_net_risk *= fraction
+        margin = account.margin_locked.get(position_id)
         if margin is None:
             margin = account.margin_locked.pop(position.symbol, 0.0)
+        released = margin * fraction
+        if partial:
+            original.quantity -= closed_quantity
+            original.entry_fee *= 1 - fraction
+            original.initial_net_risk *= 1 - fraction
+            account.margin_locked[position_id] = margin - released
+        else:
+            account.margin_locked.pop(position_id, None)
+        margin = released
         if position.side is Action.LONG:
             gross = (exit_price - position.entry_price) * position.quantity
         else:

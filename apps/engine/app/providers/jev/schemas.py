@@ -19,6 +19,7 @@ class JevMarketRequest(BaseModel):
     baseline_labels: list[str] = Field(default_factory=list)
     market_state: dict[str, Any] | None = None
     intelligence: dict[str, Any] | None = None
+    trade_plan: dict[str, Any] | None = None
     questions: list[str] = Field(
         default_factory=lambda: [
             "trend_continuation_probability",
@@ -43,6 +44,7 @@ class JevAssessment(BaseModel):
     liquidity_sweep_probability: float = 0.5
     latency_ms: float | None = None
     error: str | None = None
+    sent_request: dict[str, Any] | None = None
 
     @field_validator(
         "trend_continuation_probability",

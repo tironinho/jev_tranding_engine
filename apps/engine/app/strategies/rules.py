@@ -52,7 +52,7 @@ def apply_jev_veto(
         required = config.min_short_continuation if action is Action.SHORT else config.min_trend_continuation
     else:
         required = min_continuation
-    if not breakout and assessment.trend_continuation_probability < required:
+    if assessment.trend_continuation_probability < required:
         reasons.append(JEV_LOW_CONTINUATION)
     if assessment.reversal_probability > config.max_reversal:
         reasons.append(JEV_HIGH_REVERSAL)

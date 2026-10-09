@@ -128,6 +128,7 @@ class BaselineJevStrategy:
                 started=started,
             )
         request = _jev_request(context, snapshot, result)
+        metadata["jev_trade_plan"] = request.trade_plan
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return blocked
@@ -304,6 +305,7 @@ class BaselineOpenAIJevStrategy:
                 started=started,
             )
         request = _jev_request(context, snapshot, result, market_state=state.model_dump())
+        metadata["jev_trade_plan"] = request.trade_plan
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return blocked
@@ -404,6 +406,15 @@ def _jev_request(
     result: BaselineResult,
     market_state: dict | None = None,
 ) -> JevMarketRequest:
+    from app.risk.economics import plan_geometry
+    plan = None
+    if context.risk is not None:
+        entry = (snapshot.best_ask if result.action is Action.LONG else snapshot.best_bid) or snapshot.price
+        geometry = plan_geometry(result.action, entry, snapshot.features, context.risk)
+        if not isinstance(geometry, str):
+            plan = {"entry": entry, "stop": geometry.stop, "target": geometry.target,
+                    "horizon_minutes": context.risk.max_hold_minutes,
+                    "round_trip_fee_rate": context.round_trip_fee}
     return JevMarketRequest(
         prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
         symbol=snapshot.symbol,
@@ -417,6 +428,7 @@ def _jev_request(
         baseline_labels=list(result.market_class.labels),
         market_state=market_state,
         intelligence=context.intelligence,
+        trade_plan=plan,
     )
 
 

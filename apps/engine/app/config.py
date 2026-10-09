@@ -111,6 +111,8 @@ class RiskLimits:
     min_net_rr: float = 1.5
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
+    cap_target_by_rr: bool = False
+    step_stop_to_breakeven: bool = False
 
 
 @dataclass(frozen=True)
@@ -239,6 +241,8 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         min_net_rr=settings.min_net_rr,
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),
+        cap_target_by_rr=bool(payload.get("cap_target_by_rr", False)),
+        step_stop_to_breakeven=bool(payload.get("step_stop_to_breakeven", False)),
     )
 
 

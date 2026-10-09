@@ -204,9 +204,41 @@ def position_exit(
     return None
 
 
-def stepped_stop(position, favorable: float | None) -> float | None:
-    """The original stop stays until the target. A favorable print does not lock it."""
-    return None
+def stepped_stop(position, favorable: float | None, *, enabled: bool = True) -> float | None:
+    """Tighten the stop after +1R and +2R. The first lock is entry plus round-trip fees.
+
+    R is the original stop distance. A print inside the first R does not move the stop.
+    +1R moves it to net breakeven. +2R moves it to +1R. The target is left alone.
+    Pass enabled=False to keep the original stop unchanged.
+    """
+    if not enabled:
+        return None
+    if favorable is None or position.quantity == 0:
+        return None
+    initial = position.initial_stop if position.initial_stop is not None else position.stop
+    risk = abs(position.entry_price - initial)
+    if risk <= 0:
+        return None
+    entry = position.entry_price
+    entry_per = position.entry_fee / abs(position.quantity)
+    rate = max(position.exit_fee_rate, 0.0)
+    if position.side is Action.LONG:
+        progress = favorable - entry
+        if progress < risk:
+            return None
+        breakeven = entry + entry_per if rate >= 1 else (entry + entry_per) / (1 - rate)
+        locked = entry + risk if progress >= 2 * risk else breakeven
+        if locked <= position.stop or locked >= position.target:
+            return None
+        return locked
+    progress = entry - favorable
+    if progress < risk:
+        return None
+    breakeven = (entry - entry_per) / (1 + rate)
+    locked = entry - risk if progress >= 2 * risk else breakeven
+    if locked >= position.stop or locked <= position.target:
+        return None
+    return locked
 
 
 def position_exit_observed(

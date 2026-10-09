@@ -25,7 +25,7 @@ def _fifteen(index: int, high: float, low: float) -> Candle:
     )
 
 
-def test_a_wide_hour_puts_the_target_on_that_range():
+def test_a_wide_hour_leaves_the_target_at_risk_multiple():
     limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
@@ -35,7 +35,7 @@ def test_a_wide_hour_puts_the_target_on_that_range():
     geometry = plan_geometry(Action.LONG, 101.0, features, limits)
     stop = 100.0 - 0.1
     assert (101.0 - stop) * 2.5 < 20.0
-    assert geometry.target == 101.0 + 20.0
+    assert geometry.target == 101.0 + (101.0 - stop) * 2.5
 
 
 def test_the_target_shrinks_to_the_last_hour():
@@ -79,7 +79,7 @@ def test_a_one_minute_bar_wider_than_the_fee_floor_sets_the_stop():
     features = {"atr": 0.01, "recent_swing_low": 99.99, "range_1m": 0.8, "range_60m": 3.0}
     geometry = plan_geometry(Action.LONG, 100.0, features, limits)
     assert geometry.stop == 99.2
-    assert geometry.target == 100.0 + 3.0
+    assert geometry.target == 100.0 + min(0.8 * 2.5, 3.0)
 
 
 def _position(**overrides):
@@ -132,13 +132,24 @@ def test_meta_hit_probability_rises_when_the_stop_is_tight():
     assert tight == (1 + 0.001 / 0.0025) / 3.5
 
 
-def test_a_favorable_print_leaves_the_original_stop():
+def test_stop_stays_put_inside_the_first_r():
     assert stepped_stop(_position(), 100.4) is None
-    assert stepped_stop(_position(), 101.0) is None
-    assert stepped_stop(_position(), 102.0) is None
+
+
+def test_one_r_moves_a_long_stop_to_fee_breakeven():
+    locked = stepped_stop(_position(), 101.0)
+    assert locked == (100.0 + 0.1) / (1 - 0.0005)
+
+
+def test_two_r_locks_one_r_of_profit():
+    assert stepped_stop(_position(), 102.0) == 101.0
+
+
+def test_short_mirrors_the_same_steps():
     short = _position(side=Action.SHORT, stop=101.0, initial_stop=101.0, target=97.5)
-    assert stepped_stop(short, 99.0) is None
-    assert stepped_stop(short, 98.0) is None
+    assert stepped_stop(short, 99.5) is None
+    assert stepped_stop(short, 99.0) == (100.0 - 0.1) / (1 + 0.0005)
+    assert stepped_stop(short, 98.0) == 99.0
 
 
 def test_max_hold_is_a_hard_limit():

@@ -2,11 +2,13 @@
 # A alavancagem só vale no livro simulado.
 
 target_mode: structure
-# O alvo é a faixa da última hora. Hora estreita fica aquém de 2,5R. Hora larga senta nessa faixa.
-# 2,5R continua só no piso de continuação. Se depois da taxa não paga 1,5R, a entrada não abre.
+# O alvo cabe na faixa de 60 minutos e é limitado a 2,0R. Atingido +1R, o stop move para breakeven.
+# Se depois da taxa o trade não pagar pelo menos 1,5R líquido, a entrada é recusada.
 target_fallback: rr
 fixed_target_pct: 0.01
-rr_target_multiple: 2.5
+rr_target_multiple: 2.0
+cap_target_by_rr: true
+step_stop_to_breakeven: true
 atr_buffer_mult: 0.10
 # 2x o ATR de 1 minuto, o piso de 0,25% e a maior amplitude das últimas cinco velas de 1 minuto.
 atr_stop_mult: 2.0

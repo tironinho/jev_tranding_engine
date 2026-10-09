@@ -980,7 +980,8 @@ class TradingEngine:
 
     async def _step_stop(self, key: str, symbol: str, position, observed: dict) -> None:
         favorable = observed["max_bid"] if position.side is Action.LONG else observed["min_ask"]
-        updated = stepped_stop(position, favorable)
+        enabled = getattr(self.risk.limits, "step_stop_to_breakeven", False)
+        updated = stepped_stop(position, favorable, enabled=enabled)
         if updated is None:
             return
         if position.initial_stop is None:

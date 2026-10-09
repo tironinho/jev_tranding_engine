@@ -75,9 +75,9 @@ class BinanceExecutionProvider:
         self._sent[client_id] = order
         return order
 
-    async def submit_stop(self, intent: OrderIntent, stop_price: float, tick: float | None = None) -> OrderRecord:
+    async def submit_stop(self, intent: OrderIntent, stop_price: float, tick: float | None = None, suffix: str = "S") -> OrderRecord:
         """Resting protective stop. Futures uses closePosition. Margin and spot use a stop-limit that repays debt."""
-        client_id = _suffixed(intent.decision_id, "S")
+        client_id = _suffixed(intent.decision_id, suffix)
         existing = self._sent.get(client_id)
         if existing is not None:
             return existing
@@ -303,11 +303,25 @@ def held_quantity(side: str, symbol: str, executed: float, payload: dict) -> flo
 
 
 def sellable_quantity(quantity: float, free: float | None, step: float | None) -> float:
-    """Sell the free base when the fee already took a slice, and stay on the lot step."""
-    capped = quantity if free is None or free >= quantity else free
+    """Step a sell down only when the free base is the same fill minus the fee.
+
+    A much smaller free balance is an older snapshot, not the position.
+    """
+    capped = quantity
+    if free is not None and quantity > 0 and free < quantity and free >= quantity * 0.99:
+        capped = free
     if step and step > 0:
         capped = round_down_to_step(capped, step)
     return capped if capped > 0 else 0.0
+
+
+def lot_quantity(quantity: float, step: float | None) -> float:
+    """The filled size, on the exchange step. The account snapshot does not choose it."""
+    if quantity <= 0:
+        return 0.0
+    if step and step > 0:
+        return round_down_to_step(quantity, step)
+    return quantity
 
 
 def _close_client_id(decision_id: UUID, attempt: int) -> str:

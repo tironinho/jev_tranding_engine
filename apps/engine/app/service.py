@@ -37,7 +37,15 @@ from app.domain.mathutil import utcnow
 from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.intelligence.runner import IntelligenceRunner
-from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, base_asset, execution_of, sellable_quantity
+from app.execution.binance_live import (
+    BinanceExecutionProvider,
+    LiveExecutionBlocked,
+    base_asset,
+    execution_of,
+    held_quantity,
+    lot_quantity,
+    sellable_quantity,
+)
 from app.execution.paper import OrderIntent, PaperExecutionProvider, position_exit_observed, stepped_stop
 from app.execution.slippage import SlippageConfig
 from app.evolution.service import EvolutionService
@@ -173,6 +181,7 @@ class TradingEngine:
         self._evaluating: set[str] = set()
         self._real_day = None
         self._real_day_start: float | None = None
+        self._repaired_longs: set[str] = set()
         self.balance_points: list[dict] = []
         self._last_wallet: float | None = None
         self._close_batch: list[tuple[str, datetime, str]] = []
@@ -586,11 +595,9 @@ class TradingEngine:
             await self._checkpoint(decision.strategy, positions=[], orders=[order_payload], fills=[])
             return
         step = self.feed.rules.get(snapshot.symbol, {}).get("step_size")
-        held = order.filled_quantity
-        if decision.action is Action.LONG and self.settings.market_type == "margin":
-            held = sellable_quantity(order.filled_quantity, await self._free_base(snapshot.symbol), step)
-            if held <= 0:
-                held = order.filled_quantity
+        held = lot_quantity(order.filled_quantity, step)
+        if held <= 0:
+            held = order.filled_quantity
         fee = order.average_fill_price * held * econ.costs.fee_rate_entry
         position = self._open_from_fill(
             decision,
@@ -645,6 +652,7 @@ class TradingEngine:
             await self._manage_position(key, symbol, position, state, as_of, extreme)
 
     async def _manage_position(self, key: str, symbol: str, position, state, as_of: datetime, extreme: dict | None) -> None:
+        await self._repair_live_long(key, position)
         observed = _observed_quotes(state, extreme)
         position_id = str(position.position_id)
         self.accounts.update_excursion(key, position_id, observed["min_bid"] or state.last_price)
@@ -749,7 +757,7 @@ class TradingEngine:
         quantity = position.quantity
         if position.side is Action.LONG and self.settings.market_type == "margin":
             step = self.feed.rules.get(symbol, {}).get("step_size")
-            quantity = sellable_quantity(position.quantity, await self._free_base(symbol), step)
+            quantity = sellable_quantity(position.quantity, await self._free_base(symbol, fresh=True), step)
         if quantity <= 0:
             self._log("live_exit", "NO_FREE_BASE")
             return
@@ -1385,10 +1393,81 @@ class TradingEngine:
         if self.postgres and self.postgres.healthy:
             await self.postgres.save_audit(dumped)
 
-    async def _free_base(self, symbol: str) -> float | None:
+    async def _repair_live_long(self, key: str, position) -> None:
+        """A long is the filled order. An older free balance must not stay as the size."""
+        if position.mode != "live" or position.side is not Action.LONG or self.settings.market_type != "margin":
+            return
+        if str(position.position_id) in self._repaired_longs:
+            return
+        try:
+            found = await self.live.fetch(position.symbol, position.decision_id.hex)
+        except Exception as exc:
+            self._log("position_size", str(exc))
+            return
+        self._repaired_longs.add(str(position.position_id))
+        if not found:
+            return
+        executed, _price = execution_of(found)
+        filled = held_quantity("BUY", position.symbol, executed, found)
+        step = self.feed.rules.get(position.symbol, {}).get("step_size")
+        size = lot_quantity(filled, step)
+        if size <= position.quantity + 1e-12:
+            return
+        ratio = size / position.quantity if position.quantity > 0 else 1.0
+        position.quantity = size
+        position.entry_fee *= ratio
+        locked = self.accounts.accounts[key].margin_locked.get(str(position.position_id))
+        if locked:
+            self.accounts.accounts[key].margin_locked[str(position.position_id)] = locked * ratio
+        self._log("position_size", f"{position.symbol} {size:.8f}")
+        await self._replace_short_stop(position)
+        await self._checkpoint(key, positions=[position], orders=[], fills=[])
+
+    async def _replace_short_stop(self, position) -> None:
+        suffix = "S"
+        if position.stop_client_order_id:
+            resting = await self.live.fetch(position.symbol, position.stop_client_order_id)
+            covered = 0.0
+            if resting:
+                try:
+                    covered = float(resting.get("origQty") or 0)
+                except (TypeError, ValueError):
+                    covered = 0.0
+            if covered >= position.quantity * 0.99:
+                return
+            try:
+                await self.live.cancel(position.symbol, position.stop_client_order_id)
+            except Exception as exc:
+                self._log("live_stop_cancel", str(exc))
+            suffix = "S2"
+        tick = self.feed.rules.get(position.symbol, {}).get("tick_size")
+        intent = OrderIntent(
+            decision_id=position.decision_id,
+            risk_id=None,
+            strategy=position.strategy,
+            symbol=position.symbol,
+            side="BUY",
+            order_type=OrderType.MARKET,
+            quantity=position.quantity,
+            limit_price=None,
+            mode="live",
+            created_at=utcnow(),
+            best_bid=None,
+            best_ask=None,
+            book=None,
+            fee_rate=position.exit_fee_rate,
+        )
+        try:
+            stop = await self.live.submit_stop(intent, position.stop, tick=tick, suffix=suffix)
+        except Exception as exc:
+            self._log("live_stop", str(exc))
+            return
+        position.stop_client_order_id = stop.client_order_id
+
+    async def _free_base(self, symbol: str, *, fresh: bool = False) -> float | None:
         """Free base on the margin account. None when the snapshot cannot be read."""
         try:
-            balance = await self.balance.snapshot()
+            balance = await self.balance.snapshot(fresh=fresh)
         except Exception:
             return None
         if balance.get("status") != "ok":

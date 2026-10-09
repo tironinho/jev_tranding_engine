@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, sellable_quantity
+from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBlocked, lot_quantity, sellable_quantity
 from app.execution.paper import OrderIntent
 from app.domain.enums import OrderType
 from app.providers.jev.real import RealJevProvider
@@ -126,6 +126,8 @@ def test_sellable_quantity_steps_down_to_the_free_base():
     assert sellable_quantity(0.00029, 0.00028985, 0.00001) == pytest.approx(0.00028)
     assert sellable_quantity(0.00029, 0.00029, 0.00001) == pytest.approx(0.00029)
     assert sellable_quantity(0.00029, None, 0.00001) == pytest.approx(0.00029)
+    assert sellable_quantity(0.139, 0.0074, 0.001) == pytest.approx(0.139)
+    assert lot_quantity(0.139, 0.001) == pytest.approx(0.139)
 
 
 @pytest.mark.asyncio

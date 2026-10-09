@@ -28,9 +28,9 @@ class BinanceBalanceProvider:
         self._cached: dict | None = None
         self._cached_at = 0.0
 
-    async def snapshot(self) -> dict:
+    async def snapshot(self, *, fresh: bool = False) -> dict:
         now = time.monotonic()
-        if self._cached is not None and now - self._cached_at < self.ttl_s:
+        if not fresh and self._cached is not None and now - self._cached_at < self.ttl_s:
             return self._cached
         payload = await self._fetch()
         self._cached = payload

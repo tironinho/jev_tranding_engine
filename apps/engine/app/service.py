@@ -984,6 +984,64 @@ class TradingEngine:
         updated = stepped_stop(position, favorable, enabled=enabled)
         if updated is None:
             return
+        if position.mode == "live":
+            old_id = position.stop_client_order_id
+            if not old_id:
+                return
+            try:
+                old = await self.live.fetch_verified(symbol, old_id)
+                if old.get("status") in {"FILLED", "PARTIALLY_FILLED"}:
+                    await self._exit_live(key, symbol, position, "STOP", utcnow(), self.states[symbol])
+                    return
+                if old.get("status") != "NEW":
+                    position.protection_status = "UNPROTECTED"
+                    await self._exit_live(key, symbol, position, "PROTECTION_FAILED", utcnow(), self.states[symbol])
+                    return
+                await self.live.cancel(symbol, old_id)
+                old = await self.live.fetch_verified(symbol, old_id)
+                if old.get("status") != "CANCELED" or execution_of(old)[0] > 0:
+                    await self._exit_live(key, symbol, position, "STOP", utcnow(), self.states[symbol])
+                    return
+            except Exception as exc:
+                position.protection_status = "UNKNOWN"
+                self._log("live_stop_replace", f"{symbol} decision={position.decision_id} {exc}")
+                return
+            position.protection_revision += 1
+            suffix = f"S{position.protection_revision}"
+            position.stop_client_order_id = position.decision_id.hex[:31] + suffix
+            position.protection_status = "UNPROTECTED"
+            await self._checkpoint(key, positions=[position], orders=[], fills=[])
+            state = self.states[symbol]
+            intent = OrderIntent(
+                decision_id=position.decision_id, risk_id=None, strategy=key, symbol=symbol,
+                side="BUY" if position.side is Action.LONG else "SELL", order_type=OrderType.MARKET,
+                quantity=position.quantity, limit_price=None, mode="live", created_at=utcnow(),
+                best_bid=state.best_bid, best_ask=state.best_ask, book=state.book, fee_rate=position.exit_fee_rate)
+            if position.side is Action.LONG and self.settings.market_type == "margin":
+                intent.quantity = sellable_quantity(position.quantity, await self._free_base(symbol, fresh=True), self.feed.rules.get(symbol, {}).get("step_size"))
+            try:
+                if intent.quantity <= 0:
+                    raise LiveExecutionBlocked("NO_FREE_BASE")
+                stop = await self.live.submit_stop(intent, updated, tick=self.feed.rules.get(symbol, {}).get("tick_size"), suffix=suffix)
+                if stop.status is not OrderStatus.NEW:
+                    raise LiveExecutionBlocked("STOP_NOT_RESTING")
+                position.stop_client_order_id = stop.client_order_id
+                position.protection_status = "PROTECTED"
+                if position.initial_stop is None:
+                    position.initial_stop = position.stop
+                updated = stop.price if stop.price is not None else updated
+                position.stop = updated
+                stored = self.store.add_order(stop)
+                orders = [stored]
+                for previous in self.store.orders.values():
+                    if previous.get("client_order_id") == old_id:
+                        previous["status"] = "CANCELED"
+                        orders.append(previous)
+                await self._checkpoint(key, positions=[position], orders=orders, fills=[])
+            except Exception as exc:
+                self._log("live_stop_replace", f"{symbol} decision={position.decision_id} {exc}")
+                await self._exit_live(key, symbol, position, "PROTECTION_FAILED", utcnow(), state)
+                return
         if position.initial_stop is None:
             position.initial_stop = position.stop
         position.stop = updated

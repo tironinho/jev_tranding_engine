@@ -26,7 +26,7 @@ def _fifteen(index: int, high: float, low: float) -> Candle:
 
 
 def test_a_wide_hour_leaves_the_target_at_risk_multiple():
-    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
+    limits = RiskLimits(cap_target_by_rr=True, rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
         "recent_swing_low": 100.0,
@@ -39,7 +39,7 @@ def test_a_wide_hour_leaves_the_target_at_risk_multiple():
 
 
 def test_the_target_shrinks_to_the_last_hour():
-    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
+    limits = RiskLimits(cap_target_by_rr=True, rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
         "recent_swing_low": 100.0,
@@ -75,7 +75,7 @@ def test_a_stop_tighter_than_the_minimum_is_widened_instead_of_rejected():
 
 
 def test_a_one_minute_bar_wider_than_the_fee_floor_sets_the_stop():
-    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
+    limits = RiskLimits(cap_target_by_rr=True, rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
     features = {"atr": 0.01, "recent_swing_low": 99.99, "range_1m": 0.8, "range_60m": 3.0}
     geometry = plan_geometry(Action.LONG, 100.0, features, limits)
     assert geometry.stop == 99.2

@@ -284,7 +284,7 @@ def test_low_net_rr_rejects_without_moving_the_target():
     assert not rejected.accepted
     assert NET_RR_TOO_LOW in rejected.reject_reasons
     assert rejected.economics is not None
-    assert abs(rejected.economics.target - (rejected.economics.entry + 30.0)) < 1e-6
+    assert rejected.economics.target == pytest.approx(rejected.economics.entry + 2 * (rejected.economics.entry - rejected.economics.stop))
 
 
 def test_a_fresh_stop_blocks_the_same_symbol():
@@ -431,8 +431,9 @@ def test_margin_short_opens_and_spot_boot_uses_the_spot_book():
 
 def test_paper_margin_can_exceed_equity_up_to_five_times():
     eng = engine(max_symbol_exposure=1, max_total_exposure=1)
+    eng.risk.update_limits(risk_per_trade=.02, max_risk_per_trade=.02)
     assert eng.risk.limits.max_leverage == 5
-    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, range_1m=0.35, range_60m=5)
+    snapshot, book = long_snapshot(recent_swing_low=99.99, atr=0.01, range_1m=0.8, range_60m=5)
     accepted = eng.risk.evaluate(
         _order(snapshot, Action.LONG),
         snapshot,

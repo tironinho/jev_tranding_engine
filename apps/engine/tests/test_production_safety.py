@@ -160,3 +160,32 @@ async def test_ambiguous_entry_is_recovered_without_second_buy(monkeypatch):
     assert not eng.pending_entries
     assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == 1
     eng.live.submit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_live_breakeven_replaces_exchange_stop_before_local_update():
+    from tests.test_runtime import _Exchange
+    eng = engine(binance_api_key="k", binance_api_secret="s")
+    eng.live.client = _Exchange()
+    p = _open(eng, mode="live", stop=99, target=110, stop_client_order_id="original")
+    await eng._step_stop("baseline", "BTCUSDT", p, {"max_bid": 101, "min_ask": 101.1})
+    assert p.stop > 100
+    assert p.stop_client_order_id.endswith("S1")
+    assert p.protection_status == "PROTECTED"
+    orders = list(eng.store.orders.values())
+    assert orders[-1]["side"] == "SELL"
+    assert orders[-1]["price"] == p.stop
+
+
+@pytest.mark.asyncio
+async def test_failed_live_stop_replacement_keeps_old_local_stop_and_attempts_exit():
+    from tests.test_runtime import _Exchange
+    eng = engine(binance_api_key="k", binance_api_secret="s")
+    eng.live.client = _Exchange()
+    p = _open(eng, mode="live", stop=99, target=110, stop_client_order_id="original")
+    eng.live.submit_stop = AsyncMock(side_effect=TimeoutError())
+    eng._exit_live = AsyncMock()
+    await eng._step_stop("baseline", "BTCUSDT", p, {"max_bid": 101, "min_ask": 101.1})
+    assert p.stop == 99
+    assert p.protection_status == "UNPROTECTED"
+    eng._exit_live.assert_awaited_once()

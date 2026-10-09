@@ -187,6 +187,7 @@ class PositionRecord(BaseModel):
     close_sequence: int = 0
     exit_processed: dict[str, float] = Field(default_factory=dict)
     protection_status: str = "UNKNOWN"
+    protection_revision: int = 0
 
 
 class TradeRecord(BaseModel):

@@ -16,7 +16,9 @@ This change requires the engine, account gateway, and web frontend to run the sa
 
 ## Validation and remaining limits
 
-192 engine tests passed, including cancel/fill races, ambiguous entry recovery, partial exits, stale book rejection, unavailable balances, and residual exposure. Frontend production build and type checking passed. These checks use simulated exchange responses and do not place real orders.
+197 engine tests passed, including cancel/fill races, ambiguous entry recovery, partial exits, stale book rejection, unavailable balances, residual exposure, and live breakeven stop replacement. Frontend production build and type checking passed. These checks use simulated exchange responses and do not place real orders.
+
+The subsequent 2R target/breakeven configuration is retained. Live stop tightening now confirms cancellation and places the replacement on the exchange before recording the new stop; an ambiguous replacement triggers reconciliation/exit instead of leaving only a tighter local number.
 
 Exchange commissions from FULL order responses are retained and converted when a quote is available. Otherwise the existing fee estimate is used. Interest is shown as an actual account liability, but historical interest and commissions are not fully allocated back to each trade; the trade PnL must still be treated as recorded/estimated, not fully reconciled exchange accounting. The patch does not backfill missing historic decisions or reconstruct missing execution timestamps.
 

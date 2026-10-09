@@ -1,14 +1,21 @@
 # Limites iniciais conservadores. Não foram otimizados.
-# A alavancagem só vale no livro simulado.
+# Limites aplicados pelo motor antes da execução; armar produção é uma configuração separada.
 
 target_mode: structure
-# O alvo cabe na faixa de 60 minutos e é limitado a 2,0R. Atingido +1R, o stop move para breakeven.
+# Baseline: teto 2R. Jev dinâmico: até 3R, limitado pela faixa e estrutura, com uma avaliação por alvo.
 # Se depois da taxa o trade não pagar pelo menos 1,5R líquido, a entrada é recusada.
 target_fallback: rr
 fixed_target_pct: 0.01
 rr_target_multiple: 2.0
 cap_target_by_rr: true
 step_stop_to_breakeven: true
+dynamic_rr_enabled: true
+plan_stress_bps: 2.0
+probability_haircut: 0.05
+# Cenário de estresse (1 bp/h), não taxa efetiva da conta. Usa a maior entre esta e a observada.
+borrow_hourly_stress_rate: 0.0001
+# Orçamento agregado de perda planejada; não pressupõe independência entre moedas.
+max_portfolio_stop_risk: 0.02
 atr_buffer_mult: 0.10
 # 2x o ATR de 1 minuto, o piso de 0,25% e a maior amplitude das últimas cinco velas de 1 minuto.
 atr_stop_mult: 2.0
@@ -22,11 +29,11 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# No prazo, só fecha quem está no prejuízo. Quem está no lucro segue até o alvo ou o stop.
+# Horizonte máximo, inclusive quando a posição está no lucro.
 max_hold_minutes: 60
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false
-# Cross margin de papel até 5x. A margem travada é o nocional dividido por 5. Ordem real continua bloqueada.
+# Teto de alavancagem para dimensionamento; não altera a autorização de ordens reais.
 max_leverage: 5
 apply_funding: true
 expected_hold_minutes: 15

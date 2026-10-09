@@ -113,6 +113,11 @@ class RiskLimits:
     min_margin_level: float = 2.0
     cap_target_by_rr: bool = False
     step_stop_to_breakeven: bool = False
+    dynamic_rr_enabled: bool = False
+    plan_stress_bps: float = 2.0
+    probability_haircut: float = 0.05
+    borrow_hourly_stress_rate: float = 0.0001
+    max_portfolio_stop_risk: float = 0.02
 
 
 @dataclass(frozen=True)
@@ -243,6 +248,11 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         min_margin_level=float(payload.get("min_margin_level", 2)),
         cap_target_by_rr=bool(payload.get("cap_target_by_rr", False)),
         step_stop_to_breakeven=bool(payload.get("step_stop_to_breakeven", False)),
+        dynamic_rr_enabled=bool(payload.get("dynamic_rr_enabled", False)),
+        plan_stress_bps=float(payload.get("plan_stress_bps", 2.0)),
+        probability_haircut=float(payload.get("probability_haircut", 0.05)),
+        borrow_hourly_stress_rate=float(payload.get("borrow_hourly_stress_rate", 0.0001)),
+        max_portfolio_stop_risk=float(payload.get("max_portfolio_stop_risk", 0.02)),
     )
 
 

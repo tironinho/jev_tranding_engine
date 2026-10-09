@@ -121,6 +121,12 @@ class MemoryStore:
         }
 
     def opportunity_rows(self, limit: int = 100, symbol: str | None = None) -> list[dict]:
+        notes = {event["payload"].get("decision_id"): event["message"] for event in self.events
+                 if event["kind"] == "execution_pending"}
+        executions: dict[str, list[dict]] = {}
+        for order in self.orders.values():
+            executions.setdefault(order["decision_id"], []).append({
+                key: order.get(key) for key in ("status", "order_type", "created_at", "exchange_at", "received_at")})
         grouped: dict[str, list[dict]] = {}
         for decision in self.decisions:
             if symbol and decision["symbol"] != symbol:
@@ -137,6 +143,8 @@ class MemoryStore:
                     risks[item["strategy"]] = {
                         "accepted": risk["accepted"],
                         "reject_reasons": risk["reject_reasons"],
+                        "economics": risk.get("economics"),
+                        "details": risk.get("details"),
                     }
             rows.append(
                 {
@@ -147,6 +155,8 @@ class MemoryStore:
                     "strategies": by_strategy,
                     "consensus": self.consensus.get(opportunity_id),
                     "risk": risks,
+                    "execution": {item["strategy"]: executions.get(item["decision_id"], []) for item in items},
+                    "execution_note": {item["strategy"]: notes.get(item["decision_id"]) for item in items},
                 }
             )
         rows.sort(key=lambda row: row["timestamp"], reverse=True)

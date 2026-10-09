@@ -24,6 +24,7 @@ _INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
         "It is not an order. Using trade_plan, that side reaches target before stop within horizon_minutes. "
+        "Apply trade_plan.stop_policy: a tightened stop also terminates the trade. "
         "A timeout without reaching target is not a success."
     )
     + _ONCHAIN,

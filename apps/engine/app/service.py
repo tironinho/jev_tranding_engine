@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 import asyncio
 import logging
@@ -580,6 +581,7 @@ class TradingEngine:
             await self._record_risk(self.risk._reject(decision, ["PENDING_ENTRY_RECONCILIATION"]))
             return
         if not self.allows_new_live():
+            await self._record_risk(self.risk._reject(decision, ["LIVE_LOCKED"]))
             self._log("live_blocked", "LIVE_LOCKED")
             self.store.add_event("live_blocked", "LIVE_LOCKED", {"decision_id": str(decision.decision_id)})
             return
@@ -589,6 +591,7 @@ class TradingEngine:
             equity = balance.get("equity_usdt")
             wallet = balance.get("wallet")
             if balance.get("status") != "ok":
+                await self._record_risk(self.risk._reject(decision, ["ACCOUNT_UNAVAILABLE"]))
                 self._log("live_blocked", "NO_REAL_EQUITY")
                 return
             # USDT net is the borrow. The collateral is the marked account, and the order borrows against it.
@@ -596,6 +599,7 @@ class TradingEngine:
                 if isinstance(wallet, (int, float)) and wallet > 0 and not self._holds_coin(balance):
                     equity = float(wallet)
                 else:
+                    await self._record_risk(self.risk._reject(decision, ["NO_REAL_EQUITY"]))
                     self._log("live_blocked", "NO_REAL_EQUITY")
                     return
             level = balance.get("margin_level")
@@ -641,6 +645,7 @@ class TradingEngine:
         if self.postgres:
             await self.postgres.save_event("live_entry_intent", str(decision.decision_id), pending)
             if not self.postgres.healthy:
+                self.store.add_event("execution_pending", "ENTRY_INTENT_NOT_DURABLE", {"decision_id": str(decision.decision_id)})
                 self._log("live_blocked", "ENTRY_INTENT_NOT_DURABLE")
                 return
         if not self._live_signal_fresh(decision, snapshot):
@@ -650,9 +655,11 @@ class TradingEngine:
         try:
             order = await self.live.submit(intent)
         except LiveExecutionBlocked as exc:
+            self.store.add_event("execution_pending", exc.reason, {"decision_id": str(decision.decision_id)})
             self._log("live_blocked", exc.reason)
             return
         except Exception as exc:
+            self.store.add_event("execution_pending", "ORDER_STATUS_UNKNOWN_RECONCILING", {"decision_id": str(decision.decision_id)})
             self._log("live_error", str(exc))
             return
         await self._record_live_entry(decision, snapshot, risk, order)
@@ -1230,6 +1237,12 @@ class TradingEngine:
             day_start_equity=account.day_start_equity,
             realized_pnl_today=account.realized_pnl_today,
             open_positions=len(account.positions),
+            # Reserve initial risk even after stop tightening; correlated entries share this budget.
+            open_stop_risk=sum(abs(p.entry_price - (p.initial_stop or p.stop)) * p.quantity
+                + p.entry_fee + p.quantity * p.entry_price * (self.settings.taker_fee_rate
+                    + self.risk.limits.plan_stress_bps / 10000
+                    + self.risk.limits.borrow_hourly_stress_rate * max(1, math.ceil(self.risk.limits.max_hold_minutes / 60)))
+                for p in account.positions.values()),
             symbol_exposure_notional=account.symbol_exposure(snapshot.symbol, marks),
             total_exposure_notional=account.exposure(marks),
             has_position_on_symbol=any(position.symbol == snapshot.symbol for position in account.positions.values()),
@@ -1387,7 +1400,7 @@ class TradingEngine:
         for asset in payload.get("assets") or []:
             if str(asset.get("asset") or "") == "USDT":
                 continue
-            if abs(float(asset.get("total") or 0)) >= 1e-4:
+            if abs(float(asset.get("total") or 0)) > 1e-12:
                 return True
         return False
 
@@ -1545,11 +1558,16 @@ class TradingEngine:
         from app.providers.jev.real import _normalized_state
 
         rows = []
+        seen = set()
         for call in reversed(self.store.jev_calls):
             decision = self.store.by_decision.get(str(call.get("decision_id"))) or {}
             request = call.get("request") if isinstance(call.get("request"), dict) else {}
             response = call.get("response") if isinstance(call.get("response"), dict) else {}
             meta = decision.get("metadata") or {}
+            decision_id = str(call.get("decision_id"))
+            if decision_id in seen or (meta.get("selected_plan_id") and call.get("plan_id") != meta["selected_plan_id"]):
+                continue
+            seen.add(decision_id)
             rows.append(
                 {
                     "decision_id": str(call.get("decision_id")),
@@ -1561,6 +1579,8 @@ class TradingEngine:
                     "required_continuation": meta.get("jev_required_continuation"),
                     "size_scale": meta.get("size_scale"),
                     "reason_codes": decision.get("reason_codes") or [],
+                    "candidate_plans": meta.get("candidate_plans", []),
+                    "selected_plan_id": meta.get("selected_plan_id"),
                     "state": response.get("sent_request", {}).get("state") if response.get("sent_request") else None,
                     "request_recorded": bool(response.get("sent_request")),
                     "response": {

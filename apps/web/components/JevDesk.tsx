@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { CandidatePlans, type CandidatePlan } from "@/components/CandidatePlans";
 import { Empty, Panel } from "@/components/Shell";
 import { pct, shortTime, signedClass } from "@/lib/utils";
 
 export type JevReview = {
+  candidate_plans?: CandidatePlan[];
+  selected_plan_id?: string;
   decision_id: string;
   symbol?: string;
   timestamp?: string;
@@ -100,7 +103,7 @@ function Reading({ review }: { review: JevReview }) {
           <div>
             <div className="text-[11px] text-mute">BASELINE PEDIU</div>
             <div className="font-mono text-2xl">{state.baseline_action ?? "NO DATA"}</div>
-            <div className="font-mono text-[11px] text-mute">confiança {pct(state.baseline_confidence ?? null)}</div>
+            <div className="font-mono text-[11px] text-mute">score {pct(state.baseline_confidence ?? null)} · não é probabilidade</div>
           </div>
           <div className="text-right">
             <div className="text-[11px] text-mute">JEV DEVOLVEU</div>
@@ -112,6 +115,7 @@ function Reading({ review }: { review: JevReview }) {
           </div>
         </div>
       </Panel>
+      <Panel title="PLANOS E EXPECTATIVA LÍQUIDA"><CandidatePlans plans={review.candidate_plans} selected={review.selected_plan_id} /><Link className="mt-3 block text-xs underline" href={`/decisions/${review.decision_id}`}>Ver decisão, custos, ordens e resultado observado</Link></Panel>
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="O QUE ENTROU">
           <div className="grid gap-3">

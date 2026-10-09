@@ -33,9 +33,11 @@ export function StrategyCard({ card, liveArmed }: { card: StrategyCardData; live
         <Stat label="WIN RATE" value={hasTrades ? pct(card.win_rate) : "NO DATA"} />
         <Stat label="PROFIT FACTOR" value={hasTrades ? num(card.profit_factor, 2) : "NO DATA"} />
         <Stat label="EXPECTANCY" value={hasTrades ? `${num(card.expectancy_r, 2)} R` : "NO DATA"} />
-        <Stat label="NET PNL" value={liveAccount || hasTrades ? money(result) : "NO DATA"} className={liveAccount || hasTrades ? signedClass(result) : ""} />
+        <Stat label="TRADES · LÍQUIDO REGISTRADO" value={hasTrades ? money(card.net_pnl) : "NO DATA"} className={signedClass(card.net_pnl)} />
+        {liveAccount && <Stat label="VARIAÇÃO DO PATRIMÔNIO" value={money(result)} className={signedClass(result)} />}
         <Stat label="DRAWDOWN" value={liveAccount || hasTrades ? pct(card.max_drawdown) : "NO DATA"} />
       </dl>
+      {liveAccount && <p className="mt-2 text-[10px] text-mute">Variação da conta inclui saldos, custos e movimentações. Não equivale ao PnL dos trades. Diferença ainda não atribuída aos trades: {money(result - card.net_pnl)} USDT.</p>}
       <div className="mt-3 border-t border-line pt-2 font-mono text-[11px] text-mute">
         {liveAccount
           ? `começou ${num(card.starting_equity, 2)} · agora ${num(card.equity, 2)}`

@@ -333,6 +333,11 @@ async def risk_limits(request: Request) -> dict:
         "max_total_exposure": limits.max_total_exposure,
         "target_mode": limits.target_mode.value,
         "max_leverage": limits.max_leverage,
+        "dynamic_rr_enabled": limits.dynamic_rr_enabled,
+        "plan_stress_bps": limits.plan_stress_bps,
+        "probability_haircut": limits.probability_haircut,
+        "borrow_hourly_stress_rate": limits.borrow_hourly_stress_rate,
+        "max_portfolio_stop_risk": limits.max_portfolio_stop_risk,
     }
 
 

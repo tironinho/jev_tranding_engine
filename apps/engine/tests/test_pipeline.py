@@ -252,6 +252,8 @@ async def test_a_long_with_no_volume_score_still_asks_jev():
 @pytest.mark.asyncio
 async def test_two_symbols_ask_jev_at_the_same_time():
     eng = engine()
+    # This test isolates symbol concurrency, with one plan per symbol.
+    eng.risk.update_limits(dynamic_rr_enabled=False)
     first, book = long_snapshot()
     second = first.model_copy(update={"symbol": "ETHUSDT"})
     attach_book(eng, book)

@@ -38,6 +38,13 @@ export type JevReview = {
   };
 };
 
+export type JevExecution = {
+  risk?: { accepted?: boolean; reject_reasons?: string[] } | null;
+  orders?: Array<{ status?: string }>;
+  fills?: Array<Record<string, unknown>>;
+  trade?: Record<string, unknown> | null;
+};
+
 const EFFECTS: Record<string, string> = {
   confirm: "CONFIRMOU",
   veto: "VETOU",
@@ -62,10 +69,12 @@ export function JevDesk({
   rows,
   selected,
   history,
+  execution,
 }: {
   rows: JevReview[] | null;
   selected: JevReview | null;
   history?: "postgres" | "memory" | "unavailable";
+  execution?: JevExecution | null;
 }) {
   if (!rows) return <Panel title="JEV"><Empty label="ENGINE OFFLINE" /></Panel>;
   if (!rows.length) {
@@ -98,12 +107,12 @@ export function JevDesk({
           })}
         </ul>
       </Panel>
-      {selected ? <Reading review={selected} /> : <Empty />}
+      {selected ? <Reading review={selected} execution={execution} /> : <Empty />}
     </div>
   );
 }
 
-function Reading({ review }: { review: JevReview }) {
+function Reading({ review, execution }: { review: JevReview; execution?: JevExecution | null }) {
   const state = review.state ?? {};
   const answer = review.response ?? {};
   const required = review.required_continuation;
@@ -129,6 +138,7 @@ function Reading({ review }: { review: JevReview }) {
           </div>
         </div>
       </Panel>
+      <ExecutionStatus review={review} execution={execution} />
       <Panel title="PLANOS E EXPECTATIVA LÍQUIDA"><CandidatePlans plans={review.candidate_plans} selected={review.selected_plan_id} /><Link className="mt-3 block text-xs underline" href={`/decisions/${review.decision_id}`}>Ver decisão, custos, ordens e resultado observado</Link></Panel>
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="O QUE ENTROU">
@@ -164,6 +174,37 @@ function Reading({ review }: { review: JevReview }) {
       <IntelligenceBlock intelligence={state.intelligence ?? null} />
     </div>
   );
+}
+
+function ExecutionStatus({ review, execution }: { review: JevReview; execution?: JevExecution | null }) {
+  if (review.action === "NO_TRADE") return null;
+  if (!execution) {
+    return <Panel title="EXECUÇÃO"><p className="font-mono text-[11px] text-mute">RESULTADO DA EXECUÇÃO INDISPONÍVEL</p></Panel>;
+  }
+  const risk = execution.risk;
+  const orders = execution.orders ?? [];
+  const fills = execution.fills ?? [];
+  let status = "AGUARDANDO AVALIAÇÃO DE RISCO";
+  let detail = "O JEV confirmou o plano, mas ainda não há avaliação de risco registrada.";
+  let color = "text-mute";
+  if (risk?.accepted === false) {
+    status = "BLOQUEADO PELO RISCO";
+    detail = risk.reject_reasons?.join(" · ") || "Motivo não registrado";
+    color = "text-[#ff6b6b]";
+  } else if (fills.length) {
+    status = execution.trade ? "TRADE REGISTRADA" : "ORDEM EXECUTADA";
+    detail = `${fills.length} fill(s) registrado(s).`;
+    color = "text-[#00f5a0]";
+  } else if (orders.length) {
+    status = "ORDEM SEM FILL";
+    detail = orders.map((order) => order.status ?? "status desconhecido").join(" · ");
+    color = "text-[#f3c969]";
+  } else if (risk?.accepted) {
+    status = "RISCO APROVADO, SEM ORDEM";
+    detail = "A execução não registrou ordem; verifique bloqueio live, expiração ou reconciliação.";
+    color = "text-[#f3c969]";
+  }
+  return <Panel title="EXECUÇÃO" aside={<span className={`font-mono text-[11px] ${color}`}>{status}</span>}><p className="font-mono text-[11px] text-mute">{detail}</p></Panel>;
 }
 
 function IntelligenceBlock({ intelligence }: { intelligence: Record<string, unknown> | null }) {

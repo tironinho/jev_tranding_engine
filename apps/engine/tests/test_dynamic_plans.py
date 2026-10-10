@@ -124,6 +124,17 @@ def test_candidates_cannot_cross_structure_and_include_unknown_interest_stress()
     assert len({p['target'] for p in plans}) == len(plans)
 
 
+def test_recent_break_level_does_not_collapse_future_targets():
+    snapshot, _ = long_snapshot(recent_high=100.05, resistance_15m=104)
+
+    plans = candidate_plans(snapshot, Action.LONG, RiskLimits(), .0005)
+
+    assert plans
+    assert any(plan['eligible'] for plan in plans)
+    assert max(plan['target'] for plan in plans) > snapshot.features['recent_high']
+    assert max(plan['target'] for plan in plans) <= snapshot.features['resistance_15m']
+
+
 @pytest.mark.asyncio
 async def test_risk_rechecks_stressed_probability_and_aggregate_loss():
     snapshot, book = long_snapshot()

@@ -327,8 +327,10 @@ async def test_jev_review_uses_postgres_history_after_restart():
 
     class History:
         healthy = True
+        calls = 0
 
         async def recent_jev_calls(self, limit):
+            self.calls += 1
             return [
                 {
                     "call": {
@@ -348,9 +350,12 @@ async def test_jev_review_uses_postgres_history_after_restart():
 
     eng.postgres = History()
     rows = await eng.jev_reviews_with_history(5)
+    cached = await eng.jev_reviews_with_history(5)
     assert [(row["decision_id"], row["symbol"], row["effect"]) for row in rows] == [
         ("durable-decision", "ETHUSDT", "confirm")
     ]
+    assert cached == rows
+    assert eng.postgres.calls == 1
 
 
 @pytest.mark.asyncio

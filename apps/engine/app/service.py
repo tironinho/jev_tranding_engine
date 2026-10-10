@@ -192,6 +192,9 @@ class TradingEngine:
         self._quotes: dict[str, list[dict]] = {}
         self._quotes_dirty: set[str] = set()
         self._quote_tasks: dict[str, asyncio.Task] = {}
+        self._jev_history_cache: list[dict] = []
+        self._jev_history_cached_at = 0.0
+        self._jev_history_lock = asyncio.Lock()
 
     async def start(self) -> None:
         import httpx
@@ -1686,7 +1689,14 @@ class TradingEngine:
             for call in reversed(self.store.jev_calls)
         ]
         if self.postgres and self.postgres.healthy:
-            persisted = await self.postgres.recent_jev_calls(limit * 3)
+            now = time.monotonic()
+            if self._jev_history_cached_at == 0 or now - self._jev_history_cached_at >= 10:
+                async with self._jev_history_lock:
+                    now = time.monotonic()
+                    if self._jev_history_cached_at == 0 or now - self._jev_history_cached_at >= 10:
+                        self._jev_history_cache = await self.postgres.recent_jev_calls(240)
+                        self._jev_history_cached_at = now
+            persisted = self._jev_history_cache[: limit * 3]
             records.extend((item["call"], item["decision"]) for item in persisted)
         return self._format_jev_reviews(records, limit)
 

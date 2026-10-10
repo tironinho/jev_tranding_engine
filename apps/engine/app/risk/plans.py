@@ -18,7 +18,10 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None):
         return []
     direction = 1 if side is Action.LONG else -1
     boundaries = [float(hour)]
-    for key in ("resistance_15m", "recent_high") if side is Action.LONG else ("support_15m", "recent_low"):
+    # recent_high/recent_low often is the level that triggered the candidate. Treating
+    # that already-touched level as future target capacity collapses every breakout
+    # plan below the net R:R floor. Only the wider 15m structure caps the target.
+    for key in ("resistance_15m",) if side is Action.LONG else ("support_15m",):
         level = snapshot.features.get(key)
         if isinstance(level, (int, float)) and (level - entry) * direction > 0:
             boundaries.append((level - entry) * direction)

@@ -36,6 +36,6 @@ export function ExchangeExposure({ data }: { data?: ExchangeState }) {
       <td className="p-2">{row.status === "CASH" ? "—" : num(row.difference, 8)}</td>
       <td className="p-2">{labels[row.status] ?? row.status}</td>
     </tr>)}</tbody></table>
-    <p className="mt-3 text-mute">Todos os saldos e débitos da conta, inclusive resíduos. Juros são separados do principal na conciliação. Saldo sem ordem de origem não recebe preço de entrada ou PnL inventados. Nenhum resíduo é liquidado automaticamente.</p>
+    <p className="mt-3 text-mute">Todos os saldos e débitos da conta, inclusive resíduos. A Binance pode contar cada ativo ou dívida como uma posição; a tabela do robô conta somente trades abertos pelo sistema. Juros são separados do principal na conciliação. Saldo sem ordem de origem não recebe preço de entrada ou PnL inventados. Nenhum resíduo é liquidado automaticamente.</p>
   </div>;
 }

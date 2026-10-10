@@ -44,7 +44,7 @@ export default async function TradesPage({
   params.set("mode", "live");
   const [result, positions] = await Promise.all([
     engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`),
-    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"]; exchange: ExchangeState }>("/api/positions"),
+    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"]; exchange: ExchangeState }>("/api/positions?fresh=true"),
   ]);
   const open = (positions.ok ? positions.data?.rows ?? [] : []).filter((row) => row?.mode === "live");
   const rows = result.ok ? result.data?.rows ?? [] : null;
@@ -89,7 +89,7 @@ export default async function TradesPage({
         <ExchangeExposure data={positions.ok ? positions.data?.exchange : undefined} />
       </Panel>
       <Panel title={`ABERTAS — CONTROLE DO ROBÔ (${open.length})`}>
-        {!positions.ok ? <Empty label="FALHA AO CONSULTAR POSIÇÕES" /> : open.length ? <PositionTable rows={open} /> : <Empty label="NENHUM TRADE NO CONTROLE INTERNO — CONSULTE A CONTA ACIMA" />}
+        {!positions.ok ? <Empty label="FALHA AO CONSULTAR POSIÇÕES" /> : open.length ? <PositionTable rows={open} exchange={positions.data?.exchange} /> : <Empty label="NENHUM TRADE NO CONTROLE INTERNO — CONSULTE A CONTA ACIMA" />}
       </Panel>
       <Panel title="FECHADAS — PRODUÇÃO">
         {!rows ? <Empty /> : !rows.length ? <Empty label="NENHUM TRADE DE PRODUÇÃO FECHADO" /> : (

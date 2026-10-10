@@ -132,10 +132,14 @@ async def engine_status(request: Request) -> dict:
 
 
 @router.get("/api/overview")
-async def overview(request: Request) -> dict:
+async def overview(request: Request, fresh_balance: bool = False) -> dict:
     _actor(request)
     engine = _engine(request)
     performance = engine.performance()
+    positions = engine.positions_payload()
+    balance = await _noted_balance(engine, fresh=fresh_balance)
+    from app.execution.reconciliation import reconcile
+    exchange = reconcile(balance, positions, engine._marks(), engine.feed.rules)
     cards = []
     for key, stats in performance.items():
         cards.append({"key": key, "label": LABELS.get(key, key), **stats})
@@ -143,8 +147,9 @@ async def overview(request: Request) -> dict:
         "status": engine.status(),
         "strategies": cards,
         "tickers": [engine.ticker(symbol) for symbol in engine.settings.symbol_list],
-        "positions": engine.positions_payload(),
-        "binance_balance": await _noted_balance(engine),
+        "positions": positions,
+        "binance_balance": balance,
+        "exchange": exchange,
         "account": engine.account_curve(),
         "paper": engine.paper_book(),
     }
@@ -302,11 +307,11 @@ async def trades(
 
 
 @router.get("/api/positions")
-async def positions(request: Request) -> dict:
+async def positions(request: Request, fresh: bool = False) -> dict:
     _actor(request)
     engine = _engine(request)
     from app.execution.reconciliation import reconcile
-    balance = await engine.balance.snapshot()
+    balance = await engine.balance.snapshot(fresh=fresh)
     rows = engine.positions_payload()
     return {"rows": rows, "exchange": reconcile(balance, rows, engine._marks(), engine.feed.rules)}
 
@@ -414,8 +419,8 @@ async def resume(body: ConfirmBody, request: Request) -> dict:
     return {"trading_enabled": True}
 
 
-async def _noted_balance(engine):
-    payload = engine.mark_account(await engine.balance.snapshot())
+async def _noted_balance(engine, *, fresh: bool = False):
+    payload = engine.mark_account(await engine.balance.snapshot(fresh=fresh))
     await engine.note_balance(payload)
     return payload
 

@@ -26,13 +26,13 @@ type Overview = {
   binance_balance?: BinanceBalance;
   account?: AccountTrack;
   paper?: PaperBook;
+  exchange?: ExchangeState;
 };
 
 export default async function OverviewPage() {
-  const [overview, decisions, positions] = await Promise.all([
-    engineFetch<Overview>("/api/overview"),
+  const [overview, decisions] = await Promise.all([
+    engineFetch<Overview>("/api/overview?fresh_balance=true"),
     engineFetch<{ rows: Parameters<typeof DecisionTable>[0]["rows"] }>("/api/decisions?limit=200"),
-    engineFetch<{ exchange: ExchangeState }>("/api/positions"),
   ]);
   if (!overview.ok || !overview.data) {
     return (
@@ -63,10 +63,10 @@ export default async function OverviewPage() {
           <StrategyCard key={card.key} card={card} liveArmed={data.status.live_armed} />
         ))}
       </div>
-      <Panel title="POSITIONS">
-        <PositionTable rows={data.positions} />
+      <Panel title="POSIÇÕES DO ROBÔ · CONCILIAÇÃO BINANCE">
+        <PositionTable rows={data.positions} exchange={data.exchange} />
       </Panel>
-      <Panel title="CONTA BINANCE · TODAS AS EXPOSIÇÕES E DÍVIDAS"><ExchangeExposure data={positions.ok ? positions.data?.exchange : undefined} /></Panel>
+      <Panel title="CONTA BINANCE · TODAS AS EXPOSIÇÕES E DÍVIDAS"><ExchangeExposure data={data.exchange} /></Panel>
       <Panel title="LATEST DECISIONS">
         <DecisionTable rows={decisions.ok ? (decisions.data?.rows ?? []).slice(0, 12) : null} />
       </Panel>

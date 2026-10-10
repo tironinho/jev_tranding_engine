@@ -102,6 +102,7 @@ export function DecisionTable({ rows }: { rows: DecisionRow[] | null }) {
 
 export function PositionTable({
   rows,
+  exchange,
 }: {
   rows: Array<{
     position_id?: string;
@@ -119,15 +120,27 @@ export function PositionTable({
     target_pnl?: number;
     stop_pnl?: number;
   }> | null;
+  exchange?: {
+    rows: Array<{
+      asset: string;
+      net_quantity: number;
+      free?: number;
+      locked?: number;
+      difference: number;
+      status: string;
+    }>;
+  };
 }) {
   if (!rows) return <Empty label="Falha na consulta de posições do robô" />;
   if (!rows.length) return <Empty label="Sem posições do robô · saldos e dívidas estão na conta abaixo" />;
+  const exposure = new Map((exchange?.rows ?? []).map((row) => [row.asset, row]));
+  const reconciled = Boolean(exchange);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-[11px]">
         <thead className="text-mute">
           <tr className="border-b border-line">
-            {["STRATEGY", "SYMBOL", "SIDE", "QTY", "NOTIONAL", "LEV", "ENTRY", "UNREAL", "TARGET $", "STOP $"].map((head) => (
+            {["STRATEGY", "SYMBOL", "SIDE", "QTD ROBÔ", ...(reconciled ? ["LÍQ. BINANCE", "LIVRE", "TRAVADO", "DIF. CONTA", "STATUS"] : []), "NOTIONAL", "LEV", "FILL ROBÔ", "PNL ROBÔ", "TARGET $", "STOP $"].map((head) => (
               <th key={head} className="px-2 py-2 font-normal tracking-[0.12em]">
                 {head}
               </th>
@@ -135,23 +148,35 @@ export function PositionTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.position_id ?? `${row.strategy}-${row.symbol}-${row.entry}`} className="border-b border-line/70 font-mono">
-              <td className="px-2 py-2">{row.strategy}</td>
-              <td className="px-2 py-2">{row.symbol}</td>
-              <td className="px-2 py-2">{row.side}</td>
+          {rows.map((row) => {
+            const account = exposure.get(row.symbol.endsWith("USDT") ? row.symbol.slice(0, -4) : row.symbol);
+            return (
+              <tr key={row.position_id ?? `${row.strategy}-${row.symbol}-${row.entry}`} className="border-b border-line/70 font-mono">
+                <td className="px-2 py-2">{row.strategy}</td>
+                <td className="px-2 py-2">{row.symbol}</td>
+                <td className="px-2 py-2">{row.side}</td>
                 <td className="px-2 py-2">{row.quantity.toFixed(8)}</td>
-              <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
-              <td className="px-2 py-2">{leverageLabel(row.leverage)}</td>
-              <td className="px-2 py-2">{row.entry.toFixed(4)}</td>
-              <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{money(row.unrealized)}</td>
-              <td className={`px-2 py-2 ${signedClass(row.target_pnl)}`}>{row.target_pnl == null ? "NO DATA" : money(row.target_pnl)}</td>
-              <td className={`px-2 py-2 ${signedClass(row.stop_pnl)}`}>{row.stop_pnl == null ? "NO DATA" : money(row.stop_pnl)}</td>
-            </tr>
-          ))}
+                {reconciled ? (
+                  <>
+                    <td className="px-2 py-2">{account ? num(account.net_quantity, 8) : "NO DATA"}</td>
+                    <td className="px-2 py-2">{account?.free == null ? "—" : num(account.free, 8)}</td>
+                    <td className="px-2 py-2">{account?.locked == null ? "—" : num(account.locked, 8)}</td>
+                    <td className={`px-2 py-2 ${signedClass(account?.difference)}`}>{account ? num(account.difference, 8) : "NO DATA"}</td>
+                    <td className="px-2 py-2">{account?.status ?? "NO DATA"}</td>
+                  </>
+                ) : null}
+                <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
+                <td className="px-2 py-2">{leverageLabel(row.leverage)}</td>
+                <td className="px-2 py-2">{row.entry.toFixed(4)}</td>
+                <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{money(row.unrealized)}</td>
+                <td className={`px-2 py-2 ${signedClass(row.target_pnl)}`}>{row.target_pnl == null ? "NO DATA" : money(row.target_pnl)}</td>
+                <td className={`px-2 py-2 ${signedClass(row.stop_pnl)}`}>{row.stop_pnl == null ? "NO DATA" : money(row.stop_pnl)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-      <div className="px-2 pt-2 text-[10px] text-mute">LEV é o nocional marcado dividido pela margem travada. UNREAL é o que entra se fechar agora, já sem a taxa de saída. TARGET $ e STOP $ são o resultado do trade, já com a taxa de entrada e a de saída.</div>
+      <div className="px-2 pt-2 text-[10px] text-mute">QTD ROBÔ e FILL ROBÔ pertencem à ordem executada pelo sistema. LÍQ. BINANCE inclui resíduos, comissões e dívidas anteriores da mesma moeda; LIVRE e TRAVADO vêm da conta no mesmo instante. A Binance pode mostrar um preço médio e um PnL históricos da conta diferentes do fill e do PNL ROBÔ desta ordem. LEV é o nocional marcado dividido pela margem travada. PNL ROBÔ, TARGET $ e STOP $ usam somente o trade do robô e incluem as taxas configuradas.</div>
     </div>
   );
 }

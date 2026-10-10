@@ -346,6 +346,12 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["ema_20_5m"] = ema(context_closes_5, 20)
     features["ema_20_15m"] = ema(context_closes_15, 20)
     features["context_15m_slope"] = ema_slope(context_closes_15, 20)
+    features["price_vs_ema20_5m"] = (
+        price / features["ema_20_5m"] - 1 if features["ema_20_5m"] else None
+    )
+    features["price_vs_ema20_15m"] = (
+        price / features["ema_20_15m"] - 1 if features["ema_20_15m"] else None
+    )
     highs_15 = [candle.high for candle in candles_15m]
     lows_15 = [candle.low for candle in candles_15m]
     if len(highs_15) >= 21:

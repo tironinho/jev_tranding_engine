@@ -101,6 +101,40 @@ def test_taker_flow_is_used_before_the_aggtrade_delta():
     assert result.scores["volume_score"] < 0
 
 
+def test_below_average_volume_withholds_instead_of_reversing_its_vote():
+    eng = engine()
+    snapshot, _book = long_snapshot(volume_ratio=.6, taker_flow_1m=.8)
+
+    result = score_baseline(snapshot, eng.weights)
+
+    assert result.scores["volume_score"] == 0
+    assert result.scores["orderflow_score"] > 0
+
+
+def test_closed_multi_timeframe_context_changes_trend_score():
+    eng = engine()
+    neutral, _book = long_snapshot()
+    bearish = neutral.model_copy(update={"features": {
+        **neutral.features,
+        "context_15m_slope": -.005,
+        "price_vs_ema20_15m": -.01,
+        "setup_5m_return": -.005,
+    }})
+    bullish = neutral.model_copy(update={"features": {
+        **neutral.features,
+        "context_15m_slope": .005,
+        "price_vs_ema20_15m": .01,
+        "setup_5m_return": .005,
+    }})
+
+    bearish_result = score_baseline(bearish, eng.weights)
+    bullish_result = score_baseline(bullish, eng.weights)
+
+    assert bearish_result.scores["context_trend_score"] == -1
+    assert bullish_result.scores["context_trend_score"] == 1
+    assert bearish_result.scores["trend_score"] < bullish_result.scores["trend_score"]
+
+
 def test_aligned_components_are_classified_before_the_side():
     eng = engine()
     snapshot, _book = long_snapshot()

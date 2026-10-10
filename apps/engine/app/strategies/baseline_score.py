@@ -99,10 +99,23 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     extension_n = clip((price_vs or 0.0) / config.price_vs_ema_scale, -1, 1)
     hour = _num(features, "return_60m")
     if hour is None:
-        trend = clip(0.5 * alignment + 0.3 * slope_n + 0.2 * extension_n, -1, 1)
+        local_trend = clip(0.5 * alignment + 0.3 * slope_n + 0.2 * extension_n, -1, 1)
     else:
         hour_n = clip(hour / config.return_60m_scale, -1, 1)
-        trend = clip(0.4 * alignment + 0.25 * slope_n + 0.15 * extension_n + 0.2 * hour_n, -1, 1)
+        local_trend = clip(0.4 * alignment + 0.25 * slope_n + 0.15 * extension_n + 0.2 * hour_n, -1, 1)
+
+    context_parts = (
+        (0.5, _scaled(features, "context_15m_slope", config.context_15m_slope_scale)),
+        (0.3, _scaled(features, "price_vs_ema20_15m", config.context_15m_distance_scale)),
+        (0.2, _scaled(features, "setup_5m_return", config.setup_5m_return_scale)),
+    )
+    available_context = [(weight, value) for weight, value in context_parts if value is not None]
+    context_trend = (
+        sum(weight * value for weight, value in available_context) / sum(weight for weight, _ in available_context)
+        if available_context
+        else None
+    )
+    trend = local_trend if context_trend is None else clip(0.65 * local_trend + 0.35 * context_trend, -1, 1)
 
     rsi_n = clip((rsi_value - 50) / 20, -1, 1)
     roc_n = clip((roc_value or 0.0) / config.roc_scale, -1, 1)
@@ -114,7 +127,9 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         volume = None
         orderflow = None
     else:
-        volume_mag = clip((volume_ratio - 1) / 1.5, -1, 1)
+        # Below-average activity withholds confirmation; it must not manufacture
+        # a directional vote opposite to the observed taker flow.
+        volume_mag = clip((volume_ratio - 1) / 1.5, 0, 1)
         volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
         imb = imbalance if imbalance is not None else 0.0
         orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)
@@ -143,6 +158,7 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
 
     scores: dict[str, float | None] = {
         "trend_score": trend,
+        "context_trend_score": context_trend,
         "momentum_score": momentum,
         "volume_score": volume,
         "orderflow_score": orderflow,
@@ -151,6 +167,13 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         "liquidity_score": liquidity,
     }
     return scores
+
+
+def _scaled(features: dict, name: str, scale: float) -> float | None:
+    value = _num(features, name)
+    if value is None or scale <= 0:
+        return None
+    return clip(value / scale, -1, 1)
 
 
 def classify_scores(

@@ -49,6 +49,7 @@ const EFFECTS: Record<string, string> = {
 
 const SCORES: Array<[string, string]> = [
   ["trend_score", "TENDÊNCIA"],
+  ["context_trend_score", "TENDÊNCIA 5M/15M"],
   ["momentum_score", "MOMENTO"],
   ["volume_score", "VOLUME"],
   ["orderflow_score", "FLUXO"],

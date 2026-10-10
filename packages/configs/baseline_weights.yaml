@@ -1,8 +1,8 @@
-# baseline_weights_v1
+# baseline_weights_v2
 # Constantes de escala só comprimem grandezas típicas de cripto para [-1, 1].
 # Não são parâmetros otimizados. Não usar live sem calibração por backtest.
 
-version: baseline_weights_v1
+version: baseline_weights_v2
 weights:
   trend: 0.25
   momentum: 0.20
@@ -19,6 +19,11 @@ high_atr_normalized: 0.02
 slope_scale: 0.001
 price_vs_ema_scale: 0.005
 roc_scale: 0.004
+# Contexto de candles fechados: inclinação da EMA20 em 15m, distância do
+# preço à EMA20 de 15m e retorno do último candle fechado de 5m.
+context_15m_slope_scale: 0.005
+context_15m_distance_scale: 0.01
+setup_5m_return_scale: 0.005
 # 1% in an hour maps to the edge of [-1, 1]. Scale only, not a fitted edge.
 return_60m_scale: 0.01
 imbalance_strong: 0.25

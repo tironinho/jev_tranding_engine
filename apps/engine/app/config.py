@@ -24,7 +24,7 @@ def discover_config_dir() -> Path:
 
 @dataclass(frozen=True)
 class BaselineWeightConfig:
-    version: str = "baseline_weights_v1"
+    version: str = "baseline_weights_v2"
     trend: float = 0.25
     momentum: float = 0.20
     volume: float = 0.10
@@ -41,6 +41,9 @@ class BaselineWeightConfig:
     slope_scale: float = 0.001
     price_vs_ema_scale: float = 0.005
     roc_scale: float = 0.004
+    context_15m_slope_scale: float = 0.005
+    context_15m_distance_scale: float = 0.01
+    setup_5m_return_scale: float = 0.005
     imbalance_strong: float = 0.25
     volume_z_strong: float = 1.0
 
@@ -151,7 +154,7 @@ def load_file_config(config_dir: Path | None = None) -> dict:
 def baseline_from_file(payload: dict) -> BaselineWeightConfig:
     weights = payload.get("weights") or {}
     return BaselineWeightConfig(
-        version=payload.get("version", "baseline_weights_v1"),
+        version=payload.get("version", "baseline_weights_v2"),
         trend=float(weights.get("trend", 0.25)),
         momentum=float(weights.get("momentum", 0.20)),
         volume=float(weights.get("volume", 0.10)),
@@ -168,6 +171,9 @@ def baseline_from_file(payload: dict) -> BaselineWeightConfig:
         slope_scale=float(payload.get("slope_scale", 0.001)),
         price_vs_ema_scale=float(payload.get("price_vs_ema_scale", 0.005)),
         roc_scale=float(payload.get("roc_scale", 0.004)),
+        context_15m_slope_scale=float(payload.get("context_15m_slope_scale", 0.005)),
+        context_15m_distance_scale=float(payload.get("context_15m_distance_scale", 0.01)),
+        setup_5m_return_scale=float(payload.get("setup_5m_return_scale", 0.005)),
         imbalance_strong=float(payload.get("imbalance_strong", 0.25)),
         volume_z_strong=float(payload.get("volume_z_strong", 1.0)),
     )

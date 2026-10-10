@@ -329,11 +329,12 @@ def test_paper_book_and_open_trade_money():
         margin=100,
     )
     row = eng.positions_payload()[0]
+    exit_rate = eng.fee_config.taker_fee_rate
     assert row["notional"] == 210
     assert row["leverage"] == 2.1
-    assert row["unrealized"] == 10 - 105 * 2 * 0.0005
-    assert row["target_pnl"] == 20 - 1 - 110 * 2 * 0.0005
-    assert row["stop_pnl"] == -10 - 1 - 95 * 2 * 0.0005
+    assert row["unrealized"] == 10 - 105 * 2 * exit_rate
+    assert row["target_pnl"] == 20 - 1 - 110 * 2 * exit_rate
+    assert row["stop_pnl"] == -10 - 1 - 95 * 2 * exit_rate
     book = eng.paper_book()
     baseline = book["accounts"][0]
     assert baseline["cash"] == 9899

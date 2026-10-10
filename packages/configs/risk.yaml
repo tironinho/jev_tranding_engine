@@ -12,6 +12,9 @@ step_stop_to_breakeven: true
 dynamic_rr_enabled: true
 plan_stress_bps: 2.0
 probability_haircut: 0.05
+# Não aceita um plano apenas por EV ligeiramente acima de zero. Exige folga
+# contra erro de calibração da probabilidade e variação de taxa/slippage.
+min_expected_net_r: 0.15
 # Cenário de estresse (1 bp/h), não taxa efetiva da conta. Usa a maior entre esta e a observada.
 borrow_hourly_stress_rate: 0.0001
 # Orçamento agregado de perda planejada; não pressupõe independência entre moedas.
@@ -29,8 +32,8 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# Depois deste horizonte, encerra quando o resultado líquido voltar ao zero ou
-# ao prejuízo. Enquanto estiver líquido positivo, mantém alvo e stop protegidos.
+# Depois deste horizonte, só mantém a posição se o stop já proteger o ponto de
+# equilíbrio líquido. Sem essa proteção, encerra por tempo mesmo se estiver pouco positiva.
 max_hold_minutes: 60
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false

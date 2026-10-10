@@ -5,7 +5,7 @@ import pytest
 
 from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import Action, OperatingMode, MarketType
-from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, JEV_UNAVAILABLE
+from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, JEV_EXPECTANCY_TOO_LOW, JEV_UNAVAILABLE
 from app.providers.jev.mock import MockJevProvider
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy, StrategyContext
@@ -58,6 +58,18 @@ async def test_no_space_to_nearest_structure_may_be_assessed_but_never_forces_a_
     assert decision.metadata["jev_effect"] == "veto"
     assert decision.metadata["jev_continuation"] == pytest.approx(.2)
     assert decision.metadata["best_assessed_plan_id"]
+
+
+@pytest.mark.asyncio
+async def test_barely_positive_uncalibrated_expectancy_is_rejected():
+    snapshot, _ = long_snapshot(atr=.01, recent_swing_low=99.99, range_60m=1, resistance_15m=None)
+    provider = PlansProvider({"rr_2": .2, "rr_2.5": .2, "rr_3": .46})
+    ctx = context(provider)
+    ctx.combination = replace(ctx.combination, min_trend_continuation=.4)
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+    assert decision.action is Action.NO_TRADE
+    assert JEV_EXPECTANCY_TOO_LOW in decision.reason_codes
+    assert decision.metadata["jev_trade_plan"]["expected_net_r"] < .15
 
 
 @pytest.mark.asyncio
@@ -203,6 +215,10 @@ async def test_risk_rechecks_stressed_probability_and_aggregate_loss():
     decision.metadata['jev_stress_probability'] = .1
     risk = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(.0005,.0005,'test'), book)
     assert 'JEV_NONPOSITIVE_EXPECTANCY' in risk.reject_reasons
+    decision.metadata['jev_stress_probability'] = .34
+    risk = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(.0005,.0005,'test'), book)
+    assert JEV_EXPECTANCY_TOO_LOW in risk.reject_reasons
+    assert 0 < risk.details['expected_net_r'] < risk.details['minimum_expected_net_r']
     decision.metadata['jev_stress_probability'] = .85
     risk = eng.risk.evaluate(decision, snapshot, _context(open_stop_risk=200), FeeQuote(.0005,.0005,'test'), book)
     assert 'MAX_PORTFOLIO_STOP_RISK' in risk.reject_reasons

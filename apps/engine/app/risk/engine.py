@@ -13,6 +13,7 @@ from app.domain.enums import (
     EXCHANGE_RULES_UNAVAILABLE,
     INSUFFICIENT_LIQUIDITY,
     INSUFFICIENT_MARGIN,
+    JEV_EXPECTANCY_TOO_LOW,
     LIVE_LOCKED,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
@@ -287,10 +288,14 @@ class RiskEngine:
         probability = decision.metadata.get("jev_stress_probability", decision.metadata.get("jev_continuation"))
         if isinstance(probability, (int, float)):
             expected = probability * economics.net_reward - (1 - probability) * economics.net_risk
-            if expected <= 0:
-                return self._reject(decision, ["JEV_NONPOSITIVE_EXPECTANCY"], economics=economics,
-                                    details={"expected_net": expected, "break_even_probability":
-                                             economics.net_risk / (economics.net_risk + economics.net_reward)})
+            expected_r = expected / economics.net_risk if economics.net_risk > 0 else -1
+            if expected_r < self.limits.min_expected_net_r:
+                reason = "JEV_NONPOSITIVE_EXPECTANCY" if expected <= 0 else JEV_EXPECTANCY_TOO_LOW
+                return self._reject(decision, [reason], economics=economics,
+                                    details={"expected_net": expected, "expected_net_r": expected_r,
+                                             "minimum_expected_net_r": self.limits.min_expected_net_r,
+                                             "break_even_probability": economics.net_risk /
+                                             (economics.net_risk + economics.net_reward)})
 
         projected_symbol = context.symbol_exposure_notional + notional
         projected_total = context.total_exposure_notional + notional

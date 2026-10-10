@@ -19,9 +19,12 @@ class ConfigFeeProvider:
     async def get_fees(self, symbol: str) -> FeeQuote:
         return FeeQuote(maker=self.fees.maker_fee_rate, taker=self.fees.taker_fee_rate, source="config")
 
+    def estimate(self, symbol: str) -> FeeQuote:
+        return FeeQuote(maker=self.fees.maker_fee_rate, taker=self.fees.taker_fee_rate, source="config")
+
 
 class BinanceFeeProvider:
-    """Uses USD-M GET /fapi/v1/commissionRate when keys exist. Any failure falls back to config."""
+    """Uses the account fee endpoint for futures or spot/margin, with a conservative fallback."""
 
     def __init__(self, settings: Settings, fees: FeeConfig, client: httpx.AsyncClient | None = None) -> None:
         self.settings = settings
@@ -31,13 +34,15 @@ class BinanceFeeProvider:
         self.bucket = TokenBucket(rate=0.2, capacity=2)
         self._cache: dict[str, FeeQuote] = {}
 
+    def estimate(self, symbol: str) -> FeeQuote:
+        return self._cache.get(symbol) or self.fallback.estimate(symbol)
+
     async def get_fees(self, symbol: str) -> FeeQuote:
         cached = self._cache.get(symbol)
         if cached is not None:
             return cached
         if (
-            self.settings.market_type != "futures"
-            or not self.settings.binance_api_key
+            not self.settings.binance_api_key
             or not self.settings.binance_api_secret
             or self.client is None
             or not self.breaker.allow()
@@ -48,17 +53,20 @@ class BinanceFeeProvider:
         query = urlencode(params)
         signature = hmac.new(self.settings.binance_api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
         try:
-            response = await self.client.get(
-                f"{self.settings.binance_futures_rest_url}/fapi/v1/commissionRate",
-                params={**params, "signature": signature},
-                headers={"X-MBX-APIKEY": self.settings.binance_api_key},
-                timeout=5,
-            )
+            futures = self.settings.market_type == "futures"
+            url = (f"{self.settings.binance_futures_rest_url}/fapi/v1/commissionRate" if futures
+                   else f"{self.settings.binance_spot_rest_url}/sapi/v1/asset/tradeFee")
+            response = await self.client.get(url, params={**params, "signature": signature},
+                                             headers={"X-MBX-APIKEY": self.settings.binance_api_key}, timeout=5)
             response.raise_for_status()
             payload = response.json()
+            if not futures:
+                payload = next((item for item in payload if item.get("symbol") == symbol), None) if isinstance(payload, list) else payload
+                if not isinstance(payload, dict):
+                    raise ValueError("spot fee missing")
             quote = FeeQuote(
-                maker=float(payload["makerCommissionRate"]),
-                taker=float(payload["takerCommissionRate"]),
+                maker=float(payload["makerCommissionRate" if futures else "makerCommission"]),
+                taker=float(payload["takerCommissionRate" if futures else "takerCommission"]),
                 source="binance",
             )
         except Exception:

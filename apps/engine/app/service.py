@@ -448,6 +448,7 @@ class TradingEngine:
 
     async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float):
         cfg = self.strategy_settings[key]
+        fee_quote = self.fee_provider.estimate(snapshot.symbol)
         context = StrategyContext(
             correlation_id=correlation_id,
             opportunity_id=opportunity_id,
@@ -460,7 +461,7 @@ class TradingEngine:
             openai=self.openai,
             failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
             risk=self.risk.limits,
-            round_trip_fee=self.fee_config.taker_fee_rate * 2,
+            round_trip_fee=rate_for("taker", fee_quote.maker, fee_quote.taker) * 2,
         )
         self.intelligence.note_marks(self._marks(), snapshot.timestamp)
         context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
@@ -885,6 +886,7 @@ class TradingEngine:
             self.accounts.update_excursion(key, position_id, observed["max_ask"] or state.last_price)
         hold_minutes = max(0.0, (as_of - position.opened_at).total_seconds() / 60)
         time_exit_floor = _net_break_even_price(position, self.fee_config)
+        protected_after_horizon = _stop_protects_price(position, time_exit_floor)
         reason = position_exit_observed(
             position.side,
             min_bid=observed["min_bid"],
@@ -895,9 +897,9 @@ class TradingEngine:
             target=position.target,
             hold_minutes=hold_minutes,
             max_hold_minutes=self.risk.limits.max_hold_minutes,
-            # The clock may close a position only at or below its total
-            # break-even, including both entry and estimated exit fees.
-            entry=time_exit_floor,
+            # Past the assessed horizon, extend only a position whose stop
+            # already protects total break-even. Otherwise the clock closes it.
+            entry=time_exit_floor if protected_after_horizon else None,
             bid=state.best_bid,
             ask=state.best_ask,
         )
@@ -2008,6 +2010,12 @@ def _net_break_even_price(position, fee_config) -> float:
     if position.side is Action.LONG:
         return (position.entry_price + entry_fee_per_unit) / max(1 - rate, 1e-12)
     return (position.entry_price - entry_fee_per_unit) / (1 + rate)
+
+
+def _stop_protects_price(position, price: float) -> bool:
+    if position.side is Action.LONG:
+        return position.stop >= price
+    return position.stop <= price
 
 
 def _exit_fee(position, exit_price: float, quantity: float, fee_config) -> float:

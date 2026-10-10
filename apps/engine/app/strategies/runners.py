@@ -17,6 +17,7 @@ from app.domain.enums import (
     CLASS_SINGLE_DRIVER,
     HIGH_VOLATILITY,
     INSUFFICIENT_HISTORY,
+    JEV_EXPECTANCY_TOO_LOW,
     JEV_FALLBACK,
     JEV_UNAVAILABLE,
     OPENAI_CALLS_DISABLED,
@@ -280,9 +281,12 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
         plan.update(score_probability(plan, assessment.trend_continuation_probability, context.risk.probability_haircut))
         configured = context.combination.min_short_continuation if result.action is Action.SHORT else context.combination.min_trend_continuation
         required = max(configured, plan["break_even_probability"] + context.risk.probability_haircut)
-        action, confidence, reasons = apply_jev_veto(result.action, result.confidence, assessment,
+        action, confidence, vetoes = apply_jev_veto(result.action, result.confidence, assessment,
             context.combination, breakout=_class_has_break(result), min_continuation=required)
-        accepted = action is not Action.NO_TRADE and plan["expected_net_r"] > 0
+        accepted = action is not Action.NO_TRADE and plan["expected_net_r"] >= context.risk.min_expected_net_r
+        reasons = list(vetoes) if action is Action.NO_TRADE else []
+        if action is not Action.NO_TRADE and plan["expected_net_r"] < context.risk.min_expected_net_r:
+            reasons.append(JEV_EXPECTANCY_TOO_LOW)
         plan.update(eligible=accepted, reason="JEV_CONFIRM" if accepted else ",".join(reasons), required_probability=required)
         return plan, assessment, confidence, accepted, reasons
 
@@ -301,6 +305,8 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             reasons = list(vetoes)
             if best_plan["expected_net_r"] <= 0:
                 reasons.append("NO_POSITIVE_EXPECTANCY_PLAN")
+            elif best_plan["expected_net_r"] < context.risk.min_expected_net_r:
+                reasons.append(JEV_EXPECTANCY_TOO_LOW)
             metadata.update(
                 jev_trade_plan=dict(best_plan),
                 best_assessed_plan_id=best_plan["plan_id"],

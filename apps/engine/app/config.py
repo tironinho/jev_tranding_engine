@@ -121,6 +121,7 @@ class RiskLimits:
     dynamic_rr_enabled: bool = False
     plan_stress_bps: float = 2.0
     probability_haircut: float = 0.05
+    min_expected_net_r: float = 0.15
     borrow_hourly_stress_rate: float = 0.0001
     max_portfolio_stop_risk: float = 0.02
 
@@ -261,6 +262,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         dynamic_rr_enabled=bool(payload.get("dynamic_rr_enabled", False)),
         plan_stress_bps=float(payload.get("plan_stress_bps", 2.0)),
         probability_haircut=float(payload.get("probability_haircut", 0.05)),
+        min_expected_net_r=float(payload.get("min_expected_net_r", 0.15)),
         borrow_hourly_stress_rate=float(payload.get("borrow_hourly_stress_rate", 0.0001)),
         max_portfolio_stop_risk=float(payload.get("max_portfolio_stop_risk", 0.02)),
     )

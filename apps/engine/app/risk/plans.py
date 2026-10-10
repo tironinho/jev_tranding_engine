@@ -17,7 +17,7 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None):
     if not isinstance(hour, (int, float)) or not math.isfinite(hour) or hour <= 0:
         return []
     direction = 1 if side is Action.LONG else -1
-    boundaries = [float(hour)]
+    boundaries = []
     # recent_high/recent_low often is the level that triggered the candidate. Treating
     # that already-touched level as future target capacity collapses every breakout
     # plan below the net R:R floor. Only the wider 15m structure caps the target.
@@ -25,7 +25,19 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None):
         level = snapshot.features.get(key)
         if isinstance(level, (int, float)) and (level - entry) * direction > 0:
             boundaries.append((level - entry) * direction)
-    maximum = min(boundaries)
+    maximum = float(hour)
+    # The trailing one-hour range is a useful cap in normal conditions, but it
+    # is systematically behind a new break. A confirmed structural expansion
+    # may be shown to JEV up to the existing hard 3R plan limit; JEV still has
+    # to approve continuation and positive stressed expectancy.
+    confirmed_expansion = (
+        (side is Action.LONG and snapshot.features.get("breakout") is True)
+        or (side is Action.SHORT and snapshot.features.get("breakdown") is True)
+    )
+    if confirmed_expansion:
+        maximum = max(maximum, distance * 3.0)
+    if boundaries:
+        maximum = min(maximum, *boundaries)
     derivative = (intelligence or {}).get("derivatives") or {}
     rate = derivative.get("quote_borrow_hourly_interest" if side is Action.LONG else "borrow_hourly_interest")
     rate = float(rate) if isinstance(rate, (int, float)) and math.isfinite(rate) and rate >= 0 else None

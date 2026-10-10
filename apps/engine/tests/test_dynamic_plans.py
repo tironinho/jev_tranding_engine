@@ -124,6 +124,14 @@ def test_candidates_cannot_cross_structure_and_include_unknown_interest_stress()
     assert len({p['target'] for p in plans}) == len(plans)
 
 
+def test_confirmed_break_can_offer_three_r_beyond_trailing_hour_range():
+    snapshot, _ = long_snapshot(range_60m=.4, resistance_15m=None, breakout=True)
+    plans = candidate_plans(snapshot, Action.LONG, RiskLimits(), .0005)
+
+    assert plans[-1]["gross_rr"] == pytest.approx(3)
+    assert plans[-1]["eligible"] is True
+
+
 def test_recent_break_level_does_not_collapse_future_targets():
     snapshot, _ = long_snapshot(recent_high=100.05, resistance_15m=104)
 

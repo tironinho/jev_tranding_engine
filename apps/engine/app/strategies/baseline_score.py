@@ -115,8 +115,6 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         if available_context
         else None
     )
-    trend = local_trend if context_trend is None else clip(0.65 * local_trend + 0.35 * context_trend, -1, 1)
-
     rsi_n = clip((rsi_value - 50) / 20, -1, 1)
     roc_n = clip((roc_value or 0.0) / config.roc_scale, -1, 1)
     momentum = clip(0.6 * rsi_n + 0.4 * roc_n, -1, 1)
@@ -133,6 +131,25 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
         imb = imbalance if imbalance is not None else 0.0
         orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)
+
+    # A closed 15m EMA is deliberately slow. During a fresh, confirmed break it
+    # describes the regime we are leaving and must not veto the new direction.
+    # Require both momentum and live order flow to agree with the structural
+    # event before neutralising lagging votes. The break is exposed separately
+    # to JEV; it does not manufacture enough score to cross the baseline gate.
+    break_side = 1 if features.get("breakout") is True else -1 if features.get("breakdown") is True else 0
+    break_confirmed = bool(
+        break_side
+        and momentum * break_side >= _COMPONENT_FLOOR
+        and orderflow is not None
+        and orderflow * break_side >= _COMPONENT_FLOOR
+    )
+    if break_confirmed:
+        local_same_side = local_trend if local_trend * break_side > 0 else 0.0
+        context_same_side = context_trend if context_trend is not None and context_trend * break_side > 0 else 0.0
+        trend = clip(0.80 * local_same_side + 0.20 * context_same_side, -1, 1)
+    else:
+        trend = local_trend if context_trend is None else clip(0.65 * local_trend + 0.35 * context_trend, -1, 1)
 
     structure = 0.0
     if range_pos is not None:
@@ -159,6 +176,7 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     scores: dict[str, float | None] = {
         "trend_score": trend,
         "context_trend_score": context_trend,
+        "break_confirmation_score": float(break_side) if break_confirmed else 0.0,
         "momentum_score": momentum,
         "volume_score": volume,
         "orderflow_score": orderflow,

@@ -135,6 +135,27 @@ def test_closed_multi_timeframe_context_changes_trend_score():
     assert bearish_result.scores["trend_score"] < bullish_result.scores["trend_score"]
 
 
+def test_confirmed_breakdown_overrides_opposite_lagging_context():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        breakdown=True,
+        breakout=False,
+        rsi=35,
+        roc=-.004,
+        taker_flow_1m=-.8,
+        imbalance_10=-.4,
+        context_15m_slope=.005,
+        price_vs_ema20_15m=.01,
+        setup_5m_return=.005,
+    )
+
+    result = score_baseline(snapshot, eng.weights)
+
+    assert result.scores["context_trend_score"] > 0
+    assert result.scores["break_confirmation_score"] == -1
+    assert result.scores["trend_score"] <= 0
+
+
 def test_aligned_components_are_classified_before_the_side():
     eng = engine()
     snapshot, _book = long_snapshot()

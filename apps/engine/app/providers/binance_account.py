@@ -21,7 +21,7 @@ _EMPTY = {
 class BinanceBalanceProvider:
     """Read-only wallet snapshot. Never places or withdraws."""
 
-    def __init__(self, settings: Settings, client: Any = None, ttl_s: float = 20) -> None:
+    def __init__(self, settings: Settings, client: Any = None, ttl_s: float = 5) -> None:
         self.settings = settings
         self.client = client
         self.ttl_s = ttl_s
@@ -84,9 +84,10 @@ class BinanceBalanceProvider:
             return {**base, "status": "NO_CREDENTIALS", "detail": "upstream token missing"}
         if self.client is None:
             return {**base, "status": "UNAVAILABLE", "detail": "client not started"}
-        url = f"{settings.balance_upstream_url.rstrip('/')}/api/binance/balance"
-        if fresh:
-            url += "?fresh=true"
+        # This provider already bounds request frequency with its local TTL. Once that
+        # cache expires, bypass the gateway cache so two stacked caches cannot double
+        # the age of the account snapshot shown by the dashboard.
+        url = f"{settings.balance_upstream_url.rstrip('/')}/api/binance/balance?fresh=true"
         try:
             response = await self.client.get(
                 url,
@@ -119,6 +120,15 @@ def _num(value: Any) -> float:
         return 0.0
 
 
+def _optional_num(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _spot(body: Any, market_type: str) -> dict:
     rows = body.get("balances") if isinstance(body, dict) else None
     if not isinstance(rows, list):
@@ -148,6 +158,7 @@ def _spot(body: Any, market_type: str) -> dict:
         "available": available,
         "unrealized": None,
         "assets": assets,
+        "observed_at": time.time(),
         "detail": None,
     }
 
@@ -190,6 +201,10 @@ def _margin(body: Any, market_type: str) -> dict:
         "available": available,
         "unrealized": None,
         "margin_level": _num(level) if level not in (None, "") else None,
+        "total_asset_btc": _optional_num(body.get("totalAssetOfBtc")),
+        "total_liability_btc": _optional_num(body.get("totalLiabilityOfBtc")),
+        "total_net_asset_btc": _optional_num(body.get("totalNetAssetOfBtc")),
+        "total_collateral_usdt": _optional_num(body.get("totalCollateralValueInUSDT")),
         "assets": assets,
         "observed_at": time.time(),
         "detail": None,
@@ -237,5 +252,6 @@ def _futures(body: Any, market_type: str) -> dict:
         "available": available,
         "unrealized": unrealized,
         "assets": assets,
+        "observed_at": time.time(),
         "detail": None,
     }

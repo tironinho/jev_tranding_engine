@@ -10,7 +10,20 @@ export type BinanceBalance = {
   unrealized: number | null;
   margin_level?: number | null;
   equity_usdt?: number | null;
-  assets: Array<{ asset: string; total: number; free?: number | null }>;
+  total_asset_btc?: number | null;
+  total_liability_btc?: number | null;
+  total_net_asset_btc?: number | null;
+  total_collateral_usdt?: number | null;
+  observed_at?: number | null;
+  assets: Array<{
+    asset: string;
+    total: number;
+    free?: number | null;
+    locked?: number | null;
+    borrowed?: number | null;
+    interest?: number | null;
+    gross?: number | null;
+  }>;
   detail?: string | null;
 };
 
@@ -102,8 +115,35 @@ export function AccountEvolution({ track }: { track: AccountTrack | null | undef
   );
 }
 
-function held(item: { total: number; free?: number | null }) {
-  return item.total !== 0 || (item.free ?? 0) !== 0;
+type BinanceAsset = BinanceBalance["assets"][number];
+
+function held(item: BinanceAsset) {
+  return [item.total, item.free, item.locked, item.borrowed, item.interest, item.gross]
+    .some((value) => (value ?? 0) !== 0);
+}
+
+function assetDigits(asset: string) {
+  return asset === "USDT" ? 2 : 8;
+}
+
+function observedAt(value: number | null | undefined) {
+  if (value == null) return "—";
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function gross(item: BinanceAsset) {
+  if (item.gross != null) return item.gross;
+  if (item.free != null || item.locked != null) return (item.free ?? 0) + (item.locked ?? 0);
+  return null;
 }
 
 export function BinanceBalancePanel({ balance, track }: { balance: BinanceBalance | null | undefined; track?: AccountTrack | null }) {
@@ -138,12 +178,40 @@ export function BinanceBalancePanel({ balance, track }: { balance: BinanceBalanc
                 <dd className="font-mono">{num(balance.margin_level, 2)}</dd>
               </div>
             ) : null}
+            {balance.total_asset_btc != null ? (
+              <div>
+                <dt className="text-mute">SALDO TOTAL</dt>
+                <dd className="font-mono">{num(balance.total_asset_btc, 8)} BTC</dd>
+              </div>
+            ) : null}
+            {balance.total_liability_btc != null ? (
+              <div>
+                <dt className="text-mute">DÍVIDA TOTAL</dt>
+                <dd className="font-mono">{num(balance.total_liability_btc, 8)} BTC</dd>
+              </div>
+            ) : null}
+            {balance.total_net_asset_btc != null ? (
+              <div>
+                <dt className="text-mute">PATRIMÔNIO LÍQUIDO</dt>
+                <dd className="font-mono">{num(balance.total_net_asset_btc, 8)} BTC</dd>
+              </div>
+            ) : null}
+            {balance.total_collateral_usdt != null ? (
+              <div>
+                <dt className="text-mute">COLATERAL</dt>
+                <dd className="font-mono">{num(balance.total_collateral_usdt, 2)} USDT</dd>
+              </div>
+            ) : null}
           </dl>
           {others.length ? (
             <div className="border-t border-line pt-2 font-mono text-[11px] text-mute">
-              {others.map((item) => `${item.asset} ${num(item.total, 8)}`).join(" · ")}
+              {others.map((item) => {
+                const locked = item.locked ?? 0;
+                return `${item.asset} líquido ${num(item.total, 8)}${locked !== 0 ? ` (travado ${num(locked, 8)})` : ""}`;
+              }).join(" · ")}
             </div>
           ) : null}
+          <div className="font-mono text-[10px] text-mute">LEITURA BINANCE {observedAt(balance.observed_at)} (Brasília)</div>
         </div>
       )}
     </Panel>
@@ -162,7 +230,7 @@ export function RealAccountPanel({ balance }: { balance: BinanceBalance | null |
           <table className="w-full text-left text-[11px]">
             <thead className="text-mute">
               <tr className="border-b border-line">
-                {["ASSET", "FREE", "NET"].map((head) => (
+                {["ATIVO", "LIVRE", "TRAVADO", "BRUTO", "EMPRESTADO", "JUROS", "LÍQUIDO"].map((head) => (
                   <th key={head} className="px-2 py-2 font-normal tracking-[0.08em]">
                     {head}
                   </th>
@@ -173,14 +241,18 @@ export function RealAccountPanel({ balance }: { balance: BinanceBalance | null |
               {rows.map((row) => (
                 <tr key={row.asset} className="border-b border-line/70 font-mono">
                   <td className="px-2 py-2">{row.asset}</td>
-                  <td className="px-2 py-2">{num(row.free, row.asset === "USDT" ? 2 : 8)}</td>
-                  <td className={`px-2 py-2 ${signedClass(row.total)}`}>{num(row.total, row.asset === "USDT" ? 2 : 8)}</td>
+                  <td className="px-2 py-2">{num(row.free, assetDigits(row.asset))}</td>
+                  <td className="px-2 py-2">{num(row.locked, assetDigits(row.asset))}</td>
+                  <td className="px-2 py-2">{num(gross(row), assetDigits(row.asset))}</td>
+                  <td className="px-2 py-2">{num(row.borrowed, assetDigits(row.asset))}</td>
+                  <td className="px-2 py-2">{num(row.interest, assetDigits(row.asset))}</td>
+                  <td className={`px-2 py-2 ${signedClass(row.total)}`}>{num(row.total, assetDigits(row.asset))}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div className="px-2 pt-2 text-[10px] text-mute">
-            Patrimônio marcado {num(balance.equity_usdt ?? balance.wallet, 2)}. USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Uma conta só. O Jev dimensiona em cima deste patrimônio.
+            Leitura Binance {observedAt(balance.observed_at)} (Brasília). Patrimônio marcado {num(balance.equity_usdt ?? balance.wallet, 2)} USDT. USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Bruto = livre + travado; líquido = bruto − empréstimo − juros. O Jev dimensiona em cima do patrimônio marcado.
           </div>
         </div>
       )}

@@ -50,6 +50,7 @@ async def test_futures_balance_is_the_usdt_wallet():
     assert payload["wallet"] == 1500.5
     assert payload["available"] == 1400.0
     assert payload["unrealized"] == 12.25
+    assert payload["observed_at"] > 0
     assert [item["asset"] for item in payload["assets"]] == ["USDT", "BNB"]
 
 
@@ -77,6 +78,7 @@ async def test_spot_balance_sums_free_and_locked_usdt():
     assert payload["wallet"] == 100
     assert payload["available"] == 80
     assert payload["unrealized"] is None
+    assert payload["observed_at"] > 0
     assert [item["asset"] for item in payload["assets"]] == ["USDT", "BTC"]
 
 
@@ -94,6 +96,10 @@ async def test_margin_balance_reads_the_cross_account_not_the_market_host():
             200,
             json={
                 "marginLevel": "3.40",
+                "totalAssetOfBtc": "0.01250",
+                "totalLiabilityOfBtc": "0.00200",
+                "totalNetAssetOfBtc": "0.01050",
+                "totalCollateralValueInUSDT": "1050.00",
                 "userAssets": [
                     {"asset": "USDT", "free": "900", "locked": "50", "borrowed": "0", "interest": "0", "netAsset": "950"},
                     {"asset": "BTC", "free": "0.01", "locked": "0", "borrowed": "0.002", "interest": "0", "netAsset": "0.008"},
@@ -120,7 +126,21 @@ async def test_margin_balance_reads_the_cross_account_not_the_market_host():
     assert payload["wallet"] == 950
     assert payload["available"] == 900
     assert payload["margin_level"] == 3.4
+    assert payload["total_asset_btc"] == 0.0125
+    assert payload["total_liability_btc"] == 0.002
+    assert payload["total_net_asset_btc"] == 0.0105
+    assert payload["total_collateral_usdt"] == 1050
     assert payload["unrealized"] is None
+    assert payload["observed_at"] > 0
+    assert payload["assets"][0] == {
+        "asset": "USDT",
+        "free": 900.0,
+        "locked": 50.0,
+        "total": 950.0,
+        "borrowed": 0.0,
+        "interest": 0.0,
+        "gross": 950.0,
+    }
     assert [item["asset"] for item in payload["assets"]] == ["USDT", "BTC"]
 
 
@@ -129,6 +149,7 @@ async def test_upstream_balance_reads_the_account_gateway():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "gateway.example"
         assert request.url.path == "/api/binance/balance"
+        assert request.url.params["fresh"] == "true"
         assert request.headers["authorization"] == "Bearer share"
         assert "X-MBX-APIKEY" not in request.headers
         return httpx.Response(

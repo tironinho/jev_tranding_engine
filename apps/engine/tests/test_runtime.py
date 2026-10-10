@@ -328,7 +328,7 @@ async def test_price_events_do_not_time_exit_on_the_wall_clock():
 
 
 @pytest.mark.asyncio
-async def test_max_hold_closes_winners_too():
+async def test_max_hold_keeps_a_net_winner_for_target_or_stop():
     eng = engine()
     _open(eng, entry_price=100, stop=95, target=110)
     state = eng.states["BTCUSDT"]
@@ -337,8 +337,24 @@ async def test_max_hold_closes_winners_too():
     state.best_ask = 101.05
     await eng.on_price("BTCUSDT", 101, clock() + timedelta(minutes=60))
     await asyncio.gather(*list(eng._background))
+    assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == 2
+    assert not eng.accounts.accounts["baseline"].trades
+
+
+@pytest.mark.asyncio
+async def test_max_hold_closes_a_position_below_net_break_even():
+    eng = engine()
+    _open(eng, entry_price=100, stop=95, target=110)
+    state = eng.states["BTCUSDT"]
+    state.last_price = 100.2
+    state.best_bid = 100.2
+    state.best_ask = 100.25
+    await eng.on_price("BTCUSDT", 100.2, clock() + timedelta(minutes=60))
+    await asyncio.gather(*list(eng._background))
     assert not eng.accounts.accounts["baseline"].positions
-    assert eng.accounts.accounts["baseline"].trades[0].exit_reason == "TIME"
+    trade = eng.accounts.accounts["baseline"].trades[0]
+    assert trade.exit_reason == "TIME"
+    assert trade.net_pnl < 0
 
 
 @pytest.mark.asyncio

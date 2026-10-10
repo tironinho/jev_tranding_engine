@@ -29,7 +29,8 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# Horizonte máximo, inclusive quando a posição está no lucro.
+# Depois deste horizonte, encerra quando o resultado líquido voltar ao zero ou
+# ao prejuízo. Enquanto estiver líquido positivo, mantém alvo e stop protegidos.
 max_hold_minutes: 60
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false

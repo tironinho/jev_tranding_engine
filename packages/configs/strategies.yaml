@@ -9,9 +9,10 @@ strategies:
   baseline_jev:
     enabled: true
     mode: paper
-    # A Binance 1m close can arrive around 10s after its exchange timestamp.
+    # A Binance 1m close can arrive around 10s after its exchange timestamp;
+    # account reconciliation and durable risk records also share this budget.
     # Execution still requires a fresh order book and <=0.1% price drift.
-    max_signal_age_ms: 20000
+    max_signal_age_ms: 30000
     call_model: true
 
 combination:

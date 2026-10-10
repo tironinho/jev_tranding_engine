@@ -563,16 +563,32 @@ class TradingEngine:
         await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=fill_payloads)
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
-    def _live_signal_fresh(self, decision, snapshot) -> bool:
-        age = (utcnow() - snapshot.timestamp).total_seconds() * 1000
+    def _live_signal_freshness(self, decision, snapshot) -> tuple[bool, dict]:
+        now = utcnow()
+        age = (now - snapshot.timestamp).total_seconds() * 1000
         state = self.states[snapshot.symbol]
         price = state.best_ask if decision.action is Action.LONG else state.best_bid
         reference = snapshot.best_ask if decision.action is Action.LONG else snapshot.best_bid
-        book_age = (utcnow() - state.last_book_at).total_seconds() * 1000 if state.last_book_at else float("inf")
-        return (0 <= age <= self.strategy_settings[decision.strategy].max_signal_age_ms
-                and 0 <= book_age <= self.settings.stale_after_ms
-                and price is not None and reference is not None
-                and abs(price / reference - 1) <= 0.001)
+        book_age = (now - state.last_book_at).total_seconds() * 1000 if state.last_book_at else float("inf")
+        drift = abs(price / reference - 1) if price is not None and reference is not None and reference > 0 else None
+        max_age = self.strategy_settings[decision.strategy].max_signal_age_ms
+        details = {
+            "signal_age_ms": age,
+            "max_signal_age_ms": max_age,
+            "book_age_ms": book_age if math.isfinite(book_age) else None,
+            "max_book_age_ms": self.settings.stale_after_ms,
+            "price_drift": drift,
+            "max_price_drift": 0.001,
+            "current_price": price,
+            "snapshot_price": reference,
+        }
+        valid = (0 <= age <= max_age
+                 and 0 <= book_age <= self.settings.stale_after_ms
+                 and drift is not None and drift <= details["max_price_drift"])
+        return valid, details
+
+    def _live_signal_fresh(self, decision, snapshot) -> bool:
+        return self._live_signal_freshness(decision, snapshot)[0]
 
     def _order_fee(self, order, estimate: float) -> float:
         if not order.commissions:
@@ -653,8 +669,10 @@ class TradingEngine:
             return
         econ = risk.economics
         side = "BUY" if decision.action is Action.LONG else "SELL"
-        if not self._live_signal_fresh(decision, snapshot):
-            await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL]))
+        fresh, freshness = self._live_signal_freshness(decision, snapshot)
+        if not fresh:
+            await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL], details={"freshness": freshness}))
+            self._log("live_blocked", f"{EXPIRED_SIGNAL} {decision.symbol} {freshness}")
             return
         intent = self._intent(decision, snapshot, risk, side, "live")
         pending = {"decision": decision.model_dump(mode="json"), "snapshot": snapshot.model_dump(mode="json"),
@@ -666,9 +684,11 @@ class TradingEngine:
                 self.store.add_event("execution_pending", "ENTRY_INTENT_NOT_DURABLE", {"decision_id": str(decision.decision_id)})
                 self._log("live_blocked", "ENTRY_INTENT_NOT_DURABLE")
                 return
-        if not self._live_signal_fresh(decision, snapshot):
+        fresh, freshness = self._live_signal_freshness(decision, snapshot)
+        if not fresh:
             await self._resolve_entry(str(decision.decision_id))
-            await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL]))
+            await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL], details={"freshness": freshness}))
+            self._log("live_blocked", f"{EXPIRED_SIGNAL} {decision.symbol} {freshness}")
             return
         try:
             self._log(
@@ -864,6 +884,7 @@ class TradingEngine:
             self.accounts.update_excursion(key, position_id, observed["min_ask"] or state.last_price)
             self.accounts.update_excursion(key, position_id, observed["max_ask"] or state.last_price)
         hold_minutes = max(0.0, (as_of - position.opened_at).total_seconds() / 60)
+        time_exit_floor = _net_break_even_price(position, self.fee_config)
         reason = position_exit_observed(
             position.side,
             min_bid=observed["min_bid"],
@@ -874,7 +895,9 @@ class TradingEngine:
             target=position.target,
             hold_minutes=hold_minutes,
             max_hold_minutes=self.risk.limits.max_hold_minutes,
-            entry=position.entry_price,
+            # The clock may close a position only at or below its total
+            # break-even, including both entry and estimated exit fees.
+            entry=time_exit_floor,
             bid=state.best_bid,
             ask=state.best_ask,
         )
@@ -1971,6 +1994,20 @@ def _marked_net(position, price: float, fee_config) -> float:
 def _plan_net(position, price: float, fee_config) -> float:
     """Trade result at this price, after the entry fee already paid and the exit fee."""
     return unrealized(position, price) - position.entry_fee - _exit_fee(position, price, position.quantity, fee_config)
+
+
+def _net_break_even_price(position, fee_config) -> float:
+    """Exit price at which the complete trade is flat after both fees."""
+    quantity = abs(position.quantity)
+    if quantity <= 0:
+        return position.entry_price
+    entry_fee_per_unit = position.entry_fee / quantity
+    rate = position.exit_fee_rate
+    if rate <= 0:
+        rate = rate_for("taker", fee_config.maker_fee_rate, fee_config.taker_fee_rate)
+    if position.side is Action.LONG:
+        return (position.entry_price + entry_fee_per_unit) / max(1 - rate, 1e-12)
+    return (position.entry_price - entry_fee_per_unit) / (1 + rate)
 
 
 def _exit_fee(position, exit_price: float, quantity: float, fee_config) -> float:

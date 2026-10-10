@@ -135,6 +135,22 @@ def test_signal_age_and_book_age_checked_after_decision(monkeypatch):
     assert not eng._live_signal_fresh(decision, snapshot)
 
 
+def test_live_jev_has_time_for_close_delivery_and_account_reconciliation(monkeypatch):
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    from types import SimpleNamespace
+    decision = SimpleNamespace(strategy="baseline_jev", action=Action.LONG)
+    eng.states["BTCUSDT"].last_book_at = clock() + timedelta(seconds=24)
+    monkeypatch.setattr("app.service.utcnow", lambda: clock() + timedelta(seconds=24))
+    assert eng._live_signal_fresh(decision, snapshot)
+    monkeypatch.setattr("app.service.utcnow", lambda: clock() + timedelta(seconds=31))
+    fresh, details = eng._live_signal_freshness(decision, snapshot)
+    assert not fresh
+    assert details["signal_age_ms"] == 31_000
+    assert details["max_signal_age_ms"] == 30_000
+
+
 @pytest.mark.asyncio
 async def test_failed_protection_attempts_close_and_retains_pending_balance(monkeypatch):
     from tests.test_runtime import _arm_live, _Exchange

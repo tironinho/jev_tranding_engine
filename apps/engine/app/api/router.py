@@ -245,6 +245,11 @@ async def decision_audit(request: Request, limit: int = 100, strategy: str = "ba
     engine = _engine(request)
     if strategy not in LABELS:
         raise HTTPException(400, "unknown strategy")
+    if engine.postgres and not engine.postgres.healthy:
+        recovered = await engine.postgres.connect()
+        engine.db_healthy = recovered
+        engine.db_error = None if recovered else engine.postgres.last_error
+        engine.persistence_mode = "postgres" if recovered else "postgres_error"
     if not engine.postgres or not engine.postgres.healthy:
         raise HTTPException(503, "HISTORY_UNAVAILABLE")
     try:

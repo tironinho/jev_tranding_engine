@@ -363,15 +363,22 @@ class TradingEngine:
             self._close_flush.add_done_callback(self._background.discard)
 
     async def _flush_closes(self) -> None:
-        """Candle closes of the same minute arrive a few messages apart. Start them together."""
-        await asyncio.sleep(0.3)
-        while self._close_batch:
+        """Start each close burst without waiting for an earlier symbol's JEV call.
+
+        Binance can deliver one symbol hundreds of milliseconds before the rest.
+        Waiting for that symbol's full strategy run used to hold the next burst for
+        8-12 seconds and expire every later live signal.
+        """
+        while True:
+            await asyncio.sleep(0.3)
             batch = self._close_batch
             self._close_batch = []
-            await asyncio.gather(
-                *(self.evaluate_symbol(symbol, as_of, trigger) for symbol, as_of, trigger in batch),
-                return_exceptions=True,
-            )
+            if not batch:
+                return
+            for symbol, as_of, trigger in batch:
+                task = asyncio.create_task(self.evaluate_symbol(symbol, as_of, trigger))
+                self._background.add(task)
+                task.add_done_callback(self._background.discard)
 
     async def evaluate_symbol(self, symbol: str, as_of: datetime, trigger: str) -> list[StrategyDecision]:
         try:
@@ -389,6 +396,14 @@ class TradingEngine:
             self._evaluating.discard(symbol)
 
     async def evaluate_snapshot(self, snapshot: MarketSnapshot) -> list[StrategyDecision]:
+        # Retry a transient database failure before the live risk gate. Without
+        # this, one failed write disabled durable history and entries until the
+        # process was restarted.
+        if self.postgres is not None and not self.postgres.healthy:
+            recovered = await self.postgres.connect()
+            self.db_healthy = recovered
+            self.db_error = None if recovered else self.postgres.last_error
+            self.persistence_mode = "postgres" if recovered else "postgres_error"
         self.store.add_snapshot(snapshot)
         self.labeler.register(snapshot)
         if self.postgres and self.postgres.healthy:
@@ -656,7 +671,16 @@ class TradingEngine:
             await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL]))
             return
         try:
+            self._log(
+                "live_submit",
+                f"{decision.symbol} decision={decision.decision_id} side={side} qty={intent.quantity}",
+            )
             order = await self.live.submit(intent)
+            self._log(
+                "live_order",
+                f"{decision.symbol} decision={decision.decision_id} status={order.status.value} "
+                f"filled={order.filled_quantity}",
+            )
         except LiveExecutionBlocked as exc:
             self.store.add_event("execution_pending", exc.reason, {"decision_id": str(decision.decision_id)})
             self._log("live_blocked", exc.reason)

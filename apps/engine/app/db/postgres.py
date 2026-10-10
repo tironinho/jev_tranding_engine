@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import ssl
+import time
 import uuid
 from bisect import bisect_left
 from collections import defaultdict
@@ -117,22 +119,31 @@ class PostgresMirror:
         self.healthy = False
         self.last_error: str | None = None
         self.factory: async_sessionmaker[AsyncSession] | None = None
+        self._connect_lock = asyncio.Lock()
+        self._last_connect_attempt = 0.0
 
     async def connect(self) -> bool:
-        try:
-            async_url, connect_args = prepare_asyncpg(self.url)
-            engine = create_async_engine(async_url, pool_pre_ping=True, connect_args=connect_args)
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            self.factory = async_sessionmaker(engine, expire_on_commit=False)
-            self.healthy = True
-            self.last_error = None
-            return True
-        except Exception as exc:
-            self.healthy = False
-            self.last_error = str(exc)
-            log.warning("postgres unavailable: %s", exc)
-            return False
+        async with self._connect_lock:
+            if self.healthy and self.factory is not None:
+                return True
+            now = time.monotonic()
+            if now - self._last_connect_attempt < 5:
+                return False
+            self._last_connect_attempt = now
+            try:
+                async_url, connect_args = prepare_asyncpg(self.url)
+                engine = create_async_engine(async_url, pool_pre_ping=True, connect_args=connect_args)
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                self.factory = async_sessionmaker(engine, expire_on_commit=False)
+                self.healthy = True
+                self.last_error = None
+                return True
+            except Exception as exc:
+                self.healthy = False
+                self.last_error = str(exc)
+                log.warning("postgres unavailable: %s", exc)
+                return False
 
     async def _write(self, row) -> None:
         if not self.factory or not self.healthy:

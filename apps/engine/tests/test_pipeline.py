@@ -304,6 +304,29 @@ async def test_candle_closes_in_one_burst_start_together():
 
 
 @pytest.mark.asyncio
+async def test_late_close_starts_while_previous_symbol_is_still_deciding():
+    eng = engine()
+    btc_started = asyncio.Event()
+    eth_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake(symbol, as_of, trigger):
+        (btc_started if symbol == "BTCUSDT" else eth_started).set()
+        await release.wait()
+        eng._evaluating.discard(symbol)
+
+    eng.evaluate_symbol = _fake
+    moment = clock()
+    await eng.on_snapshot_trigger("BTCUSDT", moment, "kline_close_1m")
+    await asyncio.wait_for(btc_started.wait(), timeout=1)
+    await eng.on_snapshot_trigger("ETHUSDT", moment, "kline_close_1m")
+
+    await asyncio.wait_for(eth_started.wait(), timeout=1)
+    release.set()
+    await asyncio.gather(*list(eng._background))
+
+
+@pytest.mark.asyncio
 async def test_jev_review_shows_the_state_that_was_sent_and_the_answer():
     eng = engine()
     snapshot, book = long_snapshot()

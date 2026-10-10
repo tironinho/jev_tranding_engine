@@ -9,7 +9,9 @@ strategies:
   baseline_jev:
     enabled: true
     mode: paper
-    max_signal_age_ms: 12000
+    # A Binance 1m close can arrive around 10s after its exchange timestamp.
+    # Execution still requires a fresh order book and <=0.1% price drift.
+    max_signal_age_ms: 20000
     call_model: true
 
 combination:

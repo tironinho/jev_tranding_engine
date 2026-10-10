@@ -209,7 +209,7 @@ def strategies_from_file(payload: dict) -> dict[str, StrategySettings]:
     raw = payload.get("strategies") or {}
     defaults = {
         "baseline": StrategySettings("baseline", True, OperatingMode.PAPER, 2000, False),
-        "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.PAPER, 12000, True),
+        "baseline_jev": StrategySettings("baseline_jev", True, OperatingMode.PAPER, 20000, True),
     }
     for key, current in defaults.items():
         item = raw.get(key) or {}

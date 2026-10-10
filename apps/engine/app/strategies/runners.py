@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -10,6 +10,13 @@ from uuid import UUID
 from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import (
     BASELINE_NO_TRADE,
+    BASELINE_CONTEXT_CANDIDATE,
+    BAD_SPREAD,
+    CLASS_DIVERGENT,
+    CLASS_FLOW_AGAINST,
+    CLASS_SINGLE_DRIVER,
+    HIGH_VOLATILITY,
+    INSUFFICIENT_HISTORY,
     JEV_FALLBACK,
     JEV_UNAVAILABLE,
     OPENAI_CALLS_DISABLED,
@@ -18,6 +25,7 @@ from app.domain.enums import (
     OPENAI_INVALID_SCHEMA,
     OPENAI_NOT_CONFIGURED,
     OPENAI_TIMEOUT,
+    STALE_MARKET_DATA,
     Action,
     OperatingMode,
     SignalStatus,
@@ -115,20 +123,30 @@ class BaselineJevStrategy:
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.jev_rule_version,
         }
+        context_candidate = False
         if result.action is Action.NO_TRADE:
-            metadata["jev_effect"] = "idle"
-            return _decision(
-                context=context,
-                snapshot=snapshot,
-                strategy=self.key,
-                action=Action.NO_TRADE,
-                confidence=result.confidence,
-                reasons=[BASELINE_NO_TRADE, *result.reason_codes],
-                metadata=metadata,
-                model_version=result.version,
-                prompt_version=None,
-                started=started,
+            candidate_action = _context_candidate_action(result, context.combination)
+            if candidate_action is None:
+                metadata["jev_effect"] = "idle"
+                return _decision(
+                    context=context,
+                    snapshot=snapshot,
+                    strategy=self.key,
+                    action=Action.NO_TRADE,
+                    confidence=result.confidence,
+                    reasons=[BASELINE_NO_TRADE, *result.reason_codes],
+                    metadata=metadata,
+                    model_version=result.version,
+                    prompt_version=None,
+                    started=started,
+                )
+            context_candidate = True
+            metadata.update(
+                baseline_action=Action.NO_TRADE.value,
+                candidate_action=candidate_action.value,
+                candidate_min_abs_score=context.combination.candidate_min_abs_score,
             )
+            result = replace(result, action=candidate_action)
         request = _jev_request(context, snapshot, result)
         metadata["jev_trade_plan"] = request.trade_plan
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
@@ -140,7 +158,7 @@ class BaselineJevStrategy:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
             context.artifacts.append({"kind": "jev", "error": str(exc), "request": request.model_dump(mode="json")})
-            if context.failure_policy == "FALLBACK_TO_BASELINE":
+            if context.failure_policy == "FALLBACK_TO_BASELINE" and not context_candidate:
                 metadata["jev_effect"] = "fallback"
                 return _decision(
                     context=context,
@@ -196,12 +214,36 @@ class BaselineJevStrategy:
             strategy=self.key,
             action=action,
             confidence=confidence,
-            reasons=[*result.reason_codes, *vetoes],
+            reasons=[*([BASELINE_CONTEXT_CANDIDATE] if context_candidate else []), *result.reason_codes, *vetoes],
             metadata=metadata,
             model_version=assessment.provider_version,
             prompt_version=assessment.prompt_version,
             started=started,
         )
+
+
+_CONTEXT_CANDIDATE_BLOCKERS = {
+    STALE_MARKET_DATA,
+    INSUFFICIENT_HISTORY,
+    BAD_SPREAD,
+    HIGH_VOLATILITY,
+    CLASS_DIVERGENT,
+    CLASS_SINGLE_DRIVER,
+    CLASS_FLOW_AGAINST,
+}
+
+
+def _context_candidate_action(result: BaselineResult, config: CombinationConfig) -> Action | None:
+    """Let coherent borderline signals reach context/JEV without weakening the baseline."""
+    if abs(result.composite) < config.candidate_min_abs_score:
+        return None
+    if _CONTEXT_CANDIDATE_BLOCKERS.intersection(result.reason_codes):
+        return None
+    if result.composite > 0:
+        return Action.LONG
+    if result.composite < 0:
+        return Action.SHORT
+    return None
 
 
 async def _dynamic_decision(context, snapshot, result, metadata, started):
@@ -239,15 +281,19 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
         reason = "NO_ECONOMIC_PLAN" if not eligible else "NO_POSITIVE_EXPECTANCY_PLAN"
         metadata["jev_effect"] = "veto" if eligible else "not_called"
         return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=Action.NO_TRADE,
-            confidence=result.confidence, reasons=[reason, *result.reason_codes], metadata=metadata,
+            confidence=result.confidence, reasons=[*_candidate_reasons(metadata), reason, *result.reason_codes], metadata=metadata,
             model_version=result.version, prompt_version=None, started=started)
     plan, assessment, confidence = max(choices, key=lambda item: item[0]["expected_net_r"])
     metadata.update(jev_trade_plan=dict(plan), selected_plan_id=plan["plan_id"],
                     jev_stress_probability=plan["stress_probability"], jev_required_continuation=plan["required_probability"])
     _remember_jev(metadata, assessment, "confirm")
     return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=result.action,
-        confidence=confidence, reasons=["JEV_CONFIRM", "DYNAMIC_PLAN_SELECTED", *result.reason_codes], metadata=metadata,
+        confidence=confidence, reasons=[*_candidate_reasons(metadata), "JEV_CONFIRM", "DYNAMIC_PLAN_SELECTED", *result.reason_codes], metadata=metadata,
         model_version=assessment.provider_version, prompt_version=assessment.prompt_version, started=started)
+
+
+def _candidate_reasons(metadata: dict) -> list[str]:
+    return [BASELINE_CONTEXT_CANDIDATE] if metadata.get("candidate_action") else []
 
 
 class BaselineOpenAIJevStrategy:

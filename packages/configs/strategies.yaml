@@ -14,11 +14,14 @@ strategies:
 
 combination:
   baseline_version: baseline_classified_v1
-  jev_rule_version: jev_economic_gate_v2
+  jev_rule_version: jev_context_candidate_v3
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
   min_trend_continuation: 0.55
   min_short_continuation: 0.40
+  # Coherent sub-threshold signals may use the richer context and JEV. This is
+  # only a candidate gate; the JEV probability and positive-EV plan still gate execution.
+  candidate_min_abs_score: 0.15
   extra_entry_min_continuation: 0.80
   max_reversal: 0.65
   max_false_breakout: 0.80

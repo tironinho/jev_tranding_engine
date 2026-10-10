@@ -5,6 +5,7 @@ import pytest
 
 from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import Action, OperatingMode, MarketType
+from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE
 from app.providers.jev.mock import MockJevProvider
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy, StrategyContext
@@ -64,6 +65,51 @@ async def test_all_model_failures_never_fall_back_to_unassessed_trade():
     assert decision.action is Action.NO_TRADE
     assert len(ctx.artifacts) == 3
     assert all('error' in a for a in ctx.artifacts)
+
+
+@pytest.mark.asyncio
+async def test_coherent_subthreshold_signal_reaches_context_and_jev():
+    snapshot, _ = long_snapshot()
+    provider = PlansProvider({"rr_2": .9, "rr_2.5": .8, "rr_3": .7})
+    ctx = context(provider)
+    ctx.weights = replace(ctx.weights, min_abs_score=.95)
+    ctx.intelligence = {"data_quality": {"overall": 1.0}, "derivatives": {"oi_change_5m": .2}}
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.LONG
+    assert BASELINE_CONTEXT_CANDIDATE in decision.reason_codes
+    assert decision.metadata["baseline_action"] == Action.NO_TRADE
+    assert decision.metadata["candidate_action"] == Action.LONG
+    assert provider.requests
+    assert provider.requests[0].intelligence["derivatives"]["oi_change_5m"] == .2
+
+
+@pytest.mark.asyncio
+async def test_divergent_subthreshold_signal_stays_blocked_before_jev():
+    snapshot, _ = long_snapshot(orderflow_delta_ratio=-1, imbalance_10=-1)
+    provider = PlansProvider({})
+    ctx = context(provider)
+    ctx.weights = replace(ctx.weights, min_abs_score=.95)
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.NO_TRADE
+    assert BASELINE_NO_TRADE in decision.reason_codes
+    assert not provider.requests
+
+
+@pytest.mark.asyncio
+async def test_subthreshold_candidate_never_uses_baseline_fallback():
+    snapshot, _ = long_snapshot()
+    ctx = context(PlansProvider({}))
+    ctx.weights = replace(ctx.weights, min_abs_score=.95)
+    ctx.failure_policy = "FALLBACK_TO_BASELINE"
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.NO_TRADE
+    assert len(ctx.artifacts) == 3
 
 
 def test_candidates_cannot_cross_structure_and_include_unknown_interest_stress():

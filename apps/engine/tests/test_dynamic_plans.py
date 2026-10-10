@@ -83,6 +83,9 @@ async def test_coherent_subthreshold_signal_reaches_context_and_jev():
     assert decision.metadata["candidate_action"] == Action.LONG
     assert provider.requests
     assert provider.requests[0].intelligence["derivatives"]["oi_change_5m"] == .2
+    assert provider.requests[0].candidate_origin == "BASELINE_BELOW_THRESHOLD"
+    assert provider.requests[0].baseline_threshold == .95
+    assert provider.requests[0].candidate_threshold == .15
 
 
 @pytest.mark.asyncio

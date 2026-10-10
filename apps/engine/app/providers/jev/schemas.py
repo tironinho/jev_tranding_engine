@@ -17,6 +17,9 @@ class JevMarketRequest(BaseModel):
     baseline_scores: dict[str, float | None] | None = None
     baseline_class: str | None = None
     baseline_labels: list[str] = Field(default_factory=list)
+    candidate_origin: str | None = None
+    baseline_threshold: float | None = None
+    candidate_threshold: float | None = None
     market_state: dict[str, Any] | None = None
     intelligence: dict[str, Any] | None = None
     trade_plan: dict[str, Any] | None = None

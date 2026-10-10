@@ -511,6 +511,7 @@ def _jev_request(
             plan = {"entry": entry, "stop": geometry.stop, "target": geometry.target,
                     "horizon_minutes": context.risk.max_hold_minutes,
                     "round_trip_fee_rate": context.round_trip_fee}
+    is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
         prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
         symbol=snapshot.symbol,
@@ -522,6 +523,9 @@ def _jev_request(
         baseline_scores=result.scores,
         baseline_class=result.market_class.primary,
         baseline_labels=list(result.market_class.labels),
+        candidate_origin="BASELINE_BELOW_THRESHOLD" if is_context_candidate else None,
+        baseline_threshold=context.weights.min_abs_score if is_context_candidate else None,
+        candidate_threshold=context.combination.candidate_min_abs_score if is_context_candidate else None,
         market_state=market_state,
         intelligence=context.intelligence,
         trade_plan=plan,

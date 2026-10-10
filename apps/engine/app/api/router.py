@@ -218,7 +218,9 @@ async def market_symbol(symbol: str, request: Request) -> dict:
 @router.get("/api/jev")
 async def jev_reviews(request: Request, limit: int = 40) -> dict:
     _actor(request)
-    return {"rows": _engine(request).jev_reviews(min(limit, 80))}
+    engine = _engine(request)
+    history = "postgres" if engine.postgres and engine.postgres.healthy else "unavailable" if engine.postgres else "memory"
+    return {"rows": await engine.jev_reviews_with_history(min(limit, 80)), "history": history}
 
 
 @router.get("/api/decisions")

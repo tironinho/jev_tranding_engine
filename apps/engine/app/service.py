@@ -1209,7 +1209,10 @@ class TradingEngine:
             if "call_model" in config:
                 current.call_model = bool(config["call_model"])
             if "max_signal_age_ms" in config:
-                current.max_signal_age_ms = int(config["max_signal_age_ms"])
+                saved_age = int(config["max_signal_age_ms"])
+                # This timing budget is not editable in Settings. Do not let an
+                # older saved payload shrink a newer repository safety budget.
+                current.max_signal_age_ms = max(current.max_signal_age_ms, saved_age)
             mode = item.get("mode")
             if current.key == "baseline" and mode == "live":
                 current.mode = OperatingMode.PAPER
@@ -1554,13 +1557,10 @@ class TradingEngine:
             )
         return {"starting_equity": start, "quote": "USDT", "leverage": self.risk.limits.max_leverage, "accounts": accounts}
 
-    def jev_reviews(self, limit: int = 40) -> list[dict]:
-        from app.providers.jev.real import _normalized_state
-
+    def _format_jev_reviews(self, records: list[tuple[dict, dict]], limit: int) -> list[dict]:
         rows = []
         seen = set()
-        for call in reversed(self.store.jev_calls):
-            decision = self.store.by_decision.get(str(call.get("decision_id"))) or {}
+        for call, decision in records:
             request = call.get("request") if isinstance(call.get("request"), dict) else {}
             response = call.get("response") if isinstance(call.get("response"), dict) else {}
             meta = decision.get("metadata") or {}
@@ -1597,6 +1597,23 @@ class TradingEngine:
             if len(rows) >= limit:
                 break
         return rows
+
+    def jev_reviews(self, limit: int = 40) -> list[dict]:
+        records = [
+            (call, self.store.by_decision.get(str(call.get("decision_id"))) or {})
+            for call in reversed(self.store.jev_calls)
+        ]
+        return self._format_jev_reviews(records, limit)
+
+    async def jev_reviews_with_history(self, limit: int = 40) -> list[dict]:
+        records = [
+            (call, self.store.by_decision.get(str(call.get("decision_id"))) or {})
+            for call in reversed(self.store.jev_calls)
+        ]
+        if self.postgres and self.postgres.healthy:
+            persisted = await self.postgres.recent_jev_calls(limit * 3)
+            records.extend((item["call"], item["decision"]) for item in persisted)
+        return self._format_jev_reviews(records, limit)
 
     def status(self) -> dict:
         jev_name = getattr(self.jev, "provider_name", "unknown")

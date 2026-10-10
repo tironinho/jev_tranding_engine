@@ -55,9 +55,20 @@ const SCORES: Array<[string, string]> = [
   ["liquidity_score", "LIQUIDEZ"],
 ];
 
-export function JevDesk({ rows, selected }: { rows: JevReview[] | null; selected: JevReview | null }) {
+export function JevDesk({
+  rows,
+  selected,
+  history,
+}: {
+  rows: JevReview[] | null;
+  selected: JevReview | null;
+  history?: "postgres" | "memory" | "unavailable";
+}) {
   if (!rows) return <Panel title="JEV"><Empty label="ENGINE OFFLINE" /></Panel>;
-  if (!rows.length) return <Panel title="JEV"><Empty label="AINDA SEM LEITURA" /></Panel>;
+  if (!rows.length) {
+    const label = history === "unavailable" ? "HISTÓRICO INDISPONÍVEL" : "AINDA SEM LEITURA";
+    return <Panel title="JEV"><Empty label={label} /></Panel>;
+  }
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
       <Panel title="LEITURAS">

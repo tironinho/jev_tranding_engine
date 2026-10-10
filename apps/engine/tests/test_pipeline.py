@@ -321,6 +321,39 @@ async def test_jev_review_shows_the_state_that_was_sent_and_the_answer():
 
 
 @pytest.mark.asyncio
+async def test_jev_review_uses_postgres_history_after_restart():
+    eng = engine()
+    eng.store.jev_calls.clear()
+
+    class History:
+        healthy = True
+
+        async def recent_jev_calls(self, limit):
+            return [
+                {
+                    "call": {
+                        "decision_id": "durable-decision",
+                        "request": {"symbol": "ETHUSDT"},
+                        "response": {"trend_continuation_probability": 0.62},
+                    },
+                    "decision": {
+                        "decision_id": "durable-decision",
+                        "symbol": "ETHUSDT",
+                        "timestamp": clock().isoformat(),
+                        "action": "LONG",
+                        "metadata": {"jev_effect": "confirm"},
+                    },
+                }
+            ]
+
+    eng.postgres = History()
+    rows = await eng.jev_reviews_with_history(5)
+    assert [(row["decision_id"], row["symbol"], row["effect"]) for row in rows] == [
+        ("durable-decision", "ETHUSDT", "confirm")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_kill_switch_blocks_entries_and_resume_is_audited():
     eng = engine()
     snapshot, book = long_snapshot()

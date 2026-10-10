@@ -119,6 +119,7 @@ export function PositionTable({
     unrealized: number;
     target_pnl?: number;
     stop_pnl?: number;
+    protection_status?: string;
   }> | null;
   exchange?: {
     rows: Array<{
@@ -132,7 +133,8 @@ export function PositionTable({
   };
 }) {
   if (!rows) return <Empty label="Falha na consulta de posições do robô" />;
-  if (!rows.length) return <Empty label="Sem posições do robô · saldos e dívidas estão na conta abaixo" />;
+  const visible = rows.filter((row) => row.protection_status !== "RESIDUAL");
+  if (!visible.length) return <Empty label="Sem posições gerenciadas · resíduos abaixo do mínimo estão na conta abaixo" />;
   const exposure = new Map((exchange?.rows ?? []).map((row) => [row.asset, row]));
   const reconciled = Boolean(exchange);
   return (
@@ -148,8 +150,11 @@ export function PositionTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {visible.map((row) => {
             const account = exposure.get(row.symbol.endsWith("USDT") ? row.symbol.slice(0, -4) : row.symbol);
+            const status = row.protection_status === "PROTECTED" && account?.status === "RESIDUAL"
+              ? "PROTEGIDO + RESÍDUO"
+              : row.protection_status ?? account?.status ?? "NO DATA";
             return (
               <tr key={row.position_id ?? `${row.strategy}-${row.symbol}-${row.entry}`} className="border-b border-line/70 font-mono">
                 <td className="px-2 py-2">{row.strategy}</td>
@@ -162,15 +167,15 @@ export function PositionTable({
                     <td className="px-2 py-2">{account?.free == null ? "—" : num(account.free, 8)}</td>
                     <td className="px-2 py-2">{account?.locked == null ? "—" : num(account.locked, 8)}</td>
                     <td className={`px-2 py-2 ${signedClass(account?.difference)}`}>{account ? num(account.difference, 8) : "NO DATA"}</td>
-                    <td className="px-2 py-2">{account?.status ?? "NO DATA"}</td>
+                    <td className="px-2 py-2">{status}</td>
                   </>
                 ) : null}
                 <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
                 <td className="px-2 py-2">{leverageLabel(row.leverage)}</td>
                 <td className="px-2 py-2">{row.entry.toFixed(4)}</td>
-                <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{money(row.unrealized)}</td>
-                <td className={`px-2 py-2 ${signedClass(row.target_pnl)}`}>{row.target_pnl == null ? "NO DATA" : money(row.target_pnl)}</td>
-                <td className={`px-2 py-2 ${signedClass(row.stop_pnl)}`}>{row.stop_pnl == null ? "NO DATA" : money(row.stop_pnl)}</td>
+                <td className={`px-2 py-2 ${signedClass(row.unrealized)}`}>{positionMoney(row.unrealized)}</td>
+                <td className={`px-2 py-2 ${signedClass(row.target_pnl)}`}>{positionMoney(row.target_pnl)}</td>
+                <td className={`px-2 py-2 ${signedClass(row.stop_pnl)}`}>{positionMoney(row.stop_pnl)}</td>
               </tr>
             );
           })}
@@ -185,6 +190,15 @@ function leverageLabel(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value) || value <= 0) return "NO DATA";
   const rounded = Math.round(value * 10) / 10;
   return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}x`;
+}
+
+function positionMoney(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return "NO DATA";
+  const absolute = Math.abs(value);
+  if (absolute === 0 || absolute >= 0.01) return money(value);
+  const digits = absolute >= 0.0001 ? 4 : 8;
+  const formatted = absolute.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return `${value > 0 ? "+" : "-"}${formatted}`;
 }
 
 export function formatConfidence(value: number) {

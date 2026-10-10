@@ -46,7 +46,9 @@ export default async function TradesPage({
     engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`),
     engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"]; exchange: ExchangeState }>("/api/positions?fresh=true"),
   ]);
-  const open = (positions.ok ? positions.data?.rows ?? [] : []).filter((row) => row?.mode === "live");
+  const open = (positions.ok ? positions.data?.rows ?? [] : []).filter(
+    (row) => row?.mode === "live" && row.protection_status !== "RESIDUAL",
+  );
   const rows = result.ok ? result.data?.rows ?? [] : null;
   const totals = rows?.reduce(
     (sum, trade) => {

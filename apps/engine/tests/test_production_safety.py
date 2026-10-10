@@ -46,6 +46,17 @@ def test_missing_exchange_position_is_not_silently_removed():
     assert result["rows"][0]["tracked_quantity"] == .01
 
 
+def test_live_residual_does_not_consume_a_position_slot_or_block_the_symbol():
+    eng = engine()
+    position = _open(eng, mode="live")
+    position.protection_status = "RESIDUAL"
+    snapshot, _ = long_snapshot()
+    context = eng._risk_context("baseline", snapshot, live=True)
+    assert context.open_positions == 0
+    assert context.open_stop_risk == 0
+    assert not context.has_position_on_symbol
+
+
 def test_partial_exit_preserves_remaining_position_margin_and_fee():
     eng = engine()
     p = _open(eng)

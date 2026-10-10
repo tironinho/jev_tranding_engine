@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import httpx
@@ -6,6 +6,7 @@ import pytest
 
 from app.domain.enums import Action
 from app.providers.binance_account import BinanceBalanceProvider
+from app.service import _stable_balance_points
 from tests.conftest import engine, settings
 
 
@@ -237,6 +238,33 @@ async def test_account_curve_keeps_the_start_and_skips_unmarked_borrow_cash():
     assert track["current"] == pytest.approx(marked)
     assert track["change"] == pytest.approx(marked - 19.79)
     assert [point["equity"] for point in track["points"]] == pytest.approx([19.79, marked])
+
+
+def test_mark_account_prefers_atomic_margin_net_asset():
+    eng = engine()
+    eng.states["BTCUSDT"].last_price = 80_000
+    marked = eng.mark_account(
+        {
+            "status": "ok",
+            "total_net_asset_btc": 0.00025,
+            "assets": [
+                {"asset": "USDT", "total": 0.2},
+                {"asset": "ETH", "total": 0.01},
+            ],
+        }
+    )
+    assert marked["equity_usdt"] == pytest.approx(20)
+
+
+def test_transient_margin_settlement_does_not_create_a_false_equity_peak():
+    start = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
+    points = [
+        {"t": start.isoformat(), "wallet": 20.0},
+        {"t": (start + timedelta(seconds=10)).isoformat(), "wallet": 38.0},
+        {"t": (start + timedelta(seconds=20)).isoformat(), "wallet": 37.9},
+        {"t": (start + timedelta(seconds=30)).isoformat(), "wallet": 19.8},
+    ]
+    assert [point["wallet"] for point in _stable_balance_points(points)] == [20.0, 19.8]
 
 
 def test_account_sample_keeps_the_mark_the_coins_and_the_open_position():

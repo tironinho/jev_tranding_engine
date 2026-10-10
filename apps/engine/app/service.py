@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.accounts import AccountBook, unrealized
 from app.analytics.comparison import compare_strategies
-from app.analytics.performance import slice_performance, summarize_trades
+from app.analytics.performance import max_drawdown, slice_performance, summarize_trades
 from app.config import (
     Settings,
     as_paper_margin,
@@ -1275,6 +1275,7 @@ class TradingEngine:
 
     def _risk_context(self, strategy: str, snapshot: MarketSnapshot, live: bool) -> RiskContext:
         account = self.accounts.accounts[strategy]
+        managed = [position for position in account.positions.values() if _managed_position(position)]
         marks = {snapshot.symbol: snapshot.price}
         self.accounts.roll_day(strategy, snapshot.timestamp, marks)
         rules = self.feed.rules.get(snapshot.symbol, {})
@@ -1285,16 +1286,16 @@ class TradingEngine:
             cash=account.cash,
             day_start_equity=account.day_start_equity,
             realized_pnl_today=account.realized_pnl_today,
-            open_positions=len(account.positions),
+            open_positions=len(managed),
             # Reserve initial risk even after stop tightening; correlated entries share this budget.
             open_stop_risk=sum(abs(p.entry_price - (p.initial_stop or p.stop)) * p.quantity
                 + p.entry_fee + p.quantity * p.entry_price * (self.settings.taker_fee_rate
                     + self.risk.limits.plan_stress_bps / 10000
                     + self.risk.limits.borrow_hourly_stress_rate * max(1, math.ceil(self.risk.limits.max_hold_minutes / 60)))
-                for p in account.positions.values()),
+                for p in managed),
             symbol_exposure_notional=account.symbol_exposure(snapshot.symbol, marks),
             total_exposure_notional=account.exposure(marks),
-            has_position_on_symbol=any(position.symbol == snapshot.symbol for position in account.positions.values()),
+            has_position_on_symbol=any(position.symbol == snapshot.symbol for position in managed),
             last_entry_at=account.last_entry_by_symbol.get(snapshot.symbol),
             last_stop_at=account.last_stop_at.get(snapshot.symbol),
             now=snapshot.timestamp,
@@ -1361,7 +1362,8 @@ class TradingEngine:
             live_book = key == "baseline_jev" and self.settings.live_armed and self._last_wallet is not None
             if live_book:
                 trades = [trade for trade in trades if trade.mode == "live"]
-                start = self.balance_points[0]["wallet"] if self.balance_points else self._last_wallet
+                balance_points = _stable_balance_points(self.balance_points)
+                start = balance_points[0]["wallet"] if balance_points else self._last_wallet
                 marked = self._last_wallet
             reports[key] = summarize_trades(trades, start, mark=marked)
             reports[key]["marked_pnl"] = marked - start
@@ -1371,8 +1373,10 @@ class TradingEngine:
             reports[key]["mode"] = self.strategy_settings[key].mode.value
             reports[key]["enabled"] = self.strategy_settings[key].enabled
             if live_book:
-                peak = max(point["wallet"] for point in self.balance_points) if self.balance_points else marked
-                reports[key]["max_drawdown"] = ((peak - marked) / peak) if peak else 0.0
+                values = [float(point["wallet"]) for point in balance_points]
+                if not values or abs(values[-1] - marked) > 1e-9:
+                    values.append(float(marked))
+                reports[key]["max_drawdown"] = max_drawdown(values) or 0.0
         return reports
 
     def comparison(self) -> dict:
@@ -1400,8 +1404,9 @@ class TradingEngine:
                 }
                 for point in points
             ]
-        if self.balance_points:
-            first = self.balance_points[0]["wallet"] or 1
+        balance_points = _stable_balance_points(self.balance_points)
+        if balance_points:
+            first = balance_points[0]["wallet"] or 1
             series["conta"] = [
                 {
                     "t": point["t"],
@@ -1409,12 +1414,12 @@ class TradingEngine:
                     "indexed": (point["wallet"] / first * 100) if first else None,
                     "mark": False,
                 }
-                for point in self.balance_points
+                for point in balance_points
             ]
         return {"starting_equity": start, "series": series, "account": self.account_curve()}
 
     def account_curve(self) -> dict:
-        points = [{"t": point["t"], "equity": point["wallet"]} for point in self.balance_points]
+        points = [{"t": point["t"], "equity": point["wallet"]} for point in _stable_balance_points(self.balance_points)]
         current = self._last_wallet if self._last_wallet is not None else (points[-1]["equity"] if points else None)
         started = points[0]["equity"] if points else None
         return {
@@ -1429,6 +1434,13 @@ class TradingEngine:
         """USDT net is cash after the borrow. Equity marks every debt at the last price."""
         if payload.get("status") != "ok":
             return payload
+        # This account-level value is atomic on Binance. Individual userAssets
+        # can briefly mix the cash and coin sides of an order during settlement.
+        net_btc = payload.get("total_net_asset_btc")
+        btc = self.states.get("BTCUSDT")
+        btc_price = btc.last_price if btc is not None else None
+        if isinstance(net_btc, (int, float)) and isinstance(btc_price, (int, float)) and btc_price > 0:
+            return {**payload, "equity_usdt": float(net_btc) * float(btc_price)}
         equity = 0.0
         for asset in payload.get("assets") or []:
             net = float(asset.get("total") or 0)
@@ -1590,7 +1602,9 @@ class TradingEngine:
         positions = [
             row
             for row in self.positions_payload()
-            if row["strategy"] == "baseline_jev" and (mode == "all" or row["mode"] == mode)
+            if row["strategy"] == "baseline_jev"
+            and row.get("protection_status") != "RESIDUAL"
+            and (mode == "all" or row["mode"] == mode)
         ]
         summary = summarize_trades(trades, self.settings.initial_paper_equity)
         closed = [
@@ -1673,7 +1687,7 @@ class TradingEngine:
                     "unrealized": equity - account.cash - locked,
                     "realized_today": account.realized_pnl_today,
                     "net_pnl": equity - start,
-                    "open_positions": len(account.positions),
+                    "open_positions": sum(1 for position in account.positions.values() if _managed_position(position)),
                 }
             )
         return {"starting_equity": start, "quote": "USDT", "leverage": self.risk.limits.max_leverage, "accounts": accounts}
@@ -1971,3 +1985,49 @@ def _coerce_risk(changes: dict) -> dict:
     if "max_open_positions" in cleaned:
         cleaned["max_open_positions"] = int(cleaned["max_open_positions"])
     return cleaned
+
+
+def _managed_position(position) -> bool:
+    """Exchange dust remains auditable without consuming a trading slot."""
+    return not (position.mode == "live" and position.protection_status == "RESIDUAL")
+
+
+def _stable_balance_points(points: list[dict]) -> list[dict]:
+    """Drop short-lived account jumps caused by margin settlement in progress.
+
+    A jump that returns to the prior range within one minute is a transient
+    account snapshot and must not become the equity peak/drawdown. A persistent
+    change and the most recent reading remain visible.
+    """
+    accepted: list[dict] = []
+    candidate: list[dict] = []
+    for point in points:
+        value = float(point.get("wallet") or 0)
+        if not accepted:
+            accepted.append(point)
+            continue
+        anchor = float(accepted[-1].get("wallet") or 0)
+        relative = abs(value - anchor) / abs(anchor) if anchor else 0.0
+        if relative <= 0.20:
+            candidate = []
+            accepted.append(point)
+            continue
+        if candidate:
+            previous = float(candidate[-1].get("wallet") or 0)
+            consistency = abs(value - previous) / abs(previous) if previous else 0.0
+            if consistency > 0.05:
+                candidate = []
+        candidate.append(point)
+        first_at = datetime.fromisoformat(str(candidate[0]["t"]))
+        last_at = datetime.fromisoformat(str(candidate[-1]["t"]))
+        if first_at.tzinfo is None:
+            first_at = first_at.replace(tzinfo=timezone.utc)
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=timezone.utc)
+        if (last_at - first_at).total_seconds() >= 60:
+            accepted.extend(candidate)
+            candidate = []
+    # A trailing change may be a real transfer or market move. Keep it until a
+    # later sample proves that it was only a short-lived settlement spike.
+    accepted.extend(candidate)
+    return accepted

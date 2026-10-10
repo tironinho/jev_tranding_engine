@@ -1534,6 +1534,81 @@ class TradingEngine:
                 )
         return rows
 
+    def jev_performance_report(self, mode: str = "live", limit: int = 200) -> dict:
+        """Read-only operational view of the Jev strategy book."""
+        if mode not in {"live", "paper", "all"}:
+            raise ValueError("mode must be live, paper, or all")
+        limit = max(1, min(limit, 1000))
+        account = self.accounts.accounts["baseline_jev"]
+        trades = [trade for trade in account.trades if mode == "all" or trade.mode == mode]
+        positions = [
+            row
+            for row in self.positions_payload()
+            if row["strategy"] == "baseline_jev" and (mode == "all" or row["mode"] == mode)
+        ]
+        summary = summarize_trades(trades, self.settings.initial_paper_equity)
+        closed = [
+            {
+                "trade_id": str(trade.trade_id),
+                "decision_id": str(trade.decision_id),
+                "opened_at": trade.opened_at.isoformat(),
+                "closed_at": trade.closed_at.isoformat(),
+                "symbol": trade.symbol,
+                "side": trade.side.value,
+                "quantity": trade.quantity,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "stop_loss": trade.stop,
+                "take_profit": trade.target,
+                "exit_reason": trade.exit_reason,
+                "gross_pnl_usdt": trade.gross_pnl,
+                "fees_usdt": trade.fees,
+                "slippage_usdt": trade.slippage,
+                "funding_usdt": trade.funding,
+                "realized_pnl_usdt": trade.net_pnl,
+                "r_multiple": trade.r_multiple,
+                "mode": trade.mode,
+            }
+            for trade in sorted(trades, key=lambda item: item.closed_at, reverse=True)[:limit]
+        ]
+        opened = [
+            {
+                "position_id": row["position_id"],
+                "opened_at": row["opened_at"],
+                "symbol": row["symbol"],
+                "side": row["side"],
+                "quantity": row["quantity"],
+                "entry_price": row["entry"],
+                "mark_price": row["mark"],
+                "stop_loss": row["stop"],
+                "take_profit": row["target"],
+                "unrealized_pnl_usdt": row["unrealized"],
+                "protection_status": row["protection_status"],
+                "mode": row["mode"],
+            }
+            for row in positions
+        ]
+        return {
+            "strategy": "baseline_jev",
+            "mode": mode,
+            "generated_at": utcnow().isoformat(),
+            "returned_closed_trades": len(closed),
+            "summary": {
+                "open_trades": len(opened),
+                "closed_trades": summary["trades"],
+                "wins": summary["wins"],
+                "losses": summary["losses"],
+                "win_rate": summary["win_rate"],
+                "realized_pnl_usdt": summary["net_pnl"],
+                "gross_pnl_usdt": summary["gross_pnl"],
+                "fees_usdt": summary["fees_total"],
+                "profit_factor": summary["profit_factor"],
+                "average_trade_pnl_usdt": summary["net_pnl"] / summary["trades"] if summary["trades"] else None,
+            },
+            "open": opened,
+            "closed": closed,
+        }
+
     def paper_book(self) -> dict:
         marks = self._marks()
         start = self.settings.initial_paper_equity

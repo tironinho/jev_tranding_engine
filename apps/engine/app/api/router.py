@@ -223,6 +223,15 @@ async def jev_reviews(request: Request, limit: int = 40) -> dict:
     return {"rows": await engine.jev_reviews_with_history(min(limit, 80)), "history": history}
 
 
+@router.get("/api/jev/performance")
+async def jev_performance(request: Request, mode: str = "live", limit: int = 200) -> dict:
+    _actor(request)
+    try:
+        return _engine(request).jev_performance_report(mode, limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.get("/api/decisions")
 async def decisions(request: Request, limit: int = 100, symbol: str | None = None) -> dict:
     _actor(request)

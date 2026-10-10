@@ -1,5 +1,5 @@
 from app.domain.enums import Action
-from app.risk.economics import compute_trade_economics, extend_target_for_costs, size_quantity
+from app.risk.economics import compute_trade_economics, size_quantity
 
 
 def test_fees_and_net_rr_are_separate_from_gross():
@@ -79,69 +79,3 @@ def test_size_uses_stop_distance_not_a_fixed_quantity():
     assert with_fees < qty
     loss = with_fees * (2 + 100 * 0.001 + 98 * 0.001)
     assert abs(loss - 50) < 1e-6
-
-
-def test_a_fee_hair_below_the_minimum_extends_the_target():
-    shared = dict(
-        side=Action.LONG,
-        entry=83559.88,
-        stop=83350.98030000001,
-        quantity=0.17102,
-        entry_fee_rate=0.0005,
-        exit_fee_rate=0.0005,
-        exit_slippage_per_unit=0.0,
-        funding_cashflow_total=0.0,
-        spread_cost=0.0,
-        slippage_cost=0.0,
-    )
-    before = compute_trade_economics(target=84082.12925, fee_source="config", **shared)
-    assert before.net_rr is not None and before.net_rr < 1.5
-    lifted, extended = extend_target_for_costs(target=84082.12925, min_net_rr=1.5, **shared)
-    assert extended
-    after = compute_trade_economics(target=lifted, fee_source="config", **shared)
-    assert after.net_rr is not None and after.net_rr >= 1.5
-    assert lifted - 84082.12925 < 83559.88 * 0.001
-
-
-def test_minimum_stop_slippage_is_pushed_out_until_net_rr_clears():
-    entry = 100.0
-    distance = 0.25
-    shared = dict(
-        side=Action.SHORT,
-        entry=entry,
-        stop=entry + distance,
-        quantity=10,
-        entry_fee_rate=0.0005,
-        exit_fee_rate=0.0005,
-        exit_slippage_per_unit=entry * 8 / 10_000,
-        funding_cashflow_total=0.0,
-        spread_cost=0.0,
-        slippage_cost=0.0,
-    )
-    target = entry - 2.5 * distance
-    before = compute_trade_economics(target=target, fee_source="config", **shared)
-    assert before.net_rr is not None and before.net_rr < 1.5
-    lifted, extended = extend_target_for_costs(target=target, min_net_rr=1.5, **shared)
-    assert extended
-    after = compute_trade_economics(target=lifted, fee_source="config", **shared)
-    assert after.net_rr is not None and after.net_rr >= 1.5
-    assert target - lifted <= abs(target - entry)
-
-
-def test_an_impossible_net_rr_does_not_move_the_target():
-    lifted, extended = extend_target_for_costs(
-        side=Action.LONG,
-        entry=100,
-        stop=98,
-        target=108,
-        quantity=1,
-        entry_fee_rate=0.0005,
-        exit_fee_rate=0.0005,
-        exit_slippage_per_unit=0,
-        funding_cashflow_total=0,
-        spread_cost=0,
-        slippage_cost=0,
-        min_net_rr=50,
-    )
-    assert extended is False
-    assert lifted == 108

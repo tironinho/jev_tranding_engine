@@ -192,7 +192,7 @@ def test_flow_against_the_composite_refuses_the_side():
         taker_flow_1m=None,
     )
     result = score_baseline(snapshot, eng.weights)
-    assert result.composite > eng.weights.min_abs_score
+    assert result.composite > 0
     assert CLASS_FLOW_AGAINST in result.market_class.labels
     assert result.action is Action.NO_TRADE
 

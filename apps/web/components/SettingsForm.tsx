@@ -105,14 +105,14 @@ export function SettingsForm({
             const form = new FormData(event.currentTarget);
             if (window.prompt("Digite CONFIRM para alterar risco") !== "CONFIRM") return;
             const body: Record<string, unknown> = { confirm: "CONFIRM" };
-            for (const key of ["min_net_rr", "risk_per_trade", "max_daily_drawdown", "max_open_positions"]) {
+            for (const key of ["risk_per_trade", "max_daily_drawdown", "max_open_positions"]) {
               body[key] = key === "max_open_positions" ? Number(form.get(key)) : Number(form.get(key));
             }
             void send("risk/limits", body);
           }}
         >
           <div className="md:col-span-2 text-[11px] tracking-[0.14em] text-mute">RISK LIMITS</div>
-          {["min_net_rr", "risk_per_trade", "max_daily_drawdown", "max_open_positions"].map((key) => (
+          {["risk_per_trade", "max_daily_drawdown", "max_open_positions"].map((key) => (
             <label key={key} className="grid gap-1">
               <span className="text-mute">{key}</span>
               <input name={key} defaultValue={String(limits[key] ?? "")} className="border border-line bg-ink px-2 py-1 font-mono" />

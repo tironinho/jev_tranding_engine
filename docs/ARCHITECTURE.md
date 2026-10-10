@@ -137,14 +137,14 @@ Se Postgres foi configurado e está indisponível, não abre trade (`PERSISTENCE
 Versões gravadas em toda decisão:
 
 - `baseline_classified_v1`
-- `jev_break_size_v1`
+- `jev_strict_signal_v4` / `jev_target_3r_v1`
 - `openai_jev_break_size_v1`
 - `market_interpreter_v1` (prompt OpenAI; versão nova = chave nova, sem edição silenciosa)
 - `jev_market_v1` (rótulo do prompt Jev; o host vem só de `JEV_BASE_URL`)
 
 `score_baseline` pesa cada família em `[-1, +1]`, combina o composto e só então classifica. A ordem sai depois da classe. A classe recusa o lado do composto quando os componentes divergem, quando um único componente carrega o score, ou quando o fluxo vai contra esse lado. Hard blocks (spread, volatilidade extrema, histórico insuficiente) continuam `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
 
-`baseline_jev` chama o Jev só quando a classe deixou um candidato `LONG` ou `SHORT`. O pedido leva os pesos e a classe. O Jev responde continuação, reversão e falso rompimento sobre esse candidato, num único passe. Sem rompimento na classe, continuação abaixo do piso veta. Com rompimento, o lado passa e o tamanho cai na proporção da continuação. Reversão alta e falso rompimento claro continuam vetando. Não cria um lado que a classe recusou e não inverte LONG/SHORT. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
+`baseline_jev` só chama o Jev em produção quando a baseline já classificou um `LONG` ou `SHORT` com score absoluto mínimo de 0,55. Candidatos abaixo desse piso continuam disponíveis em paper/shadow para pesquisa, sem chegar à execução live. O pedido leva os pesos e a classe. O Jev responde continuação, reversão e falso rompimento sobre esse candidato, num único passe. Continuação abaixo de 55% veta; reversão alta e falso rompimento claro também vetam. O Jev não cria um lado que a baseline recusou e não inverte LONG/SHORT. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
 
 `baseline_openai_jev` faz o mesmo, com um passo anterior: a OpenAI devolve `MarketState` validado por Pydantic. Schema inválido rejeita. A interpretação pode vetar por regime/anomalia antes do passe do Jev. Sem chave, ou com chamadas desligadas, a estratégia fica em standby e não finge decisão. Cache de estado de mercado existe como interface e nasce desligado.
 
@@ -154,10 +154,10 @@ O mock do Jev é determinístico, marcado `is_mock=true`, e existe para testar e
 
 Entradas: decisão, snapshot, conta, posições, taxas, book, funding.
 
-1. Stop estrutural a partir do swing recente e de um buffer de ATR. Se o swing estiver do lado errado, há fallback ATR explícito na razão `STOP_ATR_FALLBACK`. Stop largo demais rejeita `STOP_TOO_WIDE`. O alvo é a faixa da última hora. Hora estreita fica aquém de 2,5R. Hora larga senta nessa faixa. O múltiplo de 2,5R continua só no piso de continuação.
-2. Alvo: `structure` (default), `fixed` ou `rr`. Arquitetura de saída futura (trailing, parcial, break-even) fica no modelo de posição sem estar ativa.
+1. Stop estrutural a partir do swing recente e de um buffer de ATR. Se o swing estiver do lado errado, há fallback ATR explícito na razão `STOP_ATR_FALLBACK`. Stop largo demais rejeita `STOP_TOO_WIDE`.
+2. O alvo usa 3R como piso. Quando faixa/estrutura calculam um alvo mais distante, esse alvo maior é preservado. Produção não encerra por tempo; fecha por target, stop ou falha de proteção. O stop passa ao break-even líquido em +1R e trava +1R depois de +2R.
 3. Custos separados: fee de entrada, fee de saída, slippage, funding. O spread entra no preço estimado de execução quando o modelo é `spread_based` ou `orderbook_based`, sem cobrar de novo.
-4. `gross_rr` e `net_rr` são campos distintos. Abaixo de `MIN_NET_RR`: `NET_RR_TOO_LOW`.
+4. `gross_rr`, `net_rr` e expectativa permanecem no registro para auditoria. Nenhum deles veta uma entrada.
 5. Quantidade = perda máxima da conta / perda líquida por unidade até o stop. Sem tamanho fixo.
 6. Limites: risco por trade, perda diária, drawdown diário, posições abertas, exposição do símbolo, exposição total, margem, uma posição por símbolo, intervalo mínimo entre entradas. Estouro: `RISK_REJECTED` com código específico.
 7. Spot não abre short (`SPOT_SHORT_NOT_SUPPORTED`).

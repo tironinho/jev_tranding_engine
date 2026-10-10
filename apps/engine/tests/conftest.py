@@ -29,7 +29,6 @@ def settings(**overrides) -> Settings:
         initial_paper_equity=10_000,
         maker_fee_rate=0.0005,
         taker_fee_rate=0.0005,
-        min_net_rr=1.5,
         max_symbol_exposure=1,
         max_total_exposure=1,
         stale_after_ms=5_000,

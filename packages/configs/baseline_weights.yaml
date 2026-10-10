@@ -1,8 +1,8 @@
-# baseline_weights_v2
+# baseline_weights_v3
 # Constantes de escala só comprimem grandezas típicas de cripto para [-1, 1].
 # Não são parâmetros otimizados. Não usar live sem calibração por backtest.
 
-version: baseline_weights_v2
+version: baseline_weights_v3
 weights:
   trend: 0.25
   momentum: 0.20
@@ -11,7 +11,7 @@ weights:
   structure: 0.15
   volatility: 0.00
   liquidity: 0.00
-min_abs_score: 0.45
+min_abs_score: 0.55
 max_spread_bps: 8.0
 min_volume_ratio: 0.40
 extreme_atr_normalized: 0.05

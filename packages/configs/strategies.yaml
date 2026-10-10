@@ -17,15 +17,15 @@ strategies:
 
 combination:
   baseline_version: baseline_classified_v1
-  jev_rule_version: jev_context_candidate_v3
+  jev_rule_version: jev_strict_signal_v4
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
-  # Direction-neutral quality floor. The per-plan break-even probability plus
-  # haircut remains the stricter gate whenever costs/R:R require it.
-  min_trend_continuation: 0.40
-  min_short_continuation: 0.40
-  # Coherent sub-threshold signals may use the richer context and JEV. This is
-  # only a candidate gate; the JEV probability and positive-EV plan still gate execution.
+  # Abertura live exige uma baseline válida e confirmação forte do JEV.
+  # O alvo e o R:R não alteram este piso de qualidade do sinal.
+  min_trend_continuation: 0.55
+  min_short_continuation: 0.55
+  # Candidatos abaixo do threshold seguem visíveis em paper/shadow para pesquisa,
+  # mas nunca são promovidos para execução live.
   candidate_min_abs_score: 0.15
   # Moderate disagreement may be reviewed by JEV; strong disagreement and
   # flow against the candidate remain blocked before the provider call.

@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.config import RiskLimits
 from app.domain.enums import Action
 from types import SimpleNamespace
@@ -25,8 +27,8 @@ def _fifteen(index: int, high: float, low: float) -> Candle:
     )
 
 
-def test_a_wide_hour_leaves_the_target_at_risk_multiple():
-    limits = RiskLimits(cap_target_by_rr=True, rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
+def test_a_calculated_target_above_the_rr_floor_is_preserved():
+    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
         "recent_swing_low": 100.0,
@@ -35,18 +37,18 @@ def test_a_wide_hour_leaves_the_target_at_risk_multiple():
     geometry = plan_geometry(Action.LONG, 101.0, features, limits)
     stop = 100.0 - 0.1
     assert (101.0 - stop) * 2.5 < 20.0
-    assert geometry.target == 101.0 + (101.0 - stop) * 2.5
+    assert geometry.target == 121.0
 
 
-def test_the_target_shrinks_to_the_last_hour():
-    limits = RiskLimits(cap_target_by_rr=True, rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
+def test_a_calculated_target_below_three_r_uses_the_hard_floor():
+    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0001, atr_stop_mult=0.01, max_stop_pct=0.05)
     features = {
         "atr": 1.0,
         "recent_swing_low": 100.0,
         "range_60m": 1.5,
     }
     geometry = plan_geometry(Action.LONG, 101.0, features, limits)
-    assert geometry.target == 101.0 + 1.5
+    assert geometry.target == pytest.approx(101.0 + (101.0 - 99.9) * 3.0)
 
 
 def test_a_missing_hour_has_no_target():
@@ -75,11 +77,11 @@ def test_a_stop_tighter_than_the_minimum_is_widened_instead_of_rejected():
 
 
 def test_a_one_minute_bar_wider_than_the_fee_floor_sets_the_stop():
-    limits = RiskLimits(cap_target_by_rr=True, rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
+    limits = RiskLimits(rr_target_multiple=2.5, min_stop_pct=0.0025, atr_stop_mult=2.0, max_stop_pct=0.05)
     features = {"atr": 0.01, "recent_swing_low": 99.99, "range_1m": 0.8, "range_60m": 3.0}
     geometry = plan_geometry(Action.LONG, 100.0, features, limits)
     assert geometry.stop == 99.2
-    assert geometry.target == 100.0 + min(0.8 * 2.5, 3.0)
+    assert geometry.target == 103.0
 
 
 def _position(**overrides):
@@ -120,7 +122,7 @@ def test_continuation_cut_stays_at_least_the_configured_floor():
         round_trip_fee=0.001,
     )
     assert _continuation_floor(snapshot, context, Action.LONG) == 0.55
-    assert _continuation_floor(snapshot, context, Action.SHORT) == 0.40
+    assert _continuation_floor(snapshot, context, Action.SHORT) == 0.55
 
 
 def test_meta_hit_probability_rises_when_the_stop_is_tight():

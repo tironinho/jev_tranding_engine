@@ -13,6 +13,8 @@ from app.domain.enums import (
 )
 from app.domain.schemas import CostBreakdown, TradeEconomics
 
+MIN_TARGET_R = 3.0
+
 
 def rate_for(liquidity: str, maker: float, taker: float) -> float:
     return maker if liquidity == "maker" else taker
@@ -105,19 +107,18 @@ def _stop_floor(entry: float, atr: float, features: dict, limits: RiskLimits) ->
 
 
 def _fit_target(side: Action, entry: float, distance: float, features: dict, limits: RiskLimits) -> float | str:
-    """The target fits inside the last hour, capped by the planned RR multiple when cap_target_by_rr is set.
-
-    When cap_target_by_rr is True (default behaviour for live), the reward is
-    min(distance * rr_target_multiple, range_60m).
-    When False (legacy), the full hour range is used as the target.
-    """
+    """Use 3R as the target floor while preserving a farther calculated target."""
     hour = features.get("range_60m")
     if not isinstance(hour, (int, float)) or hour <= 0 or distance <= 0:
         return HOUR_RANGE_UNAVAILABLE
-    if getattr(limits, "cap_target_by_rr", True):
-        reward = min(distance * limits.rr_target_multiple, float(hour))
-    else:
-        reward = float(hour)
+    calculated = float(hour)
+    boundary_key = "resistance_15m" if side is Action.LONG else "support_15m"
+    boundary = features.get(boundary_key)
+    if isinstance(boundary, (int, float)):
+        boundary_reward = (float(boundary) - entry) if side is Action.LONG else (entry - float(boundary))
+        if boundary_reward > 0:
+            calculated = min(calculated, boundary_reward)
+    reward = max(distance * max(MIN_TARGET_R, limits.rr_target_multiple), calculated)
     if reward <= 0:
         return HOUR_RANGE_UNAVAILABLE
     if side is Action.LONG:
@@ -205,97 +206,3 @@ def size_quantity(
     if per_unit <= 0 or max_loss <= 0:
         return 0.0
     return max_loss / per_unit
-
-
-def target_for_min_net_rr(
-    *,
-    side: Action,
-    entry: float,
-    stop: float,
-    quantity: float,
-    entry_fee_rate: float,
-    exit_fee_rate: float,
-    exit_slippage_per_unit: float,
-    funding_cashflow_total: float,
-    spread_cost: float,
-    slippage_cost: float,
-    min_net_rr: float,
-) -> float | None:
-    """Price at which net reward / net risk equals min_net_rr. None when costs make that impossible."""
-    qty = abs(quantity)
-    if qty <= 0 or entry <= 0 or exit_fee_rate >= 1:
-        return None
-    slip = abs(exit_slippage_per_unit) * qty
-    entry_fee = abs(entry) * qty * entry_fee_rate
-    extra = slip + spread_cost + slippage_cost
-    if side is Action.LONG:
-        gross_risk = max(0.0, entry - stop) * qty
-        exit_fee_stop = abs(stop) * qty * exit_fee_rate
-        net_risk = gross_risk + entry_fee + exit_fee_stop + extra - funding_cashflow_total
-        if net_risk <= 0:
-            return None
-        numerator = min_net_rr * net_risk + entry * qty + entry_fee + extra - funding_cashflow_total
-        denom = qty * (1 - exit_fee_rate)
-        if denom <= 0:
-            return None
-        return numerator / denom
-    gross_risk = max(0.0, stop - entry) * qty
-    exit_fee_stop = abs(stop) * qty * exit_fee_rate
-    net_risk = gross_risk + entry_fee + exit_fee_stop + extra - funding_cashflow_total
-    if net_risk <= 0:
-        return None
-    numerator = entry * qty - entry_fee - extra + funding_cashflow_total - min_net_rr * net_risk
-    denom = qty * (1 + exit_fee_rate)
-    if denom <= 0 or numerator <= 0:
-        return None
-    return numerator / denom
-
-
-def extend_target_for_costs(
-    *,
-    side: Action,
-    entry: float,
-    stop: float,
-    target: float,
-    quantity: float,
-    entry_fee_rate: float,
-    exit_fee_rate: float,
-    exit_slippage_per_unit: float,
-    funding_cashflow_total: float,
-    spread_cost: float,
-    slippage_cost: float,
-    min_net_rr: float,
-) -> tuple[float, bool]:
-    """Move the target far enough to clear costs, and no farther than the planned reward.
-
-    A 2.5R plan on the minimum stop lands under 1.5 once taker fees and slippage sit on both sides.
-    That gap is still the cost, so the target steps out. A minimum of 50 is farther than the planned
-    reward and stays a rejection.
-    """
-    required = target_for_min_net_rr(
-        side=side,
-        entry=entry,
-        stop=stop,
-        quantity=quantity,
-        entry_fee_rate=entry_fee_rate,
-        exit_fee_rate=exit_fee_rate,
-        exit_slippage_per_unit=exit_slippage_per_unit,
-        funding_cashflow_total=funding_cashflow_total,
-        spread_cost=spread_cost,
-        slippage_cost=slippage_cost,
-        min_net_rr=min_net_rr * (1 + 1e-5),
-    )
-    if required is None:
-        return target, False
-    room = abs(target - entry)
-    if side is Action.LONG:
-        if required <= target or required <= entry:
-            return target, False
-        if required - target <= room:
-            return required, True
-        return target, False
-    if required >= target or required >= entry or required <= 0:
-        return target, False
-    if target - required <= room:
-        return required, True
-    return target, False

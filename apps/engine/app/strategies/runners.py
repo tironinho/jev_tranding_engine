@@ -17,7 +17,6 @@ from app.domain.enums import (
     CLASS_SINGLE_DRIVER,
     HIGH_VOLATILITY,
     INSUFFICIENT_HISTORY,
-    JEV_EXPECTANCY_TOO_LOW,
     JEV_FALLBACK,
     JEV_UNAVAILABLE,
     OPENAI_CALLS_DISABLED,
@@ -35,7 +34,7 @@ from app.domain.schemas import MarketSnapshot, StrategyDecision
 from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
-from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
+from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale
 from app.risk.plans import candidate_plans, score_probability
 
 
@@ -126,6 +125,20 @@ class BaselineJevStrategy:
         }
         context_candidate = False
         if result.action is Action.NO_TRADE:
+            if context.mode is OperatingMode.LIVE:
+                metadata["jev_effect"] = "idle"
+                return _decision(
+                    context=context,
+                    snapshot=snapshot,
+                    strategy=self.key,
+                    action=Action.NO_TRADE,
+                    confidence=result.confidence,
+                    reasons=[BASELINE_NO_TRADE, *result.reason_codes],
+                    metadata=metadata,
+                    model_version=result.version,
+                    prompt_version=None,
+                    started=started,
+                )
             candidate_action = _context_candidate_action(result, context.combination)
             if candidate_action is None:
                 metadata["jev_effect"] = "idle"
@@ -260,7 +273,7 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
         context.intelligence,
         allow_structure_extension=True,
     )
-    metadata.update(candidate_plans=plans, combination_rule_version="jev_dynamic_rr_v1",
+    metadata.update(candidate_plans=plans, combination_rule_version="jev_target_3r_v1",
                     probability_status="UNCALIBRATED")
     metadata.pop("jev_trade_plan", None)
     eligible = [p for p in plans if p["eligible"]][-3:]
@@ -280,13 +293,11 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             "is_mock": assessment.is_mock, "error": assessment.error})
         plan.update(score_probability(plan, assessment.trend_continuation_probability, context.risk.probability_haircut))
         configured = context.combination.min_short_continuation if result.action is Action.SHORT else context.combination.min_trend_continuation
-        required = max(configured, plan["break_even_probability"] + context.risk.probability_haircut)
+        required = configured
         action, confidence, vetoes = apply_jev_veto(result.action, result.confidence, assessment,
             context.combination, breakout=_class_has_break(result), min_continuation=required)
-        accepted = action is not Action.NO_TRADE and plan["expected_net_r"] >= context.risk.min_expected_net_r
+        accepted = action is not Action.NO_TRADE
         reasons = list(vetoes) if action is Action.NO_TRADE else []
-        if action is not Action.NO_TRADE and plan["expected_net_r"] < context.risk.min_expected_net_r:
-            reasons.append(JEV_EXPECTANCY_TOO_LOW)
         plan.update(eligible=accepted, reason="JEV_CONFIRM" if accepted else ",".join(reasons), required_probability=required)
         return plan, assessment, confidence, accepted, reasons
 
@@ -294,7 +305,7 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
     assessed = [item for item in evaluated if item is not None]
     choices = [item for item in assessed if item[3]]
     if not choices:
-        reasons = ["NO_ECONOMIC_PLAN"] if not eligible else [JEV_UNAVAILABLE]
+        reasons = ["TARGET_PLAN_UNAVAILABLE"] if not eligible else [JEV_UNAVAILABLE]
         model_version = result.version
         prompt_version = None
         if assessed:
@@ -303,10 +314,6 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
                 key=lambda item: item[0]["expected_net_r"],
             )
             reasons = list(vetoes)
-            if best_plan["expected_net_r"] <= 0:
-                reasons.append("NO_POSITIVE_EXPECTANCY_PLAN")
-            elif best_plan["expected_net_r"] < context.risk.min_expected_net_r:
-                reasons.append(JEV_EXPECTANCY_TOO_LOW)
             metadata.update(
                 jev_trade_plan=dict(best_plan),
                 best_assessed_plan_id=best_plan["plan_id"],
@@ -593,13 +600,7 @@ def _quality_gate(context, snapshot, metadata, started, strategy):
 
 def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext, action: Action) -> float:
     configured = context.combination.min_short_continuation if action is Action.SHORT else context.combination.min_trend_continuation
-    if context.risk is None or snapshot.price <= 0:
-        return configured
-    atr = snapshot.features.get("atr")
-    if not isinstance(atr, (int, float)) or atr <= 0:
-        return configured
-    stop_pct = max(context.risk.min_stop_pct, context.risk.atr_stop_mult * float(atr) / snapshot.price)
-    return max(configured, meta_hit_probability(context.risk.rr_target_multiple, context.round_trip_fee, stop_pct))
+    return configured
 
 
 def _remember_jev(metadata: dict, assessment, effect: str) -> None:

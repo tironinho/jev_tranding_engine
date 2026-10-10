@@ -50,7 +50,6 @@ class StrategyPatch(BaseModel):
 
 
 class RiskPatch(BaseModel):
-    min_net_rr: float | None = None
     risk_per_trade: float | None = None
     max_risk_per_trade: float | None = None
     max_daily_loss: float | None = None
@@ -364,8 +363,6 @@ async def risk_limits(request: Request) -> dict:
     _actor(request)
     limits = _engine(request).risk.limits
     return {
-        "min_net_rr": limits.min_net_rr,
-        "min_gross_rr": limits.min_gross_rr,
         "risk_per_trade": limits.risk_per_trade,
         "max_risk_per_trade": limits.max_risk_per_trade,
         "max_daily_loss": limits.max_daily_loss,

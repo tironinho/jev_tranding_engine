@@ -1,9 +1,9 @@
-"""Bounded, ex-ante trade alternatives. Never extend a target to force acceptance."""
+"""Ex-ante target plan used by JEV and the execution risk audit."""
 from __future__ import annotations
 
 import math
 
-from app.domain.enums import Action, GROSS_RR_TOO_LOW
+from app.domain.enums import Action
 from app.risk.economics import compute_trade_economics, plan_geometry
 
 
@@ -13,67 +13,36 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
     if isinstance(geometry, str):
         return []
     distance = abs(entry - geometry.stop)
-    hour = snapshot.features.get("range_60m")
-    if not isinstance(hour, (int, float)) or not math.isfinite(hour) or hour <= 0:
-        return []
     direction = 1 if side is Action.LONG else -1
-    boundaries = []
-    # recent_high/recent_low often is the level that triggered the candidate. Treating
-    # that already-touched level as future target capacity collapses every breakout
-    # plan below the net R:R floor. Only the wider 15m structure caps the target.
-    for key in ("resistance_15m",) if side is Action.LONG else ("support_15m",):
-        level = snapshot.features.get(key)
-        if isinstance(level, (int, float)) and (level - entry) * direction > 0:
-            boundaries.append((level - entry) * direction)
-    maximum = float(hour)
-    # The trailing one-hour range is a useful cap in normal conditions, but it
-    # is systematically behind a new break. A confirmed structural expansion
-    # may be shown to JEV up to the existing hard 3R plan limit; JEV still has
-    # to approve continuation and positive stressed expectancy.
-    confirmed_expansion = (
-        (side is Action.LONG and snapshot.features.get("breakout") is True)
-        or (side is Action.SHORT and snapshot.features.get("breakdown") is True)
-    )
-    if confirmed_expansion:
-        maximum = max(maximum, distance * 3.0)
-    if boundaries:
-        maximum = min(maximum, *boundaries)
-    structure_maximum = maximum
-    # A coherent baseline candidate may ask JEV about continuation through the
-    # nearest structure. The plan stays bounded at 3R and is explicitly marked;
-    # it still needs the normal net-RR, probability and stressed-EV approvals.
-    if allow_structure_extension:
-        maximum = max(maximum, distance * 3.0)
+    reward = abs(geometry.target - entry)
+    calculated_limit = float(snapshot.features["range_60m"])
+    boundary_key = "resistance_15m" if side is Action.LONG else "support_15m"
+    boundary = snapshot.features.get(boundary_key)
+    if isinstance(boundary, (int, float)) and (float(boundary) - entry) * direction > 0:
+        calculated_limit = min(calculated_limit, abs(float(boundary) - entry))
     derivative = (intelligence or {}).get("derivatives") or {}
     rate = derivative.get("quote_borrow_hourly_interest" if side is Action.LONG else "borrow_hourly_interest")
     rate = float(rate) if isinstance(rate, (int, float)) and math.isfinite(rate) and rate >= 0 else None
     assumed_rate = max(rate or 0, limits.borrow_hourly_stress_rate)
     interest = entry * assumed_rate * max(1, math.ceil(limits.max_hold_minutes / 60)) if snapshot.market_type.value == "margin" else 0
-    rows, seen = [], set()
-    for rr in (1.5, 2.0, 2.5, 3.0):
-        reward = min(distance * rr, maximum)
-        target = entry + direction * reward
-        if target <= 0 or round(target, 10) in seen:
-            continue
-        seen.add(round(target, 10))
-        econ = compute_trade_economics(side=side, entry=entry, stop=geometry.stop, target=target,
-            quantity=1, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
-            exit_slippage_per_unit=entry * limits.plan_stress_bps / 10000,
-            funding_cashflow_total=-interest, fee_source="plan_estimate")
-        gross_ok = econ.gross_rr is not None and econ.gross_rr + 1e-9 >= limits.min_gross_rr
-        net_ok = econ.net_rr is not None and econ.net_rr >= limits.min_net_rr
-        rows.append({"plan_id": f"rr_{rr:g}", "entry": entry, "stop": geometry.stop, "target": target,
-            "gross_rr": econ.gross_rr, "net_rr": econ.net_rr, "net_risk_per_unit": econ.net_risk,
-            "net_reward_per_unit": econ.net_reward, "break_even_probability": 1 / (1 + econ.net_rr) if econ.net_rr and econ.net_rr > 0 else 1,
-            "horizon_minutes": limits.max_hold_minutes, "round_trip_fee_rate": fee_rate * 2,
-            "stress_bps": limits.plan_stress_bps, "borrow_hourly_rate": rate,
-            "borrow_stress_rate": assumed_rate,
-            "interest_estimate_per_unit": interest, "interest_known": rate is not None or snapshot.market_type.value != "margin",
-            "requires_structure_break": reward > structure_maximum + max(1e-12, entry * 1e-10),
-            "stop_policy": "breakeven_at_1R_lock_1R_at_2R" if limits.step_stop_to_breakeven else "fixed",
-            "eligible": gross_ok and net_ok,
-            "reason": None if gross_ok and net_ok else (GROSS_RR_TOO_LOW if not gross_ok else "NET_RR_TOO_LOW")})
-    return rows
+    target = geometry.target
+    if target <= 0:
+        return []
+    econ = compute_trade_economics(side=side, entry=entry, stop=geometry.stop, target=target,
+        quantity=1, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
+        exit_slippage_per_unit=entry * limits.plan_stress_bps / 10000,
+        funding_cashflow_total=-interest, fee_source="plan_estimate")
+    label = f"rr_{econ.gross_rr:.2f}".rstrip("0").rstrip(".") if econ.gross_rr is not None else "target"
+    return [{"plan_id": label, "entry": entry, "stop": geometry.stop, "target": target,
+        "gross_rr": econ.gross_rr, "net_rr": econ.net_rr, "net_risk_per_unit": econ.net_risk,
+        "net_reward_per_unit": econ.net_reward, "break_even_probability": 1 / (1 + econ.net_rr) if econ.net_rr and econ.net_rr > 0 else 1,
+        "horizon_minutes": limits.max_hold_minutes, "round_trip_fee_rate": fee_rate * 2,
+        "stress_bps": limits.plan_stress_bps, "borrow_hourly_rate": rate,
+        "borrow_stress_rate": assumed_rate,
+        "interest_estimate_per_unit": interest, "interest_known": rate is not None or snapshot.market_type.value != "margin",
+        "requires_structure_break": reward > calculated_limit + max(1e-12, entry * 1e-10),
+        "stop_policy": "breakeven_at_1R_lock_1R_at_2R" if limits.step_stop_to_breakeven else "fixed",
+        "eligible": True, "reason": None}]
 
 
 def score_probability(plan, probability, haircut):

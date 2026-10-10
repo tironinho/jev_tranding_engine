@@ -65,7 +65,6 @@ log = logging.getLogger(__name__)
 
 STRATEGY_KEYS = ("baseline", "baseline_jev")
 EDITABLE_RISK = (
-    "min_net_rr",
     "risk_per_trade",
     "max_risk_per_trade",
     "max_daily_loss",

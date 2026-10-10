@@ -132,7 +132,7 @@ def test_account_snapshot_restores_cash_position_and_overrides():
     assert fresh.strategy_settings["baseline"].mode is OperatingMode.SHADOW
     assert fresh.strategy_settings["baseline"].enabled is False
     assert fresh.strategy_settings["baseline"].max_signal_age_ms == 2000
-    assert fresh.risk.limits.min_net_rr == 2.25
+    assert not hasattr(fresh.risk.limits, "min_net_rr")
     assert fresh.risk.limits.max_open_positions == 2
 
 

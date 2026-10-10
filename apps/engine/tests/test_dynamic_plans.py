@@ -5,7 +5,7 @@ import pytest
 
 from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import Action, OperatingMode, MarketType
-from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, JEV_EXPECTANCY_TOO_LOW, JEV_UNAVAILABLE
+from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, JEV_LOW_CONTINUATION, JEV_UNAVAILABLE
 from app.providers.jev.mock import MockJevProvider
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy, StrategyContext
@@ -29,30 +29,33 @@ class PlansProvider(MockJevProvider):
     async def evaluate_market_state(self, request):
         self.requests.append(request)
         result = await super().evaluate_market_state(request)
-        return result.model_copy(update={"trend_continuation_probability": self.probabilities[request.trade_plan["plan_id"]]})
+        probability = self.probabilities.get(request.trade_plan["plan_id"], self.probabilities.get("*"))
+        if probability is None:
+            raise KeyError(request.trade_plan["plan_id"])
+        return result.model_copy(update={"trend_continuation_probability": probability})
 
 
 @pytest.mark.asyncio
-async def test_independent_target_probabilities_choose_ev_not_largest_rr():
+async def test_single_calculated_target_is_evaluated_without_an_rr_gate():
     snapshot, _ = long_snapshot()
-    provider = PlansProvider({"rr_2": .9, "rr_2.5": .65, "rr_3": .41})
+    provider = PlansProvider({"*": .7})
     ctx = context(provider)
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
     assert decision.action is Action.LONG
-    assert len(provider.requests) == 3
-    assert len({r.trade_plan['target'] for r in provider.requests}) == 3
-    assert decision.metadata['selected_plan_id'] == 'rr_2'
-    assert len(ctx.artifacts) == 3
-    assert decision.metadata['jev_stress_probability'] == pytest.approx(.85)
+    assert len(provider.requests) == 1
+    assert provider.requests[0].trade_plan['gross_rr'] > 3
+    assert provider.requests[0].trade_plan['target'] == pytest.approx(108)
+    assert decision.metadata['selected_plan_id'] == provider.requests[0].trade_plan['plan_id']
+    assert len(ctx.artifacts) == 1
 
 
 @pytest.mark.asyncio
 async def test_no_space_to_nearest_structure_may_be_assessed_but_never_forces_a_trade():
     snapshot, _ = long_snapshot(resistance_15m=100.2)
-    provider = PlansProvider({"rr_2": .2, "rr_2.5": .2, "rr_3": .2})
+    provider = PlansProvider({"*": .2})
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(provider))
     assert decision.action is Action.NO_TRADE
-    assert 'NO_POSITIVE_EXPECTANCY_PLAN' in decision.reason_codes
+    assert JEV_LOW_CONTINUATION in decision.reason_codes
     assert provider.requests
     assert all(request.trade_plan["requires_structure_break"] for request in provider.requests)
     assert decision.metadata["jev_effect"] == "veto"
@@ -61,15 +64,14 @@ async def test_no_space_to_nearest_structure_may_be_assessed_but_never_forces_a_
 
 
 @pytest.mark.asyncio
-async def test_barely_positive_uncalibrated_expectancy_is_rejected():
+async def test_expected_rr_does_not_reject_a_confirmed_signal():
     snapshot, _ = long_snapshot(atr=.01, recent_swing_low=99.99, range_60m=1, resistance_15m=None)
-    provider = PlansProvider({"rr_2": .2, "rr_2.5": .2, "rr_3": .46})
+    provider = PlansProvider({"*": .46})
     ctx = context(provider)
     ctx.combination = replace(ctx.combination, min_trend_continuation=.4)
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
-    assert decision.action is Action.NO_TRADE
-    assert JEV_EXPECTANCY_TOO_LOW in decision.reason_codes
-    assert decision.metadata["jev_trade_plan"]["expected_net_r"] < .15
+    assert decision.action is Action.LONG
+    assert decision.metadata["jev_trade_plan"]["gross_rr"] >= 3
 
 
 @pytest.mark.asyncio
@@ -80,14 +82,14 @@ async def test_all_model_failures_never_fall_back_to_unassessed_trade():
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
     assert decision.action is Action.NO_TRADE
     assert JEV_UNAVAILABLE in decision.reason_codes
-    assert len(ctx.artifacts) == 3
+    assert len(ctx.artifacts) == 1
     assert all('error' in a for a in ctx.artifacts)
 
 
 @pytest.mark.asyncio
 async def test_coherent_subthreshold_signal_reaches_context_and_jev():
     snapshot, _ = long_snapshot()
-    provider = PlansProvider({"rr_2": .9, "rr_2.5": .8, "rr_3": .7})
+    provider = PlansProvider({"*": .7})
     ctx = context(provider)
     ctx.weights = replace(ctx.weights, min_abs_score=.95)
     ctx.intelligence = {"data_quality": {"overall": 1.0}, "derivatives": {"oi_change_5m": .2}}
@@ -120,6 +122,21 @@ async def test_divergent_subthreshold_signal_stays_blocked_before_jev():
 
 
 @pytest.mark.asyncio
+async def test_live_never_promotes_a_subthreshold_baseline_candidate():
+    snapshot, _ = long_snapshot()
+    provider = PlansProvider({"*": .9})
+    ctx = context(provider)
+    ctx.mode = OperatingMode.LIVE
+    ctx.weights = replace(ctx.weights, min_abs_score=.95)
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.NO_TRADE
+    assert BASELINE_NO_TRADE in decision.reason_codes
+    assert not provider.requests
+
+
+@pytest.mark.asyncio
 async def test_moderate_divergence_without_opposing_flow_reaches_jev():
     snapshot, _ = long_snapshot(
         breakout=False,
@@ -137,7 +154,7 @@ async def test_moderate_divergence_without_opposing_flow_reaches_jev():
             result = await super().evaluate_market_state(request)
             return result.model_copy(update={"reversal_probability": .1, "false_breakout_probability": .1})
 
-    provider = ConfirmingProvider({"rr_2": .9, "rr_2.5": .8, "rr_3": .7})
+    provider = ConfirmingProvider({"*": .7})
     ctx = context(provider)
 
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
@@ -158,16 +175,17 @@ async def test_subthreshold_candidate_never_uses_baseline_fallback():
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
 
     assert decision.action is Action.NO_TRADE
-    assert len(ctx.artifacts) == 3
+    assert len(ctx.artifacts) == 1
 
 
-def test_candidates_cannot_cross_structure_and_include_unknown_interest_stress():
+def test_three_r_floor_can_cross_near_structure_and_includes_interest_stress():
     snapshot, _ = long_snapshot(resistance_15m=104)
     snapshot = snapshot.model_copy(update={'market_type': MarketType.MARGIN})
     plans = candidate_plans(snapshot, Action.LONG, RiskLimits(), .0005)
-    assert plans and max(p['target'] for p in plans) <= 104
+    assert plans and plans[0]['gross_rr'] == pytest.approx(3)
+    assert plans[0]['target'] > 104
+    assert plans[0]['requires_structure_break'] is True
     assert all(p['interest_estimate_per_unit'] > 0 and not p['interest_known'] for p in plans)
-    assert len({p['target'] for p in plans}) == len(plans)
 
 
 def test_confirmed_break_can_offer_three_r_beyond_trailing_hour_range():
@@ -190,7 +208,7 @@ def test_jev_candidate_can_assess_bounded_extension_through_structure():
         allow_structure_extension=True,
     )
 
-    assert max(plan["target"] for plan in bounded) <= 100.2
+    assert bounded == extended
     assert extended[-1]["gross_rr"] == pytest.approx(3)
     assert extended[-1]["requires_structure_break"] is True
     assert extended[-1]["eligible"] is True
@@ -204,35 +222,31 @@ def test_recent_break_level_does_not_collapse_future_targets():
     assert plans
     assert any(plan['eligible'] for plan in plans)
     assert max(plan['target'] for plan in plans) > snapshot.features['recent_high']
-    assert max(plan['target'] for plan in plans) <= snapshot.features['resistance_15m']
+    assert plans[0]['gross_rr'] == pytest.approx(3)
+    assert plans[0]['target'] > snapshot.features['resistance_15m']
 
 
 @pytest.mark.asyncio
-async def test_risk_rechecks_stressed_probability_and_aggregate_loss():
+async def test_risk_does_not_reject_rr_expectancy_but_keeps_aggregate_loss_limit():
     snapshot, book = long_snapshot()
-    decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(PlansProvider({'rr_2': .2, 'rr_2.5': .2, 'rr_3': .7})))
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(PlansProvider({'*': .7})))
     eng = engine()
     decision.metadata['jev_stress_probability'] = .1
     risk = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(.0005,.0005,'test'), book)
-    assert 'JEV_NONPOSITIVE_EXPECTANCY' in risk.reject_reasons
-    decision.metadata['jev_stress_probability'] = .31
-    risk = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(.0005,.0005,'test'), book)
-    assert JEV_EXPECTANCY_TOO_LOW in risk.reject_reasons
-    assert 0 < risk.details['expected_net_r'] < risk.details['minimum_expected_net_r']
-    decision.metadata['jev_stress_probability'] = .85
+    assert risk.accepted
     risk = eng.risk.evaluate(decision, snapshot, _context(open_stop_risk=200), FeeQuote(.0005,.0005,'test'), book)
     assert 'MAX_PORTFOLIO_STOP_RISK' in risk.reject_reasons
 
 
-def test_production_plan_floor_only_allows_three_r_targets():
+def test_production_plan_uses_three_r_floor_and_never_rr_rejects():
     snapshot, _ = long_snapshot()
-    limits = RiskLimits(dynamic_rr_enabled=True, min_gross_rr=3.0)
+    limits = RiskLimits(dynamic_rr_enabled=True, rr_target_multiple=3.0)
 
     plans = candidate_plans(snapshot, Action.LONG, limits, .00075)
 
-    eligible = [plan for plan in plans if plan['eligible']]
-    assert [plan['plan_id'] for plan in eligible] == ['rr_3']
-    assert eligible[0]['gross_rr'] == pytest.approx(3)
+    assert len(plans) == 1
+    assert plans[0]['eligible'] is True
+    assert plans[0]['gross_rr'] >= 3
 
 
 def bar(start, high, low, close):

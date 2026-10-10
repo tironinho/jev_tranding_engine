@@ -24,7 +24,7 @@ def discover_config_dir() -> Path:
 
 @dataclass(frozen=True)
 class BaselineWeightConfig:
-    version: str = "baseline_weights_v2"
+    version: str = "baseline_weights_v3"
     trend: float = 0.25
     momentum: float = 0.20
     volume: float = 0.10
@@ -33,7 +33,7 @@ class BaselineWeightConfig:
     volatility: float = 0.0
     liquidity: float = 0.0
     return_60m_scale: float = 0.01
-    min_abs_score: float = 0.45
+    min_abs_score: float = 0.55
     max_spread_bps: float = 8.0
     min_volume_ratio: float = 0.40
     extreme_atr_normalized: float = 0.05
@@ -51,11 +51,11 @@ class BaselineWeightConfig:
 @dataclass(frozen=True)
 class CombinationConfig:
     baseline_version: str = "baseline_classified_v1"
-    jev_rule_version: str = "jev_break_size_v1"
+    jev_rule_version: str = "jev_strict_signal_v4"
     openai_rule_version: str = "openai_jev_break_size_v1"
     failure_policy: str = "NO_TRADE"
     min_trend_continuation: float = 0.55
-    min_short_continuation: float = 0.40
+    min_short_continuation: float = 0.55
     candidate_min_abs_score: float = 0.15
     candidate_min_agreement: float = 0.60
     extra_entry_min_continuation: float = 0.80
@@ -90,7 +90,7 @@ class RiskLimits:
     target_mode: TargetMode = TargetMode.STRUCTURE
     target_fallback: str = "rr"
     fixed_target_pct: float = 0.01
-    rr_target_multiple: float = 2.5
+    rr_target_multiple: float = 3.0
     atr_buffer_mult: float = 0.10
     atr_stop_mult: float = 2.0
     max_stop_pct: float = 0.02
@@ -98,7 +98,7 @@ class RiskLimits:
     min_entry_interval_seconds: int = 60
     stop_cooldown_minutes: int = 15
     max_hold_minutes: int = 60
-    time_exit_enabled: bool = True
+    time_exit_enabled: bool = False
     allow_pyramiding: bool = False
     max_leverage: float = 1.0
     apply_funding: bool = True
@@ -114,16 +114,12 @@ class RiskLimits:
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
     max_open_positions: int = 10
-    min_net_rr: float = 1.5
-    min_gross_rr: float = 1.0
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
-    cap_target_by_rr: bool = False
     step_stop_to_breakeven: bool = False
     dynamic_rr_enabled: bool = False
     plan_stress_bps: float = 2.0
     probability_haircut: float = 0.05
-    min_expected_net_r: float = 0.15
     borrow_hourly_stress_rate: float = 0.0001
     max_portfolio_stop_risk: float = 0.02
 
@@ -158,7 +154,7 @@ def load_file_config(config_dir: Path | None = None) -> dict:
 def baseline_from_file(payload: dict) -> BaselineWeightConfig:
     weights = payload.get("weights") or {}
     return BaselineWeightConfig(
-        version=payload.get("version", "baseline_weights_v2"),
+        version=payload.get("version", "baseline_weights_v3"),
         trend=float(weights.get("trend", 0.25)),
         momentum=float(weights.get("momentum", 0.20)),
         volume=float(weights.get("volume", 0.10)),
@@ -167,7 +163,7 @@ def baseline_from_file(payload: dict) -> BaselineWeightConfig:
         volatility=float(weights.get("volatility", 0.0)),
         liquidity=float(weights.get("liquidity", 0.0)),
         return_60m_scale=float(payload.get("return_60m_scale", 0.01)),
-        min_abs_score=float(payload.get("min_abs_score", 0.45)),
+        min_abs_score=float(payload.get("min_abs_score", 0.55)),
         max_spread_bps=float(payload.get("max_spread_bps", 8.0)),
         min_volume_ratio=float(payload.get("min_volume_ratio", 0.40)),
         extreme_atr_normalized=float(payload.get("extreme_atr_normalized", 0.05)),
@@ -188,11 +184,11 @@ def combination_from_file(payload: dict) -> CombinationConfig:
     block_short = payload.get("block_short_regimes") or []
     return CombinationConfig(
         baseline_version=payload.get("baseline_version", "baseline_classified_v1"),
-        jev_rule_version=payload.get("jev_rule_version", "jev_break_size_v1"),
+        jev_rule_version=payload.get("jev_rule_version", "jev_strict_signal_v4"),
         openai_rule_version=payload.get("openai_rule_version", "openai_jev_break_size_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
-        min_short_continuation=float(payload.get("min_short_continuation", 0.40)),
+        min_short_continuation=float(payload.get("min_short_continuation", 0.55)),
         candidate_min_abs_score=float(payload.get("candidate_min_abs_score", 0.15)),
         candidate_min_agreement=float(payload.get("candidate_min_agreement", 0.60)),
         extra_entry_min_continuation=float(payload.get("extra_entry_min_continuation", 0.80)),
@@ -233,7 +229,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         target_mode=TargetMode(payload.get("target_mode", "structure")),
         target_fallback=str(payload.get("target_fallback", "rr")),
         fixed_target_pct=float(payload.get("fixed_target_pct", 0.01)),
-        rr_target_multiple=float(payload.get("rr_target_multiple", 2.5)),
+        rr_target_multiple=float(payload.get("rr_target_multiple", 3.0)),
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
         atr_stop_mult=float(payload.get("atr_stop_mult", 2.0)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),
@@ -241,7 +237,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         min_entry_interval_seconds=int(payload.get("min_entry_interval_seconds", 60)),
         stop_cooldown_minutes=int(payload.get("stop_cooldown_minutes", 15)),
         max_hold_minutes=int(payload.get("max_hold_minutes", 60)),
-        time_exit_enabled=bool(payload.get("time_exit_enabled", True)),
+        time_exit_enabled=bool(payload.get("time_exit_enabled", False)),
         allow_pyramiding=bool(payload.get("allow_pyramiding", False)),
         max_leverage=float(payload.get("max_leverage", 1)),
         apply_funding=bool(payload.get("apply_funding", True)),
@@ -257,16 +253,12 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_total_exposure=settings.max_total_exposure,
         max_symbol_exposure=settings.max_symbol_exposure,
         max_open_positions=settings.max_open_positions,
-        min_net_rr=settings.min_net_rr,
-        min_gross_rr=float(payload.get("min_gross_rr", 1.0)),
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),
-        cap_target_by_rr=bool(payload.get("cap_target_by_rr", False)),
         step_stop_to_breakeven=bool(payload.get("step_stop_to_breakeven", False)),
         dynamic_rr_enabled=bool(payload.get("dynamic_rr_enabled", False)),
         plan_stress_bps=float(payload.get("plan_stress_bps", 2.0)),
         probability_haircut=float(payload.get("probability_haircut", 0.05)),
-        min_expected_net_r=float(payload.get("min_expected_net_r", 0.15)),
         borrow_hourly_stress_rate=float(payload.get("borrow_hourly_stress_rate", 0.0001)),
         max_portfolio_stop_risk=float(payload.get("max_portfolio_stop_risk", 0.02)),
     )
@@ -325,7 +317,6 @@ class Settings(BaseSettings):
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
     max_open_positions: int = 10
-    min_net_rr: float = 1.5
     initial_paper_equity: float = 10_000
     maker_fee_rate: float = 0.0002
     taker_fee_rate: float = 0.0005

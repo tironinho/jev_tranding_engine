@@ -11,10 +11,8 @@ from app.domain.enums import (
     STOP_COOLDOWN,
     EXISTING_POSITION,
     EXCHANGE_RULES_UNAVAILABLE,
-    GROSS_RR_TOO_LOW,
     INSUFFICIENT_LIQUIDITY,
     INSUFFICIENT_MARGIN,
-    JEV_EXPECTANCY_TOO_LOW,
     LIVE_LOCKED,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
@@ -23,7 +21,6 @@ from app.domain.enums import (
     MAX_SYMBOL_EXPOSURE,
     MAX_TOTAL_EXPOSURE,
     MARGIN_LEVEL,
-    NET_RR_TOO_LOW,
     ORDER_BELOW_MIN_NOTIONAL,
     PERSISTENCE_UNAVAILABLE,
     RISK_REJECTED,
@@ -273,38 +270,11 @@ class RiskEngine:
             slippage_cost=extra_slip,
             spread_included_in_fill=included or preview.model != "fixed_bps",
         )
-        if economics.gross_rr is None or economics.gross_rr + 1e-9 < self.limits.min_gross_rr:
-            return self._reject(
-                decision,
-                [GROSS_RR_TOO_LOW],
-                economics=economics,
-                details={"minimum_gross_rr": self.limits.min_gross_rr,
-                         "geometry_reasons": list(geometry.reasons)},
-            )
-        if economics.net_rr is None or economics.net_rr < self.limits.min_net_rr:
-            return self._reject(
-                decision,
-                [NET_RR_TOO_LOW],
-                economics=economics,
-                details={"geometry_reasons": list(geometry.reasons)},
-            )
         if economics.net_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
             return self._reject(decision, [MAX_RISK_PER_TRADE], economics=economics)
         if context.open_stop_risk + economics.net_risk > context.equity * self.limits.max_portfolio_stop_risk + 1e-6:
             return self._reject(decision, ["MAX_PORTFOLIO_STOP_RISK"], economics=economics,
                                 details={"open_stop_risk": context.open_stop_risk})
-
-        probability = decision.metadata.get("jev_stress_probability", decision.metadata.get("jev_continuation"))
-        if isinstance(probability, (int, float)):
-            expected = probability * economics.net_reward - (1 - probability) * economics.net_risk
-            expected_r = expected / economics.net_risk if economics.net_risk > 0 else -1
-            if expected_r < self.limits.min_expected_net_r:
-                reason = "JEV_NONPOSITIVE_EXPECTANCY" if expected <= 0 else JEV_EXPECTANCY_TOO_LOW
-                return self._reject(decision, [reason], economics=economics,
-                                    details={"expected_net": expected, "expected_net_r": expected_r,
-                                             "minimum_expected_net_r": self.limits.min_expected_net_r,
-                                             "break_even_probability": economics.net_risk /
-                                             (economics.net_risk + economics.net_reward)})
 
         projected_symbol = context.symbol_exposure_notional + notional
         projected_total = context.total_exposure_notional + notional

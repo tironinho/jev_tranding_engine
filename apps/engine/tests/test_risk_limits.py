@@ -5,11 +5,9 @@ import pytest
 from app.domain.enums import (
     ENGINE_DISABLED,
     EXISTING_POSITION,
-    GROSS_RR_TOO_LOW,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
     MAX_OPEN_POSITIONS,
-    NET_RR_TOO_LOW,
     MAX_TOTAL_EXPOSURE,
     SPOT_SHORT_NOT_SUPPORTED,
     Action,
@@ -263,8 +261,8 @@ def test_position_cap_and_spot_short():
     assert SPOT_SHORT_NOT_SUPPORTED in blocked.reject_reasons
 
 
-def test_low_net_rr_rejects_without_moving_the_target():
-    eng = engine(min_net_rr=50)
+def test_rr_audit_never_rejects_an_otherwise_valid_trade():
+    eng = engine()
     snapshot, book = long_snapshot()
     from app.domain.enums import OperatingMode
     from app.domain.schemas import StrategyDecision
@@ -281,11 +279,10 @@ def test_low_net_rr_rejects_without_moving_the_target():
         reason_codes=[],
         mode=OperatingMode.PAPER,
     )
-    rejected = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(0.0002, 0.0005, "config"), book)
-    assert not rejected.accepted
-    assert NET_RR_TOO_LOW in rejected.reject_reasons
-    assert rejected.economics is not None
-    assert rejected.economics.target == pytest.approx(rejected.economics.entry + 3 * (rejected.economics.entry - rejected.economics.stop))
+    accepted = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(0.0002, 0.0005, "config"), book)
+    assert accepted.accepted
+    assert accepted.economics is not None
+    assert accepted.economics.gross_rr >= 3
 
 
 def test_a_fresh_stop_blocks_the_same_symbol():
@@ -344,7 +341,7 @@ def test_entry_throttle():
     assert ENTRY_THROTTLED in rejected.reject_reasons
 
 
-def test_a_narrow_hour_that_cannot_pay_is_rejected():
+def test_a_narrow_hour_uses_the_three_r_floor_without_rejection():
     eng = engine()
     snapshot, book = long_snapshot(range_60m=0.2)
     result = eng.risk.evaluate(
@@ -354,8 +351,9 @@ def test_a_narrow_hour_that_cannot_pay_is_rejected():
         FeeQuote(0.0002, 0.0005, "config"),
         book,
     )
-    assert not result.accepted
-    assert GROSS_RR_TOO_LOW in result.reject_reasons
+    assert result.accepted
+    assert result.economics is not None
+    assert result.economics.gross_rr == pytest.approx(3)
 
 
 def _order(snapshot, action: Action, metadata: dict | None = None):

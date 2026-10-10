@@ -7,7 +7,7 @@ from app.domain.enums import Action
 from app.risk.economics import compute_trade_economics, plan_geometry
 
 
-def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None):
+def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allow_structure_extension=False):
     entry = (snapshot.best_ask if side is Action.LONG else snapshot.best_bid) or snapshot.price
     geometry = plan_geometry(side, entry, snapshot.features, limits)
     if isinstance(geometry, str):
@@ -38,6 +38,12 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None):
         maximum = max(maximum, distance * 3.0)
     if boundaries:
         maximum = min(maximum, *boundaries)
+    structure_maximum = maximum
+    # A coherent baseline candidate may ask JEV about continuation through the
+    # nearest structure. The plan stays bounded at 3R and is explicitly marked;
+    # it still needs the normal net-RR, probability and stressed-EV approvals.
+    if allow_structure_extension:
+        maximum = max(maximum, distance * 3.0)
     derivative = (intelligence or {}).get("derivatives") or {}
     rate = derivative.get("quote_borrow_hourly_interest" if side is Action.LONG else "borrow_hourly_interest")
     rate = float(rate) if isinstance(rate, (int, float)) and math.isfinite(rate) and rate >= 0 else None
@@ -61,6 +67,7 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None):
             "stress_bps": limits.plan_stress_bps, "borrow_hourly_rate": rate,
             "borrow_stress_rate": assumed_rate,
             "interest_estimate_per_unit": interest, "interest_known": rate is not None or snapshot.market_type.value != "margin",
+            "requires_structure_break": reward > structure_maximum + max(1e-12, entry * 1e-10),
             "stop_policy": "breakeven_at_1R_lock_1R_at_2R" if limits.step_stop_to_breakeven else "fixed",
             "eligible": econ.net_rr is not None and econ.net_rr >= limits.min_net_rr,
             "reason": None if econ.net_rr is not None and econ.net_rr >= limits.min_net_rr else "NET_RR_TOO_LOW"})

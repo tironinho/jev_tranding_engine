@@ -24,6 +24,8 @@ _INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
         "It is not an order. Using trade_plan, that side reaches target before stop within horizon_minutes. "
+        "If trade_plan.requires_structure_break is true, success also requires price to cross the nearest "
+        "recorded support or resistance; reduce continuation when the supplied state does not support expansion. "
         "Apply trade_plan.stop_policy: a tightened stop also terminates the trade. "
         "A timeout without reaching target is not a success."
     )

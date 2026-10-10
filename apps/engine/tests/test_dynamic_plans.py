@@ -47,13 +47,14 @@ async def test_independent_target_probabilities_choose_ev_not_largest_rr():
 
 
 @pytest.mark.asyncio
-async def test_no_space_to_target_does_not_call_model_or_force_a_trade():
+async def test_no_space_to_nearest_structure_may_be_assessed_but_never_forces_a_trade():
     snapshot, _ = long_snapshot(resistance_15m=100.2)
     provider = PlansProvider({})
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(provider))
     assert decision.action is Action.NO_TRADE
-    assert 'NO_ECONOMIC_PLAN' in decision.reason_codes
-    assert not provider.requests
+    assert 'NO_POSITIVE_EXPECTANCY_PLAN' in decision.reason_codes
+    assert provider.requests
+    assert all(request.trade_plan["requires_structure_break"] for request in provider.requests)
 
 
 @pytest.mark.asyncio
@@ -130,6 +131,24 @@ def test_confirmed_break_can_offer_three_r_beyond_trailing_hour_range():
 
     assert plans[-1]["gross_rr"] == pytest.approx(3)
     assert plans[-1]["eligible"] is True
+
+
+def test_jev_candidate_can_assess_bounded_extension_through_structure():
+    snapshot, _ = long_snapshot(range_60m=.4, resistance_15m=100.2, breakout=False)
+
+    bounded = candidate_plans(snapshot, Action.LONG, RiskLimits(), .0005)
+    extended = candidate_plans(
+        snapshot,
+        Action.LONG,
+        RiskLimits(),
+        .0005,
+        allow_structure_extension=True,
+    )
+
+    assert max(plan["target"] for plan in bounded) <= 100.2
+    assert extended[-1]["gross_rr"] == pytest.approx(3)
+    assert extended[-1]["requires_structure_break"] is True
+    assert extended[-1]["eligible"] is True
 
 
 def test_recent_break_level_does_not_collapse_future_targets():

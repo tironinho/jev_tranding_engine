@@ -247,7 +247,14 @@ def _context_candidate_action(result: BaselineResult, config: CombinationConfig)
 
 
 async def _dynamic_decision(context, snapshot, result, metadata, started):
-    plans = candidate_plans(snapshot, result.action, context.risk, context.round_trip_fee / 2, context.intelligence)
+    plans = candidate_plans(
+        snapshot,
+        result.action,
+        context.risk,
+        context.round_trip_fee / 2,
+        context.intelligence,
+        allow_structure_extension=True,
+    )
     metadata.update(candidate_plans=plans, combination_rule_version="jev_dynamic_rr_v1",
                     probability_status="UNCALIBRATED")
     metadata.pop("jev_trade_plan", None)

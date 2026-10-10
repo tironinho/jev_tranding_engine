@@ -179,28 +179,41 @@ class PostgresMirror:
                     "labels": labels[-1].payload if labels else None, "source": "postgres"}
 
     async def recent_jev_calls(self, limit: int = 80) -> list[dict]:
-        """Load durable Jev calls together with the decision shown on the desk."""
+        """Load recent Jev-strategy decisions, including ones that did not call Jev."""
         if not self.factory or not self.healthy:
             return []
         try:
             async with self.factory() as session:
-                result = await session.execute(
-                    select(JevCallRow, StrategyDecisionRow)
-                    .join(StrategyDecisionRow, StrategyDecisionRow.id == JevCallRow.decision_id)
+                decisions = list((await session.execute(
+                    select(StrategyDecisionRow)
+                    .where(StrategyDecisionRow.strategy == "baseline_jev")
                     .order_by(StrategyDecisionRow.timestamp.desc())
                     .limit(max(1, min(limit, 240)))
-                )
-                return [
-                    {
+                )).scalars().all())
+                if not decisions:
+                    return []
+                identities = [row.id for row in decisions]
+                calls = list((await session.execute(
+                    select(JevCallRow).where(JevCallRow.decision_id.in_(identities))
+                )).scalars().all())
+                by_decision: dict[uuid.UUID, list[JevCallRow]] = defaultdict(list)
+                for call in calls:
+                    if call.decision_id is not None:
+                        by_decision[call.decision_id].append(call)
+                rows = []
+                for decision in decisions:
+                    decision_calls = by_decision.get(decision.id) or [None]
+                    for call in decision_calls:
+                        payload = {} if call is None else (call.payload or {})
+                        rows.append({
                         "call": {
-                            "decision_id": str(call.decision_id),
-                            "snapshot_id": str(call.snapshot_id),
-                            **(call.payload or {}),
+                            "decision_id": str(decision.id),
+                            "snapshot_id": str(decision.snapshot_id),
+                            **payload,
                         },
                         "decision": decision.payload or {},
-                    }
-                    for call, decision in result.all()
-                ]
+                        })
+                return rows
         except Exception as exc:
             self.last_error = str(exc)
             log.warning("jev history load failed: %s", exc)

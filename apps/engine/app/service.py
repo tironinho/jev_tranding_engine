@@ -1646,6 +1646,16 @@ class TradingEngine:
             if decision_id in seen or (meta.get("selected_plan_id") and call.get("plan_id") != meta["selected_plan_id"]):
                 continue
             seen.add(decision_id)
+            state = response.get("sent_request", {}).get("state") if response.get("sent_request") else None
+            if state is None:
+                state = {
+                    "symbol": decision.get("symbol"),
+                    "baseline_action": meta.get("candidate_action") or meta.get("baseline_action"),
+                    "baseline_confidence": decision.get("confidence"),
+                    "baseline_scores": meta.get("scores") or {},
+                    "baseline_class": meta.get("market_class"),
+                    "baseline_labels": meta.get("class_labels") or [],
+                }
             rows.append(
                 {
                     "decision_id": str(call.get("decision_id")),
@@ -1659,7 +1669,7 @@ class TradingEngine:
                     "reason_codes": decision.get("reason_codes") or [],
                     "candidate_plans": meta.get("candidate_plans", []),
                     "selected_plan_id": meta.get("selected_plan_id"),
-                    "state": response.get("sent_request", {}).get("state") if response.get("sent_request") else None,
+                    "state": state,
                     "request_recorded": bool(response.get("sent_request")),
                     "response": {
                         "trend_continuation_probability": response.get("trend_continuation_probability"),
@@ -1677,17 +1687,29 @@ class TradingEngine:
         return rows
 
     def jev_reviews(self, limit: int = 40) -> list[dict]:
-        records = [
-            (call, self.store.by_decision.get(str(call.get("decision_id"))) or {})
-            for call in reversed(self.store.jev_calls)
-        ]
+        records = self._memory_jev_activity(limit * 3)
         return self._format_jev_reviews(records, limit)
 
+    def _memory_jev_activity(self, limit: int) -> list[tuple[dict, dict]]:
+        calls: dict[str, list[dict]] = {}
+        for call in self.store.jev_calls:
+            calls.setdefault(str(call.get("decision_id")), []).append(call)
+        records = []
+        for decision in reversed(self.store.decisions):
+            if decision.get("strategy") != "baseline_jev":
+                continue
+            identity = str(decision.get("decision_id"))
+            decision_calls = calls.get(identity) or [{
+                "decision_id": identity,
+                "snapshot_id": decision.get("snapshot_id"),
+            }]
+            records.extend((call, decision) for call in decision_calls)
+            if len(records) >= limit:
+                break
+        return records
+
     async def jev_reviews_with_history(self, limit: int = 40) -> list[dict]:
-        records = [
-            (call, self.store.by_decision.get(str(call.get("decision_id"))) or {})
-            for call in reversed(self.store.jev_calls)
-        ]
+        records = self._memory_jev_activity(limit * 3)
         if self.postgres and self.postgres.healthy:
             now = time.monotonic()
             if self._jev_history_cached_at == 0 or now - self._jev_history_cached_at >= 10:

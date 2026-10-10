@@ -43,6 +43,8 @@ const EFFECTS: Record<string, string> = {
   veto: "VETOU",
   assessed: "SÓ LEU",
   fallback: "BASELINE",
+  idle: "NÃO CHAMADO",
+  not_called: "SEM PLANO",
 };
 
 const SCORES: Array<[string, string]> = [

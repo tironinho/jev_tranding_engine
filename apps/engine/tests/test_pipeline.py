@@ -313,11 +313,36 @@ async def test_jev_review_shows_the_state_that_was_sent_and_the_answer():
     assert rows
     review = rows[0]
     assert review["symbol"] == "BTCUSDT"
-    assert review["state"] is None  # mock is not an HTTP request
+    assert review["state"]["baseline_action"] == "LONG"
     assert review["request_recorded"] is False
     assert isinstance(review["response"]["trend_continuation_probability"], float)
     assert isinstance(review["response"]["reversal_probability"], float)
     assert isinstance(review["response"]["false_breakout_probability"], float)
+
+
+@pytest.mark.asyncio
+async def test_jev_review_shows_decision_when_model_was_not_called():
+    eng = engine()
+    snapshot, _ = long_snapshot(
+        ema_alignment=0,
+        ema_20_slope=0,
+        price_vs_ema20=0,
+        rsi=50,
+        roc=0,
+        volume_ratio=1,
+        orderflow_delta_ratio=0,
+        imbalance_10=0,
+        range_position=.5,
+        breakout=False,
+    )
+
+    await eng.evaluate_snapshot(snapshot)
+    rows = eng.jev_reviews(5)
+
+    assert rows[0]["effect"] == "idle"
+    assert rows[0]["action"] == "NO_TRADE"
+    assert rows[0]["state"]["baseline_action"] == "NO_TRADE"
+    assert rows[0]["response"]["trend_continuation_probability"] is None
 
 
 @pytest.mark.asyncio

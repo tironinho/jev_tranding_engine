@@ -227,7 +227,6 @@ _CONTEXT_CANDIDATE_BLOCKERS = {
     INSUFFICIENT_HISTORY,
     BAD_SPREAD,
     HIGH_VOLATILITY,
-    CLASS_DIVERGENT,
     CLASS_SINGLE_DRIVER,
     CLASS_FLOW_AGAINST,
 }
@@ -238,6 +237,11 @@ def _context_candidate_action(result: BaselineResult, config: CombinationConfig)
     if abs(result.composite) < config.candidate_min_abs_score:
         return None
     if _CONTEXT_CANDIDATE_BLOCKERS.intersection(result.reason_codes):
+        return None
+    if CLASS_DIVERGENT in result.reason_codes and (
+        result.market_class.drivers < 3
+        or result.market_class.agreement < config.candidate_min_agreement
+    ):
         return None
     if result.composite > 0:
         return Action.LONG
@@ -280,17 +284,39 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             context.combination, breakout=_class_has_break(result), min_continuation=required)
         accepted = action is not Action.NO_TRADE and plan["expected_net_r"] > 0
         plan.update(eligible=accepted, reason="JEV_CONFIRM" if accepted else ",".join(reasons), required_probability=required)
-        return (plan, assessment, confidence) if accepted else None
+        return plan, assessment, confidence, accepted, reasons
 
     evaluated = await asyncio.gather(*(assess(plan) for plan in eligible))
-    choices = [choice for choice in evaluated if choice is not None]
+    assessed = [item for item in evaluated if item is not None]
+    choices = [item for item in assessed if item[3]]
     if not choices:
-        reason = "NO_ECONOMIC_PLAN" if not eligible else "NO_POSITIVE_EXPECTANCY_PLAN"
-        metadata["jev_effect"] = "veto" if eligible else "not_called"
+        reasons = ["NO_ECONOMIC_PLAN"] if not eligible else [JEV_UNAVAILABLE]
+        model_version = result.version
+        prompt_version = None
+        if assessed:
+            best_plan, best_assessment, _confidence, _accepted, vetoes = max(
+                assessed,
+                key=lambda item: item[0]["expected_net_r"],
+            )
+            reasons = list(vetoes)
+            if best_plan["expected_net_r"] <= 0:
+                reasons.append("NO_POSITIVE_EXPECTANCY_PLAN")
+            metadata.update(
+                jev_trade_plan=dict(best_plan),
+                best_assessed_plan_id=best_plan["plan_id"],
+                jev_stress_probability=best_plan["stress_probability"],
+                jev_required_continuation=best_plan["required_probability"],
+                jev_veto_reasons=list(vetoes),
+            )
+            _remember_jev(metadata, best_assessment, "veto")
+            model_version = best_assessment.provider_version
+            prompt_version = best_assessment.prompt_version
+        else:
+            metadata["jev_effect"] = "not_called" if not eligible else "unavailable"
         return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=Action.NO_TRADE,
-            confidence=result.confidence, reasons=[*_candidate_reasons(metadata), reason, *result.reason_codes], metadata=metadata,
-            model_version=result.version, prompt_version=None, started=started)
-    plan, assessment, confidence = max(choices, key=lambda item: item[0]["expected_net_r"])
+            confidence=result.confidence, reasons=[*_candidate_reasons(metadata), *reasons, *result.reason_codes], metadata=metadata,
+            model_version=model_version, prompt_version=prompt_version, started=started)
+    plan, assessment, confidence, _accepted, _reasons = max(choices, key=lambda item: item[0]["expected_net_r"])
     metadata.update(jev_trade_plan=dict(plan), selected_plan_id=plan["plan_id"],
                     jev_stress_probability=plan["stress_probability"], jev_required_continuation=plan["required_probability"])
     _remember_jev(metadata, assessment, "confirm")
@@ -575,6 +601,7 @@ def _remember_jev(metadata: dict, assessment, effect: str) -> None:
     metadata["jev_is_mock"] = assessment.is_mock
     metadata["jev_continuation"] = assessment.trend_continuation_probability
     metadata["jev_reversal"] = assessment.reversal_probability
+    metadata["jev_false_breakout"] = assessment.false_breakout_probability
 
 
 def _no_ai(context, snapshot, metadata, reason, started, status):

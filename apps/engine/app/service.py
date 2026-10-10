@@ -704,9 +704,17 @@ class TradingEngine:
         for identity, pending in list(self.pending_entries.items()):
             decision = StrategyDecision.model_validate(pending["decision"])
             async with self._locks[decision.strategy]:
-                existing = any(str(p.decision_id) == identity for a in self.accounts.accounts.values() for p in a.positions.values())
-                closed = any(str(t.decision_id) == identity for a in self.accounts.accounts.values() for t in a.trades)
-                if existing or closed:
+                existing = [p for a in self.accounts.accounts.values() for p in a.positions.values()
+                            if str(p.decision_id) == identity]
+                closed = next((t for a in self.accounts.accounts.values() for t in a.trades
+                               if str(t.decision_id) == identity), None)
+                if existing or closed is not None:
+                    # A fill may have reached memory while its checkpoint failed. Re-save
+                    # the complete known lifecycle before clearing the durable intent.
+                    orders = [row for row in self.store.orders.values() if row.get("decision_id") == identity]
+                    fills = [row for row in self.store.fills if row.get("decision_id") == identity]
+                    trade = None if closed is None else closed.model_dump(mode="json")
+                    await self._checkpoint(decision.strategy, positions=existing, orders=orders, fills=fills, trade=trade)
                     await self._resolve_entry(identity)
                     continue
                 try:
@@ -738,10 +746,13 @@ class TradingEngine:
                 await self._resolve_entry(str(decision.decision_id))
             return
         step = self.feed.rules.get(snapshot.symbol, {}).get("step_size")
-        held = lot_quantity(order.filled_quantity, step)
+        executed = lot_quantity(order.filled_quantity, step)
+        held = executed
+        if decision.action is Action.LONG and self.settings.market_type in {"spot", "margin"}:
+            held = lot_quantity(executed - float(order.commissions.get(base_asset(snapshot.symbol), 0)), step)
         if held <= 0:
-            held = order.filled_quantity
-        fee = self._order_fee(order, order.average_fill_price * held * econ.costs.fee_rate_entry)
+            held = executed
+        fee = self._order_fee(order, order.average_fill_price * executed * econ.costs.fee_rate_entry)
         position = self._open_from_fill(
             decision,
             snapshot,
@@ -756,7 +767,7 @@ class TradingEngine:
             order_id=order.order_id,
             decision_id=decision.decision_id,
             price=order.average_fill_price,
-            quantity=held,
+            quantity=executed,
             fee=fee,
             slippage_bps=0,
             liquidity="taker",
@@ -768,6 +779,9 @@ class TradingEngine:
         position.stop_client_order_id = decision.decision_id.hex[:31] + "S"
         # Persist the filled position before attempting exchange protection.
         await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=[fill_payload])
+        # The entry itself is no longer ambiguous. A stop failure is represented by
+        # UNPROTECTED and blocks new entries through its own safety gate.
+        await self._resolve_entry(str(decision.decision_id))
         tick = self.feed.rules.get(snapshot.symbol, {}).get("tick_size")
         intent = self._intent(decision, snapshot, risk, "BUY" if decision.action is Action.LONG else "SELL", "live")
         intent.quantity = held
@@ -784,12 +798,17 @@ class TradingEngine:
             stop = None
         orders = [order_payload]
         if stop is not None:
-            position.protection_status = "PROTECTED"
-            position.stop_client_order_id = stop.client_order_id
             orders.append(self.store.add_order(stop))
+            if stop.status is OrderStatus.NEW:
+                position.protection_status = "PROTECTED"
+                position.stop_client_order_id = stop.client_order_id
+            else:
+                self._log(
+                    "live_stop",
+                    f"{snapshot.symbol} decision={decision.decision_id} status={stop.status.value}",
+                )
         await self._checkpoint(decision.strategy, positions=[position], orders=orders, fills=[fill_payload])
-        await self._resolve_entry(str(decision.decision_id))
-        if stop is None:
+        if position.protection_status != "PROTECTED":
             position.protection_status = "UNPROTECTED"
             await self._checkpoint(decision.strategy, positions=[position], orders=[], fills=[])
             await self._exit_live(decision.strategy, snapshot.symbol, position, "PROTECTION_FAILED", utcnow(), self.states[snapshot.symbol])

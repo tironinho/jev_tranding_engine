@@ -5,7 +5,7 @@ import pytest
 
 from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import Action, OperatingMode, MarketType
-from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE
+from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, JEV_UNAVAILABLE
 from app.providers.jev.mock import MockJevProvider
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy, StrategyContext
@@ -49,12 +49,15 @@ async def test_independent_target_probabilities_choose_ev_not_largest_rr():
 @pytest.mark.asyncio
 async def test_no_space_to_nearest_structure_may_be_assessed_but_never_forces_a_trade():
     snapshot, _ = long_snapshot(resistance_15m=100.2)
-    provider = PlansProvider({})
+    provider = PlansProvider({"rr_2": .2, "rr_2.5": .2, "rr_3": .2})
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(provider))
     assert decision.action is Action.NO_TRADE
     assert 'NO_POSITIVE_EXPECTANCY_PLAN' in decision.reason_codes
     assert provider.requests
     assert all(request.trade_plan["requires_structure_break"] for request in provider.requests)
+    assert decision.metadata["jev_effect"] == "veto"
+    assert decision.metadata["jev_continuation"] == pytest.approx(.2)
+    assert decision.metadata["best_assessed_plan_id"]
 
 
 @pytest.mark.asyncio
@@ -64,6 +67,7 @@ async def test_all_model_failures_never_fall_back_to_unassessed_trade():
     ctx.failure_policy = 'FALLBACK_TO_BASELINE'
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
     assert decision.action is Action.NO_TRADE
+    assert JEV_UNAVAILABLE in decision.reason_codes
     assert len(ctx.artifacts) == 3
     assert all('error' in a for a in ctx.artifacts)
 
@@ -101,6 +105,35 @@ async def test_divergent_subthreshold_signal_stays_blocked_before_jev():
     assert decision.action is Action.NO_TRADE
     assert BASELINE_NO_TRADE in decision.reason_codes
     assert not provider.requests
+
+
+@pytest.mark.asyncio
+async def test_moderate_divergence_without_opposing_flow_reaches_jev():
+    snapshot, _ = long_snapshot(
+        breakout=False,
+        breakdown=False,
+        ema_alignment=-.6,
+        ema_20_slope=-.0006,
+        price_vs_ema20=-.003,
+        return_60m=-.006,
+        context_15m_slope=-.003,
+        price_vs_ema20_15m=-.006,
+        setup_5m_return=-.003,
+    )
+    class ConfirmingProvider(PlansProvider):
+        async def evaluate_market_state(self, request):
+            result = await super().evaluate_market_state(request)
+            return result.model_copy(update={"reversal_probability": .1, "false_breakout_probability": .1})
+
+    provider = ConfirmingProvider({"rr_2": .9, "rr_2.5": .8, "rr_3": .7})
+    ctx = context(provider)
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.LONG
+    assert BASELINE_CONTEXT_CANDIDATE in decision.reason_codes
+    assert decision.metadata["class_agreement"] >= ctx.combination.candidate_min_agreement
+    assert provider.requests
 
 
 @pytest.mark.asyncio

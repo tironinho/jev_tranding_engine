@@ -7,7 +7,8 @@ import pytest
 from app.execution.reconciliation import reconcile
 from app.providers.binance_account import _margin
 from app.execution.binance_live import BinanceExecutionProvider
-from app.domain.enums import Action
+from app.domain.enums import Action, OrderStatus, OrderType
+from app.domain.schemas import OrderRecord
 from tests.conftest import engine, settings, clock, long_snapshot, attach_book
 from tests.test_runtime import _open
 from tests.test_providers import _intent
@@ -138,6 +139,7 @@ async def test_failed_protection_attempts_close_and_retains_pending_balance(monk
     await eng.evaluate_snapshot(snapshot)
     p = eng.accounts.accounts["baseline"].sole("BTCUSDT")
     assert p.protection_status == "UNPROTECTED"
+    assert not eng.pending_entries
     eng.live.submit_close.assert_awaited_once()
     await eng.evaluate_snapshot(snapshot)
     assert any("UNPROTECTED_POSITION" in r["reject_reasons"] for r in eng.store.risks.values())
@@ -160,6 +162,132 @@ async def test_ambiguous_entry_is_recovered_without_second_buy(monkeypatch):
     assert not eng.pending_entries
     assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == 1
     eng.live.submit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_live_long_tracks_net_base_after_entry_commission(monkeypatch):
+    from tests.test_runtime import _arm_live, _Exchange
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(
+        trading_live_enabled=True,
+        allow_real_orders=True,
+        binance_api_key="k",
+        binance_api_secret="s",
+        market_type="margin",
+    )
+    _arm_live(eng)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    eng.live.client = _Exchange()
+    eng.balance.snapshot = AsyncMock(side_effect=[
+        {"status": "ok", "equity_usdt": 10_000, "wallet": 10_000, "margin_level": 999,
+         "assets": [{"asset": "USDT", "total": 10_000}]},
+        {"status": "ok", "assets": [{"asset": "BTC", "free": 0.999, "total": 0.999}]},
+    ])
+
+    def filled(intent):
+        return OrderRecord(
+            client_order_id=intent.decision_id.hex,
+            decision_id=intent.decision_id,
+            risk_id=intent.risk_id,
+            strategy=intent.strategy,
+            symbol=intent.symbol,
+            side="BUY",
+            order_type=OrderType.MARKET,
+            status=OrderStatus.FILLED,
+            mode="live",
+            quantity=1,
+            filled_quantity=1,
+            average_fill_price=100,
+            created_at=clock(),
+            commissions={"BTC": 0.001},
+        )
+
+    def resting_stop(intent, _price, **_kwargs):
+        return OrderRecord(
+            client_order_id=intent.decision_id.hex[:31] + "S",
+            decision_id=intent.decision_id,
+            risk_id=intent.risk_id,
+            strategy=intent.strategy,
+            symbol=intent.symbol,
+            side="SELL",
+            order_type=OrderType.STOP_LOSS_LIMIT,
+            status=OrderStatus.NEW,
+            mode="live",
+            quantity=intent.quantity,
+            created_at=clock(),
+        )
+
+    eng.live.submit = AsyncMock(side_effect=filled)
+    eng.live.submit_stop = AsyncMock(side_effect=resting_stop)
+    await eng.evaluate_snapshot(snapshot)
+    position = eng.accounts.accounts["baseline"].sole("BTCUSDT")
+    assert position.quantity == pytest.approx(0.999)
+    assert eng.store.fills[0]["quantity"] == pytest.approx(1)
+
+
+@pytest.mark.asyncio
+async def test_non_resting_stop_is_not_marked_protected(monkeypatch):
+    from tests.test_runtime import _arm_live, _Exchange
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
+    _arm_live(eng)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    eng.live.client = _Exchange()
+
+    def rejected_stop(intent, _price, **_kwargs):
+        return OrderRecord(
+            client_order_id=intent.decision_id.hex[:31] + "S",
+            decision_id=intent.decision_id,
+            risk_id=intent.risk_id,
+            strategy=intent.strategy,
+            symbol=intent.symbol,
+            side="SELL",
+            order_type=OrderType.STOP_MARKET,
+            status=OrderStatus.REJECTED,
+            mode="live",
+            quantity=intent.quantity,
+            created_at=clock(),
+        )
+
+    eng.live.submit_stop = AsyncMock(side_effect=rejected_stop)
+    eng.live.fetch_verified = AsyncMock(return_value={"status": "REJECTED", "executedQty": "0"})
+    eng.live.submit_close = AsyncMock(side_effect=TimeoutError())
+    await eng.evaluate_snapshot(snapshot)
+    position = eng.accounts.accounts["baseline"].sole("BTCUSDT")
+    assert position.protection_status == "UNPROTECTED"
+    eng.live.submit_close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pending_recovery_repairs_checkpoint_before_resolution(monkeypatch):
+    from tests.test_runtime import _arm_live, _Exchange
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
+    _arm_live(eng)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    eng.live.client = _Exchange()
+    await eng.evaluate_snapshot(snapshot)
+    entry = next(row for row in eng.store.orders.values() if row["order_type"] == "MARKET")
+    decision_id = entry["decision_id"]
+    decision = next(row for row in eng.store.decisions if row["decision_id"] == decision_id)
+    eng.pending_entries[decision_id] = {
+        "decision": decision,
+        "snapshot": eng.store.snapshots[decision["snapshot_id"]],
+        "risk": eng.store.risks[decision_id],
+        "created_at": clock().isoformat(),
+    }
+    eng._checkpoint = AsyncMock()
+    eng._resolve_entry = AsyncMock()
+    await eng._recover_pending_entries()
+    eng._checkpoint.assert_awaited_once()
+    args = eng._checkpoint.await_args.kwargs
+    assert args["positions"]
+    assert args["orders"]
+    assert args["fills"]
+    eng._resolve_entry.assert_awaited_once_with(decision_id)
 
 
 @pytest.mark.asyncio

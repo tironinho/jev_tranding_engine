@@ -239,6 +239,26 @@ async def decisions(request: Request, limit: int = 100, symbol: str | None = Non
     return {"rows": engine.store.opportunity_rows(limit=min(limit, 500), symbol=symbol.upper() if symbol else None)}
 
 
+@router.get("/api/decisions/audit")
+async def decision_audit(request: Request, limit: int = 100, strategy: str = "baseline") -> dict:
+    _actor(request)
+    engine = _engine(request)
+    if strategy not in LABELS:
+        raise HTTPException(400, "unknown strategy")
+    if not engine.postgres or not engine.postgres.healthy:
+        raise HTTPException(503, "HISTORY_UNAVAILABLE")
+    try:
+        rows = await engine.postgres.recent_decision_audit(limit, strategy)
+    except Exception as exc:
+        raise HTTPException(503, "HISTORY_UNAVAILABLE") from exc
+    return {
+        "strategy": strategy,
+        "rows": rows,
+        "labelled": sum(row.get("labels") is not None for row in rows),
+        "unlabelled": sum(row.get("labels") is None for row in rows),
+    }
+
+
 @router.get("/api/decisions/{decision_id}")
 async def decision_detail(decision_id: str, request: Request) -> dict:
     _actor(request)

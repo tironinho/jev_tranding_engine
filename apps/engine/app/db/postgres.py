@@ -180,6 +180,57 @@ class PostgresMirror:
             log.warning("jev history load failed: %s", exc)
             return []
 
+    async def recent_decision_audit(self, limit: int = 100, strategy: str = "baseline") -> list[dict]:
+        """Return durable decisions with their recorded market snapshot and future label."""
+        if not self.factory or not self.healthy:
+            return []
+        bounded = max(1, min(limit, 500))
+        try:
+            async with self.factory() as session:
+                decisions = list(
+                    (
+                        await session.execute(
+                            select(StrategyDecisionRow)
+                            .where(StrategyDecisionRow.strategy == strategy)
+                            .order_by(StrategyDecisionRow.timestamp.desc())
+                            .limit(bounded)
+                        )
+                    ).scalars().all()
+                )
+                if not decisions:
+                    return []
+                snapshot_ids = [row.snapshot_id for row in decisions]
+                snapshots = list(
+                    (
+                        await session.execute(
+                            select(MarketSnapshotRow).where(MarketSnapshotRow.id.in_(snapshot_ids))
+                        )
+                    ).scalars().all()
+                )
+                labels = list(
+                    (
+                        await session.execute(
+                            select(FutureLabelRow)
+                            .where(FutureLabelRow.snapshot_id.in_(snapshot_ids))
+                            .order_by(FutureLabelRow.snapshot_id, FutureLabelRow.id)
+                        )
+                    ).scalars().all()
+                )
+                snapshot_by_id = {row.id: row.payload for row in snapshots}
+                label_by_snapshot = {row.snapshot_id: row.payload for row in labels}
+                return [
+                    {
+                        "decision": row.payload,
+                        "snapshot": snapshot_by_id.get(row.snapshot_id),
+                        "labels": label_by_snapshot.get(row.snapshot_id),
+                    }
+                    for row in decisions
+                ]
+        except Exception as exc:
+            self.last_error = str(exc)
+            log.warning("decision audit history load failed: %s", exc)
+            raise
+
     async def save_snapshot(self, payload: dict) -> None:
         snapshot_id = uuid.UUID(payload["snapshot_id"])
         await self._write(

@@ -2,11 +2,11 @@
 # Limites aplicados pelo motor antes da execução; armar produção é uma configuração separada.
 
 target_mode: structure
-# Baseline: teto 2R. Jev dinâmico: até 3R, limitado pela faixa e estrutura, com uma avaliação por alvo.
-# Se depois da taxa o trade não pagar pelo menos 1,5R líquido, a entrada é recusada.
+# Baseline e Jev: o alvo aceito precisa estar a pelo menos 3R bruto.
+# O piso líquido de 1,5R continua cobrindo taxas, slippage e juros.
 target_fallback: rr
 fixed_target_pct: 0.01
-rr_target_multiple: 2.0
+rr_target_multiple: 3.0
 cap_target_by_rr: true
 step_stop_to_breakeven: true
 dynamic_rr_enabled: true
@@ -15,6 +15,7 @@ probability_haircut: 0.05
 # Não aceita um plano apenas por EV ligeiramente acima de zero. Exige folga
 # contra erro de calibração da probabilidade e variação de taxa/slippage.
 min_expected_net_r: 0.15
+min_gross_rr: 3.0
 # Cenário de estresse (1 bp/h), não taxa efetiva da conta. Usa a maior entre esta e a observada.
 borrow_hourly_stress_rate: 0.0001
 # Orçamento agregado de perda planejada; não pressupõe independência entre moedas.
@@ -32,9 +33,10 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# Depois deste horizonte, só mantém a posição se o stop já proteger o ponto de
-# equilíbrio líquido. Sem essa proteção, encerra por tempo mesmo se estiver pouco positiva.
+# O horizonte continua sendo enviado ao JEV para avaliar a continuação. A posição
+# não fecha pelo relógio: sai no alvo de 3R ou no stop, que sobe em 1R e 2R.
 max_hold_minutes: 60
+time_exit_enabled: false
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false
 # Teto de alavancagem para dimensionamento; não altera a autorização de ordens reais.

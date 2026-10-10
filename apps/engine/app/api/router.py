@@ -365,6 +365,7 @@ async def risk_limits(request: Request) -> dict:
     limits = _engine(request).risk.limits
     return {
         "min_net_rr": limits.min_net_rr,
+        "min_gross_rr": limits.min_gross_rr,
         "risk_per_trade": limits.risk_per_trade,
         "max_risk_per_trade": limits.max_risk_per_trade,
         "max_daily_loss": limits.max_daily_loss,
@@ -375,6 +376,7 @@ async def risk_limits(request: Request) -> dict:
         "target_mode": limits.target_mode.value,
         "max_leverage": limits.max_leverage,
         "dynamic_rr_enabled": limits.dynamic_rr_enabled,
+        "time_exit_enabled": limits.time_exit_enabled,
         "plan_stress_bps": limits.plan_stress_bps,
         "probability_haircut": limits.probability_haircut,
         "borrow_hourly_stress_rate": limits.borrow_hourly_stress_rate,

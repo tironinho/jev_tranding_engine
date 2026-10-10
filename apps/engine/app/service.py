@@ -896,7 +896,8 @@ class TradingEngine:
             stop=position.stop,
             target=position.target,
             hold_minutes=hold_minutes,
-            max_hold_minutes=self.risk.limits.max_hold_minutes,
+            max_hold_minutes=(self.risk.limits.max_hold_minutes
+                              if self.risk.limits.time_exit_enabled else 0),
             # Past the assessed horizon, extend only a position whose stop
             # already protects total break-even. Otherwise the clock closes it.
             entry=time_exit_floor if protected_after_horizon else None,

@@ -5,6 +5,7 @@ import pytest
 from app.domain.enums import (
     ENGINE_DISABLED,
     EXISTING_POSITION,
+    GROSS_RR_TOO_LOW,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
     MAX_OPEN_POSITIONS,
@@ -284,7 +285,7 @@ def test_low_net_rr_rejects_without_moving_the_target():
     assert not rejected.accepted
     assert NET_RR_TOO_LOW in rejected.reject_reasons
     assert rejected.economics is not None
-    assert rejected.economics.target == pytest.approx(rejected.economics.entry + 2 * (rejected.economics.entry - rejected.economics.stop))
+    assert rejected.economics.target == pytest.approx(rejected.economics.entry + 3 * (rejected.economics.entry - rejected.economics.stop))
 
 
 def test_a_fresh_stop_blocks_the_same_symbol():
@@ -354,7 +355,7 @@ def test_a_narrow_hour_that_cannot_pay_is_rejected():
         book,
     )
     assert not result.accepted
-    assert NET_RR_TOO_LOW in result.reject_reasons
+    assert GROSS_RR_TOO_LOW in result.reject_reasons
 
 
 def _order(snapshot, action: Action, metadata: dict | None = None):

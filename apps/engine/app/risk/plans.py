@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from app.domain.enums import Action
+from app.domain.enums import Action, GROSS_RR_TOO_LOW
 from app.risk.economics import compute_trade_economics, plan_geometry
 
 
@@ -60,6 +60,8 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
             quantity=1, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
             exit_slippage_per_unit=entry * limits.plan_stress_bps / 10000,
             funding_cashflow_total=-interest, fee_source="plan_estimate")
+        gross_ok = econ.gross_rr is not None and econ.gross_rr + 1e-9 >= limits.min_gross_rr
+        net_ok = econ.net_rr is not None and econ.net_rr >= limits.min_net_rr
         rows.append({"plan_id": f"rr_{rr:g}", "entry": entry, "stop": geometry.stop, "target": target,
             "gross_rr": econ.gross_rr, "net_rr": econ.net_rr, "net_risk_per_unit": econ.net_risk,
             "net_reward_per_unit": econ.net_reward, "break_even_probability": 1 / (1 + econ.net_rr) if econ.net_rr and econ.net_rr > 0 else 1,
@@ -69,8 +71,8 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
             "interest_estimate_per_unit": interest, "interest_known": rate is not None or snapshot.market_type.value != "margin",
             "requires_structure_break": reward > structure_maximum + max(1e-12, entry * 1e-10),
             "stop_policy": "breakeven_at_1R_lock_1R_at_2R" if limits.step_stop_to_breakeven else "fixed",
-            "eligible": econ.net_rr is not None and econ.net_rr >= limits.min_net_rr,
-            "reason": None if econ.net_rr is not None and econ.net_rr >= limits.min_net_rr else "NET_RR_TOO_LOW"})
+            "eligible": gross_ok and net_ok,
+            "reason": None if gross_ok and net_ok else (GROSS_RR_TOO_LOW if not gross_ok else "NET_RR_TOO_LOW")})
     return rows
 
 

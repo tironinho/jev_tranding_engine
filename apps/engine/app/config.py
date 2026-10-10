@@ -98,6 +98,7 @@ class RiskLimits:
     min_entry_interval_seconds: int = 60
     stop_cooldown_minutes: int = 15
     max_hold_minutes: int = 60
+    time_exit_enabled: bool = True
     allow_pyramiding: bool = False
     max_leverage: float = 1.0
     apply_funding: bool = True
@@ -114,6 +115,7 @@ class RiskLimits:
     max_symbol_exposure: float = 0.40
     max_open_positions: int = 10
     min_net_rr: float = 1.5
+    min_gross_rr: float = 1.0
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
     cap_target_by_rr: bool = False
@@ -239,6 +241,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         min_entry_interval_seconds=int(payload.get("min_entry_interval_seconds", 60)),
         stop_cooldown_minutes=int(payload.get("stop_cooldown_minutes", 15)),
         max_hold_minutes=int(payload.get("max_hold_minutes", 60)),
+        time_exit_enabled=bool(payload.get("time_exit_enabled", True)),
         allow_pyramiding=bool(payload.get("allow_pyramiding", False)),
         max_leverage=float(payload.get("max_leverage", 1)),
         apply_funding=bool(payload.get("apply_funding", True)),
@@ -255,6 +258,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_symbol_exposure=settings.max_symbol_exposure,
         max_open_positions=settings.max_open_positions,
         min_net_rr=settings.min_net_rr,
+        min_gross_rr=float(payload.get("min_gross_rr", 1.0)),
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),
         cap_target_by_rr=bool(payload.get("cap_target_by_rr", False)),

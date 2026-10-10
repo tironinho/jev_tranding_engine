@@ -11,6 +11,7 @@ from app.domain.enums import (
     STOP_COOLDOWN,
     EXISTING_POSITION,
     EXCHANGE_RULES_UNAVAILABLE,
+    GROSS_RR_TOO_LOW,
     INSUFFICIENT_LIQUIDITY,
     INSUFFICIENT_MARGIN,
     JEV_EXPECTANCY_TOO_LOW,
@@ -272,6 +273,14 @@ class RiskEngine:
             slippage_cost=extra_slip,
             spread_included_in_fill=included or preview.model != "fixed_bps",
         )
+        if economics.gross_rr is None or economics.gross_rr + 1e-9 < self.limits.min_gross_rr:
+            return self._reject(
+                decision,
+                [GROSS_RR_TOO_LOW],
+                economics=economics,
+                details={"minimum_gross_rr": self.limits.min_gross_rr,
+                         "geometry_reasons": list(geometry.reasons)},
+            )
         if economics.net_rr is None or economics.net_rr < self.limits.min_net_rr:
             return self._reject(
                 decision,

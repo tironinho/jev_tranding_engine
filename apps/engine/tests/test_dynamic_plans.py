@@ -210,18 +210,29 @@ def test_recent_break_level_does_not_collapse_future_targets():
 @pytest.mark.asyncio
 async def test_risk_rechecks_stressed_probability_and_aggregate_loss():
     snapshot, book = long_snapshot()
-    decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(PlansProvider({'rr_2': .9, 'rr_2.5': .8, 'rr_3': .7})))
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, context(PlansProvider({'rr_2': .2, 'rr_2.5': .2, 'rr_3': .7})))
     eng = engine()
     decision.metadata['jev_stress_probability'] = .1
     risk = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(.0005,.0005,'test'), book)
     assert 'JEV_NONPOSITIVE_EXPECTANCY' in risk.reject_reasons
-    decision.metadata['jev_stress_probability'] = .34
+    decision.metadata['jev_stress_probability'] = .31
     risk = eng.risk.evaluate(decision, snapshot, _context(), FeeQuote(.0005,.0005,'test'), book)
     assert JEV_EXPECTANCY_TOO_LOW in risk.reject_reasons
     assert 0 < risk.details['expected_net_r'] < risk.details['minimum_expected_net_r']
     decision.metadata['jev_stress_probability'] = .85
     risk = eng.risk.evaluate(decision, snapshot, _context(open_stop_risk=200), FeeQuote(.0005,.0005,'test'), book)
     assert 'MAX_PORTFOLIO_STOP_RISK' in risk.reject_reasons
+
+
+def test_production_plan_floor_only_allows_three_r_targets():
+    snapshot, _ = long_snapshot()
+    limits = RiskLimits(dynamic_rr_enabled=True, min_gross_rr=3.0)
+
+    plans = candidate_plans(snapshot, Action.LONG, limits, .00075)
+
+    eligible = [plan for plan in plans if plan['eligible']]
+    assert [plan['plan_id'] for plan in eligible] == ['rr_3']
+    assert eligible[0]['gross_rr'] == pytest.approx(3)
 
 
 def bar(start, high, low, close):

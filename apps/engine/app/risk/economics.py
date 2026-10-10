@@ -108,7 +108,7 @@ def _fit_target(side: Action, entry: float, distance: float, features: dict, lim
     """The target fits inside the last hour, capped by the planned RR multiple when cap_target_by_rr is set.
 
     When cap_target_by_rr is True (default behaviour for live), the reward is
-    min(distance * rr_target_multiple, range_60m) – a reachable 2R target.
+    min(distance * rr_target_multiple, range_60m).
     When False (legacy), the full hour range is used as the target.
     """
     hour = features.get("range_60m")

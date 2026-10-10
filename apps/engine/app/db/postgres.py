@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import ssl
 import uuid
-from datetime import datetime, timezone
+from bisect import bisect_left
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
@@ -34,6 +36,30 @@ from app.db.models import (
 )
 
 log = logging.getLogger(__name__)
+
+_AUDIT_HORIZONS = {
+    "future_return_30s": 30,
+    "future_return_1m": 60,
+    "future_return_3m": 180,
+    "future_return_5m": 300,
+    "future_return_15m": 900,
+}
+
+
+def _derive_audit_labels(snapshot: MarketSnapshotRow, series: list[MarketSnapshotRow]) -> dict | None:
+    """Rebuild missing point-in-time labels from durable market snapshots."""
+    if not series or snapshot.price <= 0:
+        return None
+    timestamps = [row.timestamp for row in series]
+    labels: dict[str, float | str] = {"snapshot_id": str(snapshot.id)}
+    for name, seconds in _AUDIT_HORIZONS.items():
+        index = bisect_left(timestamps, snapshot.timestamp + timedelta(seconds=seconds))
+        if index >= len(series):
+            continue
+        price = series[index].price
+        if price and price > 0:
+            labels[name] = price / snapshot.price - 1
+    return labels if len(labels) > 1 else None
 
 
 def to_async_url(url: str) -> str:
@@ -216,16 +242,43 @@ class PostgresMirror:
                         )
                     ).scalars().all()
                 )
+                snapshot_rows = {row.id: row for row in snapshots}
+                symbols = sorted({row.symbol for row in snapshots})
+                first_at = min(row.timestamp for row in snapshots)
+                last_at = max(row.timestamp for row in snapshots) + timedelta(seconds=900)
+                future_snapshots = list(
+                    (
+                        await session.execute(
+                            select(MarketSnapshotRow)
+                            .where(
+                                MarketSnapshotRow.symbol.in_(symbols),
+                                MarketSnapshotRow.timestamp >= first_at,
+                                MarketSnapshotRow.timestamp <= last_at,
+                            )
+                            .order_by(MarketSnapshotRow.symbol, MarketSnapshotRow.timestamp)
+                        )
+                    ).scalars().all()
+                )
+                series_by_symbol: dict[str, list[MarketSnapshotRow]] = defaultdict(list)
+                for market_row in future_snapshots:
+                    series_by_symbol[market_row.symbol].append(market_row)
                 snapshot_by_id = {row.id: row.payload for row in snapshots}
                 label_by_snapshot = {row.snapshot_id: row.payload for row in labels}
-                return [
-                    {
+                audited = []
+                for row in decisions:
+                    label = label_by_snapshot.get(row.snapshot_id)
+                    source = "future_labels" if label is not None else None
+                    snapshot_row = snapshot_rows.get(row.snapshot_id)
+                    if label is None and snapshot_row is not None:
+                        label = _derive_audit_labels(snapshot_row, series_by_symbol[snapshot_row.symbol])
+                        source = "market_snapshots" if label is not None else None
+                    audited.append({
                         "decision": row.payload,
                         "snapshot": snapshot_by_id.get(row.snapshot_id),
-                        "labels": label_by_snapshot.get(row.snapshot_id),
-                    }
-                    for row in decisions
-                ]
+                        "labels": label,
+                        "labels_source": source,
+                    })
+                return audited
         except Exception as exc:
             self.last_error = str(exc)
             log.warning("decision audit history load failed: %s", exc)

@@ -172,7 +172,9 @@ class BaselineJevStrategy:
         try:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
-            context.artifacts.append({"kind": "jev", "error": str(exc), "request": request.model_dump(mode="json")})
+            error_type = type(exc).__name__
+            context.artifacts.append({"kind": "jev", "error": str(exc), "error_type": error_type,
+                                      "request": request.model_dump(mode="json")})
             if context.failure_policy == "FALLBACK_TO_BASELINE" and not context_candidate:
                 metadata["jev_effect"] = "fallback"
                 return _decision(
@@ -194,7 +196,7 @@ class BaselineJevStrategy:
                 action=Action.NO_TRADE,
                 confidence=0,
                 reasons=[JEV_UNAVAILABLE],
-                metadata={**metadata, "error": str(exc)},
+                metadata={**metadata, "error": str(exc), "error_type": error_type},
                 model_version=result.version,
                 prompt_version=request.prompt_version,
                 started=started,
@@ -278,6 +280,7 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
                     probability_status="UNCALIBRATED")
     metadata.pop("jev_trade_plan", None)
     eligible = [p for p in plans if p["eligible"]][-3:]
+    failures: list[tuple[str, str]] = []
 
     async def assess(plan):
         request = _jev_request(context, snapshot, result).model_copy(update={"trade_plan": dict(plan)})
@@ -285,8 +288,10 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             assessment = await asyncio.wait_for(context.jev.evaluate_market_state(request), timeout=8)
         except Exception as exc:
             plan.update(eligible=False, reason="JEV_UNAVAILABLE")
+            failure = (type(exc).__name__, str(exc))
+            failures.append(failure)
             context.artifacts.append({"kind": "jev", "plan_id": plan["plan_id"],
-                "request": request.model_dump(mode="json"), "error": str(exc)})
+                "request": request.model_dump(mode="json"), "error": failure[1], "error_type": failure[0]})
             return None
         context.artifacts.append({"kind": "jev", "plan_id": plan["plan_id"],
             "request": request.model_dump(mode="json"), "response": assessment.model_dump(mode="json"),
@@ -330,6 +335,8 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             prompt_version = best_assessment.prompt_version
         else:
             metadata["jev_effect"] = "not_called" if not eligible else "unavailable"
+            if failures:
+                metadata["error_type"], metadata["error"] = failures[0]
         return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=Action.NO_TRADE,
             confidence=result.confidence, reasons=[*_candidate_reasons(metadata), *reasons, *result.reason_codes], metadata=metadata,
             model_version=model_version, prompt_version=prompt_version, started=started)
@@ -458,7 +465,9 @@ class BaselineOpenAIJevStrategy:
         try:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
-            context.artifacts.append({"kind": "jev", "error": str(exc), "request": request.model_dump(mode="json")})
+            error_type = type(exc).__name__
+            context.artifacts.append({"kind": "jev", "error": str(exc), "error_type": error_type,
+                                      "request": request.model_dump(mode="json")})
             if context.failure_policy == "FALLBACK_TO_BASELINE":
                 metadata["jev_effect"] = "fallback"
                 return _decision(
@@ -480,7 +489,7 @@ class BaselineOpenAIJevStrategy:
                 action=Action.NO_TRADE,
                 confidence=0,
                 reasons=[JEV_UNAVAILABLE],
-                metadata={**metadata, "error": str(exc)},
+                metadata={**metadata, "error": str(exc), "error_type": error_type},
                 model_version=record.model,
                 prompt_version=record.prompt_version,
                 started=started,

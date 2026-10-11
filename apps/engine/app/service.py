@@ -502,7 +502,10 @@ class TradingEngine:
             reasons = ",".join(decision.reason_codes[:4]) or "NO_REASON"
             self._log("decision", f"{key} {snapshot.symbol} NO_TRADE {decision.confidence:.3f} {reasons}")
             if "JEV_UNAVAILABLE" in decision.reason_codes:
-                self._log("jev_unavailable", f"{snapshot.symbol} {_jev_error_class(decision.metadata.get('error'))}")
+                self._log(
+                    "jev_unavailable",
+                    f"{snapshot.symbol} {_jev_error_class(decision.metadata.get('error'), decision.metadata.get('error_type'))}",
+                )
         else:
             metadata = decision.metadata or {}
             plan = metadata.get("jev_trade_plan") or {}
@@ -2108,9 +2111,9 @@ def _log_number(value) -> str:
     return f"{float(value):.4f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "-"
 
 
-def _jev_error_class(value) -> str:
+def _jev_error_class(value, error_type=None) -> str:
     """Return an operational category without putting provider payloads in logs."""
-    error = str(value or "").lower()
+    error = f"{error_type or ''} {value or ''}".lower()
     if "timeout" in error or "timed out" in error:
         return "timeout"
     if "jev_http_" in error:

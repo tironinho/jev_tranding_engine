@@ -8,7 +8,7 @@ from app.execution.binance_live import BinanceExecutionProvider, LiveExecutionBl
 from app.execution.paper import OrderIntent
 from app.domain.enums import OrderType
 from app.providers.jev.real import RealJevProvider
-from app.providers.jev.schemas import JevMarketRequest
+from app.providers.jev.schemas import JevMarketRequest, JevProviderError
 from app.providers.openai.prompts import PROMPT_SHA256, get_prompt
 from app.providers.openai.provider import OpenAIProvider
 from app.providers.openai.schemas import MarketState, OpenAIInvalidSchema
@@ -279,6 +279,14 @@ async def test_real_jev_calls_only_the_configured_url():
     assert assessment.provider == "real"
     assert assessment.is_mock is False
     assert assessment.trend_continuation_probability == 0.8
+
+    class _TimeoutClient:
+        async def post(self, *args, **kwargs):
+            raise TimeoutError()
+
+    provider.client = _TimeoutClient()
+    with pytest.raises(JevProviderError, match="jev_timeout"):
+        await provider.evaluate_market_state(request)
 
 
 @pytest.mark.asyncio

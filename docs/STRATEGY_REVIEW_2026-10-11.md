@@ -81,3 +81,11 @@ A configuração deve permanecer estável durante a próxima amostra. A revisão
 - incidência de stop não protegido, reconciliação e bloqueios por sequência de perdas.
 
 Antes dessa etapa, o `DATABASE_URL` usado pelo serviço deve ser reconciliado com o banco acessado externamente. Sem isso, o histórico detalhado fica preso no banco atual de produção e não pode ser auditado pelo mesmo caminho usado nesta análise.
+
+## Validação posterior ao primeiro ajuste
+
+Entre o deploy `e01169c` e 16:57 UTC, houve um fechamento SOL por stop de -0,0909 USDT. A posição já estava aberta antes do deploy, portanto não valida o novo filtro de entrada. O JEV confirmou três candidatos LONG de BTC com continuação de 0,57 e expectativa líquida prevista de 0,2089R; todos foram bloqueados por `LIVE_LONG_DISABLED`. Nenhuma nova ordem live foi enviada nessa janela.
+
+Foram observadas 12 novas indisponibilidades efetivas do JEV. A telemetria inicial só conseguiu marcá-las como `provider_error`, pois o caminho de planos dinâmicos descartava o tipo da exceção. O tipo agora é preservado e erros de transporte são normalizados para timeout, conexão ou outra falha de transporte, sem registrar dados sensíveis.
+
+O banco informado continua com zero tabelas e zero conexões persistentes nas métricas do Render, enquanto o engine restaura outro PostgreSQL. Esse banco de produção apresentou timeouts de autenticação e conexões encerradas entre 10:41 e 12:07 UTC; não houve nova falha de escrita encontrada depois de 12:08 UTC. Como o engine falha fechado quando a persistência fica indisponível, o incidente bloqueia entradas em vez de permitir ordens sem registro durável.

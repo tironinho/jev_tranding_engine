@@ -99,7 +99,14 @@ class RealJevProvider:
                 timeout=self.timeout_s,
             )
         except Exception as exc:
-            raise JevProviderError(str(exc)) from exc
+            error_type = type(exc).__name__.lower()
+            if "timeout" in error_type:
+                reason = "jev_timeout"
+            elif "connect" in error_type or "network" in error_type:
+                reason = "jev_connection_error"
+            else:
+                reason = f"jev_transport_{type(exc).__name__}"
+            raise JevProviderError(reason) from exc
         status = getattr(response, "status_code", 0)
         if status >= 400:
             raise JevProviderError(f"jev_http_{status}")

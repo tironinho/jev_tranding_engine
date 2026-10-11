@@ -94,6 +94,7 @@ async def test_all_model_failures_never_fall_back_to_unassessed_trade():
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
     assert decision.action is Action.NO_TRADE
     assert JEV_UNAVAILABLE in decision.reason_codes
+    assert decision.metadata["error_type"] == "KeyError"
     assert len(ctx.artifacts) == 1
     assert all('error' in a for a in ctx.artifacts)
 

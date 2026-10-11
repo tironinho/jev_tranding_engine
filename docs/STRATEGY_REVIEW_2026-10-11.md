@@ -4,7 +4,7 @@
 
 Esta revisão cruza os fechamentos registrados nos logs do Render entre 7 e 11 de outubro, eventos de deploy, falhas de execução, configuração atual e o banco PostgreSQL informado para acesso externo.
 
-O PostgreSQL informado está acessível, mas não contém tabelas de usuário. Ao mesmo tempo, o engine registra `book restored from postgres` em produção. Portanto, o `DATABASE_URL` do serviço aponta para outro banco, ou o endereço informado não é o banco usado pelo engine. Sem essa correspondência não foi possível relacionar cada resposta do JEV, seus scores e o plano escolhido ao resultado final. Os logs permitem medir os fechamentos e incidentes, mas não substituem o histórico de decisões persistido.
+O PostgreSQL informado está acessível, mas não contém tabelas de usuário. A instrumentação segura implantada depois da primeira análise confirmou que o engine usa o banco `neondb` no host `ep-frosty-bar-b6vo289v.c-2.sa-east-1.aws.neon.tech`, enquanto o endereço informado aponta para `trading_engine_6o6h` no Render. O engine também registra `book restored from postgres` no Neon. Sem acesso ao banco efetivamente usado em produção não foi possível relacionar cada resposta do JEV, seus scores e o plano escolhido ao resultado final. Os logs permitem medir os fechamentos e incidentes, mas não substituem o histórico de decisões persistido.
 
 ## Resultado observado
 
@@ -80,7 +80,7 @@ A configuração deve permanecer estável durante a próxima amostra. A revisão
 - indisponibilidade e latência do JEV;
 - incidência de stop não protegido, reconciliação e bloqueios por sequência de perdas.
 
-Antes dessa etapa, o `DATABASE_URL` usado pelo serviço deve ser reconciliado com o banco acessado externamente. Sem isso, o histórico detalhado fica preso no banco atual de produção e não pode ser auditado pelo mesmo caminho usado nesta análise.
+Antes dessa etapa, o histórico do Neon deve ser consultado diretamente ou migrado de forma controlada para o PostgreSQL do Render. Trocar apenas o `DATABASE_URL` agora iniciaria o engine sobre um banco vazio e perderia da visão operacional o estado restaurado, as decisões e as posições persistidas.
 
 ## Validação posterior ao primeiro ajuste
 
@@ -89,3 +89,9 @@ Entre o deploy `e01169c` e 16:57 UTC, houve um fechamento SOL por stop de -0,090
 Foram observadas 12 novas indisponibilidades efetivas do JEV. A telemetria inicial só conseguiu marcá-las como `provider_error`, pois o caminho de planos dinâmicos descartava o tipo da exceção. O tipo agora é preservado e erros de transporte são normalizados para timeout, conexão ou outra falha de transporte, sem registrar dados sensíveis.
 
 O banco informado continua com zero tabelas e zero conexões persistentes nas métricas do Render, enquanto o engine restaura outro PostgreSQL. Esse banco de produção apresentou timeouts de autenticação e conexões encerradas entre 10:41 e 12:07 UTC; não houve nova falha de escrita encontrada depois de 12:08 UTC. Como o engine falha fechado quando a persistência fica indisponível, o incidente bloqueia entradas em vez de permitir ordens sem registro durável.
+
+## Validação final em produção
+
+Os commits `e01169c`, `5324c1e` e `154256e` foram publicados na `main`. Após o último deploy, `/health` respondeu `ok`, `/ready` respondeu `true`, o processo restaurou o book do Neon e não foram encontrados logs de nível `error` na janela consultada. A identificação do destino PostgreSQL registra somente host e nome do banco; usuário, senha e parâmetros da conexão não são gravados.
+
+Essa validação confirma o funcionamento dos controles e da telemetria, mas ainda não comprova rentabilidade. A estratégia precisa permanecer estável até formar uma nova amostra de trades fechados sob a mesma versão. Até lá, o circuito de três perdas consecutivas limita o dano diário e os longs continuam bloqueados no live.

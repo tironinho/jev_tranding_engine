@@ -24,7 +24,7 @@ def discover_config_dir() -> Path:
 
 @dataclass(frozen=True)
 class BaselineWeightConfig:
-    version: str = "baseline_weights_v3"
+    version: str = "baseline_weights_v4"
     trend: float = 0.25
     momentum: float = 0.20
     volume: float = 0.10
@@ -46,12 +46,14 @@ class BaselineWeightConfig:
     setup_5m_return_scale: float = 0.005
     imbalance_strong: float = 0.25
     volume_z_strong: float = 1.0
+    reclaim_min_abs_score: float = 0.40
+    reclaim_min_volume_ratio: float = 1.50
 
 
 @dataclass(frozen=True)
 class CombinationConfig:
     baseline_version: str = "baseline_classified_v1"
-    jev_rule_version: str = "jev_strict_signal_v4"
+    jev_rule_version: str = "jev_reclaim_direction_v5"
     openai_rule_version: str = "openai_jev_break_size_v1"
     failure_policy: str = "NO_TRADE"
     min_trend_continuation: float = 0.55
@@ -154,7 +156,7 @@ def load_file_config(config_dir: Path | None = None) -> dict:
 def baseline_from_file(payload: dict) -> BaselineWeightConfig:
     weights = payload.get("weights") or {}
     return BaselineWeightConfig(
-        version=payload.get("version", "baseline_weights_v3"),
+        version=payload.get("version", "baseline_weights_v4"),
         trend=float(weights.get("trend", 0.25)),
         momentum=float(weights.get("momentum", 0.20)),
         volume=float(weights.get("volume", 0.10)),
@@ -176,6 +178,8 @@ def baseline_from_file(payload: dict) -> BaselineWeightConfig:
         setup_5m_return_scale=float(payload.get("setup_5m_return_scale", 0.005)),
         imbalance_strong=float(payload.get("imbalance_strong", 0.25)),
         volume_z_strong=float(payload.get("volume_z_strong", 1.0)),
+        reclaim_min_abs_score=float(payload.get("reclaim_min_abs_score", 0.40)),
+        reclaim_min_volume_ratio=float(payload.get("reclaim_min_volume_ratio", 1.50)),
     )
 
 
@@ -184,7 +188,7 @@ def combination_from_file(payload: dict) -> CombinationConfig:
     block_short = payload.get("block_short_regimes") or []
     return CombinationConfig(
         baseline_version=payload.get("baseline_version", "baseline_classified_v1"),
-        jev_rule_version=payload.get("jev_rule_version", "jev_strict_signal_v4"),
+        jev_rule_version=payload.get("jev_rule_version", "jev_reclaim_direction_v5"),
         openai_rule_version=payload.get("openai_rule_version", "openai_jev_break_size_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
@@ -295,7 +299,7 @@ class Settings(BaseSettings):
     jev_api_key: str = ""
     jev_base_url: str = ""
     jev_model: str = ""
-    jev_prompt_version: str = "jev_market_v1"
+    jev_prompt_version: str = "jev_direction_v2"
     jev_failure_policy: str = "NO_TRADE"
     jev_timeout_s: float = 3.0
     engine_api_secret: str = ""

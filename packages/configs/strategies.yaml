@@ -17,7 +17,7 @@ strategies:
 
 combination:
   baseline_version: baseline_classified_v1
-  jev_rule_version: jev_strict_signal_v4
+  jev_rule_version: jev_reclaim_direction_v5
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
   # Abertura live exige uma baseline válida e confirmação forte do JEV.

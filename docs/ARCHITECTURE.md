@@ -137,12 +137,12 @@ Se Postgres foi configurado e está indisponível, não abre trade (`PERSISTENCE
 Versões gravadas em toda decisão:
 
 - `baseline_classified_v1`
-- `jev_strict_signal_v4` / `jev_target_3r_v1`
+- `jev_reclaim_direction_v5` / `target_3r_v1`
 - `openai_jev_break_size_v1`
 - `market_interpreter_v1` (prompt OpenAI; versão nova = chave nova, sem edição silenciosa)
-- `jev_market_v1` (rótulo do prompt Jev; o host vem só de `JEV_BASE_URL`)
+- `jev_direction_v2` (continuação direcional sem usar target/R:R; o host vem só de `JEV_BASE_URL`)
 
-`score_baseline` pesa cada família em `[-1, +1]`, combina o composto e só então classifica. A ordem sai depois da classe. A classe recusa o lado do composto quando os componentes divergem, quando um único componente carrega o score, ou quando o fluxo vai contra esse lado. Hard blocks (spread, volatilidade extrema, histórico insuficiente) continuam `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
+`score_baseline` pesa cada família em `[-1, +1]`, combina o composto e só então classifica. A ordem sai depois da classe. A classe recusa o lado do composto quando os componentes divergem, quando um único componente carrega o score, ou quando o fluxo vai contra esse lado. Além da continuação, existe um setup de reclaim: uma das últimas cinco velas varre o extremo das 20 anteriores e o candle atual recupera esse nível; volume de pelo menos 1,5x, momentum e fluxo precisam confirmar o mesmo lado. Esse setup usa piso 0,40 porque exige quatro confirmações independentes e serve para não esperar as EMAs virarem depois de uma reversão em V. Hard blocks (spread, volatilidade extrema, histórico insuficiente) continuam `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
 
 `baseline_jev` só chama o Jev em produção quando a baseline já classificou um `LONG` ou `SHORT` com score absoluto mínimo de 0,55. Candidatos abaixo desse piso continuam disponíveis em paper/shadow para pesquisa, sem chegar à execução live. O pedido leva os pesos e a classe. O Jev responde continuação, reversão e falso rompimento sobre esse candidato, num único passe. Continuação abaixo de 55% veta; reversão alta e falso rompimento claro também vetam. O Jev não cria um lado que a baseline recusou e não inverte LONG/SHORT. Falha do Jev: default `NO_TRADE` (`FALLBACK_TO_BASELINE` existe na configuração e não é o default).
 

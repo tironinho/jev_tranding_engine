@@ -1,6 +1,7 @@
 from app.domain.enums import (
     BAD_SPREAD,
     BELOW_THRESHOLD,
+    BULLISH_RECLAIM,
     CLASS_ALIGNED,
     CLASS_DIVERGENT,
     CLASS_FLOW_AGAINST,
@@ -154,6 +155,57 @@ def test_confirmed_breakdown_overrides_opposite_lagging_context():
     assert result.scores["context_trend_score"] > 0
     assert result.scores["break_confirmation_score"] == -1
     assert result.scores["trend_score"] <= 0
+
+
+def test_confirmed_bullish_reclaim_can_trade_before_lagging_trend_turns():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        ema_alignment=-1,
+        ema_20_slope=-.001,
+        price_vs_ema20=-.002,
+        rsi=70,
+        roc=.004,
+        volume_ratio=3.0,
+        taker_flow_1m=.9,
+        imbalance_10=.4,
+        range_position=.1,
+        breakout=False,
+        breakdown=False,
+        bullish_reclaim=True,
+        bearish_reclaim=False,
+    )
+
+    result = score_baseline(snapshot, eng.weights)
+
+    assert result.composite < eng.weights.min_abs_score
+    assert result.composite >= eng.weights.reclaim_min_abs_score
+    assert result.scores["reclaim_confirmation_score"] == 1
+    assert result.action is Action.LONG
+    assert BULLISH_RECLAIM in result.reason_codes
+
+
+def test_reclaim_without_exceptional_volume_stays_blocked():
+    eng = engine()
+    snapshot, _book = long_snapshot(
+        ema_alignment=-1,
+        ema_20_slope=-.001,
+        price_vs_ema20=-.002,
+        rsi=70,
+        roc=.004,
+        volume_ratio=1.2,
+        taker_flow_1m=.9,
+        imbalance_10=.4,
+        range_position=.1,
+        breakout=False,
+        breakdown=False,
+        bullish_reclaim=True,
+        bearish_reclaim=False,
+    )
+
+    result = score_baseline(snapshot, eng.weights)
+
+    assert result.scores["reclaim_confirmation_score"] == 0
+    assert result.action is Action.NO_TRADE
 
 
 def test_aligned_components_are_classified_before_the_side():

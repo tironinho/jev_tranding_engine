@@ -8,8 +8,10 @@ from app.domain.enums import (
     BAD_SPREAD,
     BELOW_THRESHOLD,
     BELOW_VWAP,
+    BEARISH_RECLAIM,
     BREAKDOWN,
     BREAKOUT,
+    BULLISH_RECLAIM,
     CLASS_ALIGNED,
     CLASS_DIVERGENT,
     CLASS_FLOW_AGAINST,
@@ -138,15 +140,25 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
     # event before neutralising lagging votes. The break is exposed separately
     # to JEV; it does not manufacture enough score to cross the baseline gate.
     break_side = 1 if features.get("breakout") is True else -1 if features.get("breakdown") is True else 0
+    reclaim_side = 1 if features.get("bullish_reclaim") is True else -1 if features.get("bearish_reclaim") is True else 0
     break_confirmed = bool(
         break_side
         and momentum * break_side >= _COMPONENT_FLOOR
         and orderflow is not None
         and orderflow * break_side >= _COMPONENT_FLOOR
     )
-    if break_confirmed:
-        local_same_side = local_trend if local_trend * break_side > 0 else 0.0
-        context_same_side = context_trend if context_trend is not None and context_trend * break_side > 0 else 0.0
+    reclaim_confirmed = bool(
+        reclaim_side
+        and isinstance(volume_ratio, (int, float))
+        and volume_ratio >= config.reclaim_min_volume_ratio
+        and momentum * reclaim_side >= _COMPONENT_FLOOR
+        and orderflow is not None
+        and orderflow * reclaim_side >= _COMPONENT_FLOOR
+    )
+    confirmed_side = break_side if break_confirmed else reclaim_side if reclaim_confirmed else 0
+    if confirmed_side:
+        local_same_side = local_trend if local_trend * confirmed_side > 0 else 0.0
+        context_same_side = context_trend if context_trend is not None and context_trend * confirmed_side > 0 else 0.0
         trend = clip(0.80 * local_same_side + 0.20 * context_same_side, -1, 1)
     else:
         trend = local_trend if context_trend is None else clip(0.65 * local_trend + 0.35 * context_trend, -1, 1)
@@ -158,6 +170,10 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         structure = clip(structure + 0.25, -1, 1)
     if features.get("breakdown") is True:
         structure = clip(structure - 0.25, -1, 1)
+    if reclaim_confirmed and reclaim_side > 0:
+        structure = max(structure, 0.5)
+    elif reclaim_confirmed and reclaim_side < 0:
+        structure = min(structure, -0.5)
 
     if atr_norm >= config.extreme_atr_normalized:
         volatility = -1.0
@@ -177,6 +193,7 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         "trend_score": trend,
         "context_trend_score": context_trend,
         "break_confirmation_score": float(break_side) if break_confirmed else 0.0,
+        "reclaim_confirmation_score": float(reclaim_side) if reclaim_confirmed else 0.0,
         "momentum_score": momentum,
         "volume_score": volume,
         "orderflow_score": orderflow,
@@ -232,6 +249,10 @@ def classify_scores(
         labels.append(BREAKOUT)
     elif features.get("breakdown") is True:
         labels.append(BREAKDOWN)
+    elif features.get("bullish_reclaim") is True:
+        labels.append(BULLISH_RECLAIM)
+    elif features.get("bearish_reclaim") is True:
+        labels.append(BEARISH_RECLAIM)
     else:
         structure = scores.get("structure_score")
         if structure is None or abs(structure) < _COMPONENT_FLOOR:
@@ -253,6 +274,8 @@ def _primary(labels: list[str]) -> str:
         CLASS_ALIGNED,
         BREAKOUT,
         BREAKDOWN,
+        BULLISH_RECLAIM,
+        BEARISH_RECLAIM,
         CLASS_RANGE,
     ):
         if code in labels:
@@ -311,8 +334,11 @@ def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> Ba
 
     hard_block = {BAD_SPREAD, HIGH_VOLATILITY}
     refused = any(code in _REFUSAL for code in market_class.labels)
-    if any(code in hard_block for code in reasons) or refused or abs(composite) < config.min_abs_score:
-        if abs(composite) < config.min_abs_score:
+    reclaim_score = scores.get("reclaim_confirmation_score") or 0.0
+    confirmed_reclaim = reclaim_score != 0 and composite * reclaim_score > 0
+    minimum_score = config.reclaim_min_abs_score if confirmed_reclaim else config.min_abs_score
+    if any(code in hard_block for code in reasons) or refused or abs(composite) < minimum_score:
+        if abs(composite) < minimum_score:
             reasons.append(BELOW_THRESHOLD)
         return BaselineResult(
             Action.NO_TRADE,
@@ -362,6 +388,10 @@ def _context_reasons(features: dict, action: Action, config: BaselineWeightConfi
         reasons.append(BREAKOUT)
     if features.get("breakdown") is True:
         reasons.append(BREAKDOWN)
+    if features.get("bullish_reclaim") is True:
+        reasons.append(BULLISH_RECLAIM)
+    if features.get("bearish_reclaim") is True:
+        reasons.append(BEARISH_RECLAIM)
     return reasons
 
 

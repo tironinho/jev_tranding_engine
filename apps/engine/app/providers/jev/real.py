@@ -23,16 +23,16 @@ _ONCHAIN = (
 _INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
-        "It is not an order. Using trade_plan, that side reaches target before stop within horizon_minutes. "
-        "If trade_plan.requires_structure_break is true, success also requires price to cross the nearest "
-        "recorded support or resistance; reduce continuation when the supplied state does not support expansion. "
-        "Apply trade_plan.stop_policy: a tightened stop also terminates the trade. "
-        "A timeout without reaching target is not a success."
+        "It is not an order. Estimate whether price shows directional follow-through for that side over the "
+        "next 5 to 15 minutes rather than immediately reversing. Use trend, momentum, order flow, break or "
+        "reclaim quality, and supplied market context. Do not condition this probability on target distance, "
+        "stop distance, R:R, fees, expected payoff, or whether a trade_plan target is reached."
     )
     + _ONCHAIN,
     "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
     "false_breakout_probability": (
-        "The break named in `baseline_class` is a false break. If the class has no break, stay near 0.5."
+        "The break or reclaim named in `baseline_class` fails and returns through its structural level. "
+        "If the class has no break or reclaim, stay near 0.5."
     )
     + _ONCHAIN,
 }
@@ -150,7 +150,6 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "symbol": payload.get("symbol"),
         "market_type": payload.get("market_type"),
         "baseline_action": payload.get("baseline_action"),
-        "trade_plan": payload.get("trade_plan"),
         "baseline_confidence": payload.get("baseline_confidence"),
         "baseline_scores": payload.get("baseline_scores") or {},
         "baseline_class": payload.get("baseline_class"),
@@ -163,6 +162,8 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "range_60m": float(frac) if isinstance(frac, (int, float)) else None,
         "breakout": features.get("breakout"),
         "breakdown": features.get("breakdown"),
+        "bullish_reclaim": features.get("bullish_reclaim"),
+        "bearish_reclaim": features.get("bearish_reclaim"),
     }
     intelligence = jev_view(payload.get("intelligence"), payload.get("baseline_action"))
     if intelligence is not None:

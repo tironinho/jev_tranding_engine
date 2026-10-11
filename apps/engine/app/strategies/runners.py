@@ -273,7 +273,7 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
         context.intelligence,
         allow_structure_extension=True,
     )
-    metadata.update(candidate_plans=plans, combination_rule_version="jev_target_3r_v1",
+    metadata.update(candidate_plans=plans, target_rule_version="target_3r_v1",
                     probability_status="UNCALIBRATED")
     metadata.pop("jev_trade_plan", None)
     eligible = [p for p in plans if p["eligible"]][-3:]
@@ -533,7 +533,8 @@ def _class_metadata(result: BaselineResult) -> dict[str, Any]:
 
 
 def _class_has_break(result: BaselineResult) -> bool:
-    return "BREAKOUT" in result.market_class.labels or "BREAKDOWN" in result.market_class.labels
+    structural = {"BREAKOUT", "BREAKDOWN", "BULLISH_RECLAIM", "BEARISH_RECLAIM"}
+    return bool(structural.intersection(result.market_class.labels))
 
 
 def _stamp_size(metadata: dict, assessment, required: float, broke: bool, action: Action) -> None:
@@ -559,7 +560,7 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=getattr(context.jev, "prompt_version", "jev_market_v1"),
+        prompt_version=getattr(context.jev, "prompt_version", "jev_direction_v2"),
         symbol=snapshot.symbol,
         market_type=snapshot.market_type.value,
         timestamp=snapshot.timestamp,

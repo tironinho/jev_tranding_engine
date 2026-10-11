@@ -83,7 +83,7 @@ class EvolutionService:
         versions = (self.policy.get("bootstrap_versions") or {})
         defaults = {"baseline": "B-001", "baseline_jev": "J-001", "baseline_openai_jev": "OJ-001"}
         now = utcnow()
-        digest = hashlib.sha256(b"baseline_weights_v1|features_v1|market_interpreter_v1|jev_market_v1").hexdigest()
+        digest = hashlib.sha256(b"baseline_weights_v4|features_v2|market_interpreter_v1|jev_direction_v2").hexdigest()
         for family in (StrategyFamily.BASELINE, StrategyFamily.BASELINE_JEV, StrategyFamily.BASELINE_OPENAI_JEV):
             code = versions.get(family.value, defaults[family.value])
             self.versions[code] = StrategyVersion(
@@ -93,7 +93,7 @@ class EvolutionService:
                 created_at=now,
                 created_by="bootstrap",
                 config_hash=digest,
-                prompt_version=None if family is StrategyFamily.BASELINE else "jev_market_v1",
+                prompt_version=None if family is StrategyFamily.BASELINE else "jev_direction_v2",
                 git_branch="main",
             )
 

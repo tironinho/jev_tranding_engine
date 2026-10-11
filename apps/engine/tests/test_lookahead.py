@@ -72,6 +72,27 @@ def test_five_minute_taker_uses_the_closed_candles():
     assert features["taker_flow_5m"] != features["taker_flow_1m"]
 
 
+def test_support_sweep_remains_visible_until_reclaimed_within_five_bars():
+    state = SymbolMarketState(symbol="BTCUSDT", market_type="margin")
+    candles = [_candle(index, 100) for index in range(20)]
+    sweep = _candle(20, 100)
+    sweep.open, sweep.high, sweep.low, sweep.close, sweep.volume = 100, 100.1, 99.0, 99.4, 40
+    after_sweep = []
+    for index, (opened, closed) in enumerate(((99.4, 99.5), (99.5, 99.6), (99.6, 99.7)), start=21):
+        candle = _candle(index, opened)
+        candle.open, candle.high, candle.low, candle.close, candle.volume = opened, closed + .1, opened - .1, closed, 20
+        after_sweep.append(candle)
+    reclaim = _candle(24, 99.7)
+    reclaim.open, reclaim.high, reclaim.low, reclaim.close, reclaim.volume = 99.7, 100.3, 99.6, 100.1, 45
+    candles.extend([sweep, *after_sweep, reclaim])
+    state.candles["1m"] = candles
+
+    features, _quality = compute_features(state, reclaim.close_time, reclaim.close)
+
+    assert features["bullish_reclaim"] is True
+    assert features["bearish_reclaim"] is False
+
+
 def test_future_candles_do_not_change_features_at_t():
     state = SymbolMarketState(symbol="BTCUSDT", market_type="futures")
     candles = [_candle(i, 100 + i * 0.01) for i in range(40)]

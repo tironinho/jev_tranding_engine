@@ -137,6 +137,36 @@ async def test_live_never_promotes_a_subthreshold_baseline_candidate():
 
 
 @pytest.mark.asyncio
+async def test_live_confirmed_reclaim_reaches_jev_as_a_valid_setup():
+    snapshot, _ = long_snapshot(
+        ema_alignment=-1,
+        ema_20_slope=-.001,
+        price_vs_ema20=-.002,
+        rsi=70,
+        roc=.004,
+        volume_ratio=3.0,
+        taker_flow_1m=.9,
+        imbalance_10=.4,
+        range_position=.1,
+        breakout=False,
+        breakdown=False,
+        bullish_reclaim=True,
+        bearish_reclaim=False,
+    )
+    provider = PlansProvider({"*": .7})
+    ctx = context(provider)
+    ctx.mode = OperatingMode.LIVE
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.LONG
+    assert "BULLISH_RECLAIM" in decision.reason_codes
+    assert len(provider.requests) == 1
+    assert decision.metadata["combination_rule_version"] == "jev_reclaim_direction_v5"
+    assert decision.metadata["target_rule_version"] == "target_3r_v1"
+
+
+@pytest.mark.asyncio
 async def test_moderate_divergence_without_opposing_flow_reaches_jev():
     snapshot, _ = long_snapshot(
         breakout=False,

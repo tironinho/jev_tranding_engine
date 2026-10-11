@@ -1,8 +1,8 @@
-# baseline_weights_v3
+# baseline_weights_v4
 # Constantes de escala só comprimem grandezas típicas de cripto para [-1, 1].
 # Não são parâmetros otimizados. Não usar live sem calibração por backtest.
 
-version: baseline_weights_v3
+version: baseline_weights_v4
 weights:
   trend: 0.25
   momentum: 0.20
@@ -28,3 +28,6 @@ setup_5m_return_scale: 0.005
 return_60m_scale: 0.01
 imbalance_strong: 0.25
 volume_z_strong: 1.0
+# Reclaim é um setup separado: varrida estrutural recuperada com volume, momentum e fluxo.
+reclaim_min_abs_score: 0.40
+reclaim_min_volume_ratio: 1.50

@@ -17,7 +17,7 @@ class MockJevProvider:
     """
 
     provider_name = "mock"
-    provider_version = "mock-deterministic-v1"
+    provider_version = "mock-deterministic-v2"
 
     def __init__(self, prompt_version: str) -> None:
         self.prompt_version = prompt_version
@@ -28,7 +28,12 @@ class MockJevProvider:
         alignment = float(features.get("ema_alignment") or 0.0)
         flow = float(features.get("orderflow_delta_ratio") or 0.0)
         direction = 1.0 if (request.baseline_action or "LONG") == "LONG" else -1.0
-        continuation = _unit(alignment * direction)
+        structural_follow = 0.0
+        if direction > 0 and (features.get("breakout") is True or features.get("bullish_reclaim") is True):
+            structural_follow = 0.6
+        elif direction < 0 and (features.get("breakdown") is True or features.get("bearish_reclaim") is True):
+            structural_follow = 0.6
+        continuation = _unit(max(alignment * direction, structural_follow))
         atr_norm = float(features.get("atr_normalized") or 0.0)
         assessment = JevAssessment(
             provider="mock",

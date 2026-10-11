@@ -97,6 +97,7 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     candles_5m = closed_candles(state.candles.get("5m", []), as_of)
     candles_15m = closed_candles(state.candles.get("15m", []), as_of)
     closes = [candle.close for candle in candles_1m]
+    opens = [candle.open for candle in candles_1m]
     highs = [candle.high for candle in candles_1m]
     lows = [candle.low for candle in candles_1m]
     volumes = [candle.volume for candle in candles_1m]
@@ -298,6 +299,23 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
         features["distance_to_resistance"] = (price / prior_high - 1) if prior_high else None
         features["breakout"] = bool(closes[-1] > prior_high)
         features["breakdown"] = bool(closes[-1] < prior_low)
+        if len(highs) >= 22:
+            reclaim_window = min(5, len(highs) - 20)
+            reference_high = max(highs[-(20 + reclaim_window):-reclaim_window])
+            reference_low = min(lows[-(20 + reclaim_window):-reclaim_window])
+            current_bullish = closes[-1] > opens[-1]
+            current_bearish = closes[-1] < opens[-1]
+            swept_low = min(lows[-reclaim_window:]) < reference_low
+            swept_high = max(highs[-reclaim_window:]) > reference_high
+            features["bullish_reclaim"] = bool(
+                swept_low and current_bullish and closes[-1] > reference_low and closes[-1] > closes[-2]
+            )
+            features["bearish_reclaim"] = bool(
+                swept_high and current_bearish and closes[-1] < reference_high and closes[-1] < closes[-2]
+            )
+        else:
+            features["bullish_reclaim"] = False
+            features["bearish_reclaim"] = False
         span = prior_high - prior_low
         features["range_position"] = ((price - prior_low) / span) if span else None
     else:
@@ -315,6 +333,8 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
             features[name] = None
         features["breakout"] = None
         features["breakdown"] = None
+        features["bullish_reclaim"] = None
+        features["bearish_reclaim"] = None
 
     if state.market_type == MarketType.FUTURES.value:
         features["funding_rate"] = state.funding_rate

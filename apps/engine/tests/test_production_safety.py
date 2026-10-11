@@ -1,4 +1,5 @@
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -9,6 +10,7 @@ from app.providers.binance_account import _margin
 from app.execution.binance_live import BinanceExecutionProvider
 from app.domain.enums import Action, OrderStatus, OrderType
 from app.domain.schemas import OrderRecord
+from app.service import _consecutive_live_losses
 from tests.conftest import engine, settings, clock, long_snapshot, attach_book
 from tests.test_runtime import _open
 from tests.test_providers import _intent
@@ -55,6 +57,19 @@ def test_live_residual_does_not_consume_a_position_slot_or_block_the_symbol():
     assert context.open_positions == 0
     assert context.open_stop_risk == 0
     assert not context.has_position_on_symbol
+
+
+def test_live_loss_streak_uses_only_trailing_losses_from_current_utc_day():
+    now = clock()
+    trades = [
+        SimpleNamespace(mode="live", closed_at=now - timedelta(days=1), net_pnl=-1),
+        SimpleNamespace(mode="paper", closed_at=now - timedelta(minutes=4), net_pnl=-1),
+        SimpleNamespace(mode="live", closed_at=now - timedelta(minutes=3), net_pnl=1),
+        SimpleNamespace(mode="live", closed_at=now - timedelta(minutes=2), net_pnl=-1),
+        SimpleNamespace(mode="live", closed_at=now - timedelta(minutes=1), net_pnl=-2),
+    ]
+
+    assert _consecutive_live_losses(trades, now) == 2
 
 
 def test_partial_exit_preserves_remaining_position_margin_and_fee():

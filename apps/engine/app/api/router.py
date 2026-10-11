@@ -385,6 +385,7 @@ async def risk_limits(request: Request) -> dict:
         "min_protection_quote_reserve": limits.min_protection_quote_reserve,
         "min_expected_net_r": limits.min_expected_net_r,
         "live_longs_enabled": limits.live_longs_enabled,
+        "max_consecutive_live_losses": limits.max_consecutive_live_losses,
         "max_protection_recovery_attempts": limits.max_protection_recovery_attempts,
         "protection_retry_base_seconds": limits.protection_retry_base_seconds,
     }

@@ -501,6 +501,23 @@ class TradingEngine:
         if decision.action is Action.NO_TRADE:
             reasons = ",".join(decision.reason_codes[:4]) or "NO_REASON"
             self._log("decision", f"{key} {snapshot.symbol} NO_TRADE {decision.confidence:.3f} {reasons}")
+            if "JEV_UNAVAILABLE" in decision.reason_codes:
+                self._log("jev_unavailable", f"{snapshot.symbol} {_jev_error_class(decision.metadata.get('error'))}")
+        else:
+            metadata = decision.metadata or {}
+            plan = metadata.get("jev_trade_plan") or {}
+            self._log(
+                "decision_action",
+                f"{key} {snapshot.symbol} {decision.action.value} confidence={decision.confidence:.3f} "
+                f"continuation={_log_number(metadata.get('jev_continuation'))} "
+                f"required={_log_number(metadata.get('jev_required_continuation'))} "
+                f"reversal={_log_number(metadata.get('jev_reversal'))} "
+                f"false_breakout={_log_number(metadata.get('jev_false_breakout'))} "
+                f"expected_net_r={_log_number(plan.get('expected_net_r'))} "
+                f"plan={metadata.get('selected_plan_id') or plan.get('plan_id') or '-'} "
+                f"rule={metadata.get('combination_rule_version') or '-'} "
+                f"prompt={decision.prompt_version or '-'}",
+            )
         if self.health[key]["status"] != "error":
             self.health[key]["status"] = "ok"
         stored = self.store.add_decision(decision, context.artifacts)
@@ -657,7 +674,7 @@ class TradingEngine:
             context.realized_pnl_today = sum(
                 trade.net_pnl for account in self.accounts.accounts.values() for trade in account.trades
                 if trade.mode == "live" and trade.closed_at.astimezone(timezone.utc).date() == day)
-            report = reconcile(balance, self.positions_payload(), self._marks(), self.feed.rules)
+            report = reconcile(balance, self.positions_payload(mode="live"), self._marks(), self.feed.rules)
             if report["blocks_entry"]:
                 await self._record_risk(self.risk._reject(decision, ["ACCOUNT_RECONCILIATION_REQUIRED"], details=report))
                 return
@@ -667,7 +684,11 @@ class TradingEngine:
             await self.note_balance(balance)
         risk = self.risk.evaluate(decision, snapshot, context, fees, self.states[snapshot.symbol].book, extra_slot=extra_slot)
         await self._record_risk(risk)
-        if not risk.accepted or risk.economics is None:
+        if not risk.accepted:
+            reasons = ",".join(risk.reject_reasons[:4]) or "RISK_REJECTED"
+            self._log("live_risk_reject", f"{decision.symbol} {reasons}")
+            return
+        if risk.economics is None:
             return
         econ = risk.economics
         side = "BUY" if decision.action is Action.LONG else "SELL"
@@ -1411,6 +1432,7 @@ class TradingEngine:
             step_size=step,
             min_notional=min_notional,
             rules_required=live,
+            consecutive_live_losses=_consecutive_live_losses(account.trades, snapshot.timestamp) if live else 0,
         )
 
     def _error_decision(self, strategy: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, reason: str) -> StrategyDecision:
@@ -2040,6 +2062,47 @@ class TradingEngine:
         self.logs.add(item)
         self.store.add_event(kind, message)
         log.log(level, "%s %s", kind, message)
+
+
+def _consecutive_live_losses(trades: list, as_of: datetime) -> int:
+    """Count the current UTC day's trailing live losses for a strategy book."""
+    day = as_of.astimezone(timezone.utc).date()
+    closed = sorted(
+        (
+            trade
+            for trade in trades
+            if trade.mode == "live" and trade.closed_at.astimezone(timezone.utc).date() == day
+        ),
+        key=lambda trade: trade.closed_at,
+        reverse=True,
+    )
+    streak = 0
+    for trade in closed:
+        if trade.net_pnl >= 0:
+            break
+        streak += 1
+    return streak
+
+
+def _log_number(value) -> str:
+    return f"{float(value):.4f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "-"
+
+
+def _jev_error_class(value) -> str:
+    """Return an operational category without putting provider payloads in logs."""
+    error = str(value or "").lower()
+    if "timeout" in error or "timed out" in error:
+        return "timeout"
+    if "jev_http_" in error:
+        marker = error.split("jev_http_", 1)[1].split()[0]
+        return f"http_{marker}" if marker.isdigit() else "http_error"
+    if "connect" in error or "network" in error or "dns" in error:
+        return "connection_error"
+    if "json" in error or "noul" in error or "validation" in error:
+        return "invalid_response"
+    if "empty" in error or "not available" in error:
+        return "configuration_error"
+    return "provider_error"
 
 
 def _extreme(batch: list[dict]) -> dict:

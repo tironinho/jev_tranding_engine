@@ -36,6 +36,9 @@ def configure_logging(level: str = "INFO", json_logs: bool = False) -> None:
                     "filters": ["context"],
                 }
             },
+            # httpx logs complete request URLs at INFO. Binance signed query
+            # strings must not be copied into application logs.
+            "loggers": {"httpx": {"level": "WARNING"}},
             "root": {"handlers": ["stdout"], "level": level.upper()},
         }
     )

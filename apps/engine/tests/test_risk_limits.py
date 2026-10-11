@@ -7,6 +7,7 @@ from app.domain.enums import (
     EXISTING_POSITION,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
+    MAX_CONSECUTIVE_LIVE_LOSSES,
     MAX_OPEN_POSITIONS,
     MAX_TOTAL_EXPOSURE,
     SPOT_SHORT_NOT_SUPPORTED,
@@ -166,6 +167,42 @@ def test_drawdown_and_daily_loss_reject():
         book,
     )
     assert MAX_DAILY_LOSS in loss.reject_reasons
+
+
+def test_three_consecutive_live_losses_pause_new_entries():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    from app.domain.schemas import StrategyDecision
+    from app.domain.enums import OperatingMode
+
+    decision = StrategyDecision(
+        correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id,
+        snapshot_id=snapshot.snapshot_id,
+        strategy="baseline_jev",
+        symbol="BTCUSDT",
+        timestamp=snapshot.timestamp,
+        action=Action.SHORT,
+        confidence=0.8,
+        reason_codes=["TREND_DOWN"],
+        mode=OperatingMode.LIVE,
+    )
+    rejected = eng.risk.evaluate(
+        decision,
+        snapshot,
+        _context(
+            live_requested=True,
+            live_armed=True,
+            persistence_ok=True,
+            consecutive_live_losses=3,
+            step_size=0.001,
+            rules_required=True,
+        ),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+
+    assert MAX_CONSECUTIVE_LIVE_LOSSES in rejected.reject_reasons
 
 
 def test_kill_switch_blocks_new_risk():

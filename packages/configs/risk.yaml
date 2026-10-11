@@ -23,6 +23,9 @@ min_expected_net_r: 0.10
 # A amostra live atual dos longs é negativa; eles continuam no paper para
 # revalidação sem colocar capital real em risco.
 live_longs_enabled: false
+# Três perdas live consecutivas pausam novas entradas até o próximo dia UTC.
+# O paper continua coletando evidência durante a pausa.
+max_consecutive_live_losses: 3
 max_protection_recovery_attempts: 5
 protection_retry_base_seconds: 2
 atr_buffer_mult: 0.10

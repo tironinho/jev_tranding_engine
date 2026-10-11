@@ -16,6 +16,7 @@ from app.domain.enums import (
     INSUFFICIENT_PROTECTION_BALANCE,
     LIVE_LONG_DISABLED,
     LIVE_LOCKED,
+    MAX_CONSECUTIVE_LIVE_LOSSES,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
     MAX_OPEN_POSITIONS,
@@ -69,6 +70,7 @@ class RiskContext:
     last_stop_at: datetime | None = None
     open_stop_risk: float = 0.0
     quote_free: float | None = None
+    consecutive_live_losses: int = 0
 
 
 @dataclass
@@ -146,6 +148,8 @@ class RiskEngine:
                 reasons.append(EXCHANGE_RULES_UNAVAILABLE)
             if context.margin_level is not None and context.margin_level < self.limits.min_margin_level:
                 reasons.append(MARGIN_LEVEL)
+            if context.consecutive_live_losses >= self.limits.max_consecutive_live_losses:
+                reasons.append(MAX_CONSECUTIVE_LIVE_LOSSES)
         elif decision.mode.value == "paper" and not context.persistence_ok:
             reasons.append(PERSISTENCE_UNAVAILABLE)
         if context.market_type == MarketType.SPOT.value and decision.action is Action.SHORT:

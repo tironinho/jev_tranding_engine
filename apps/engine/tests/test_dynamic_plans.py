@@ -146,7 +146,28 @@ async def test_live_never_promotes_a_subthreshold_baseline_candidate():
 
     assert decision.action is Action.NO_TRADE
     assert BASELINE_NO_TRADE in decision.reason_codes
-    assert not provider.requests
+    assert BASELINE_CONTEXT_CANDIDATE in decision.reason_codes
+    assert provider.requests
+    assert decision.metadata["jev_effect"] == "shadow_confirm"
+    assert decision.metadata["jev_shadow_action"] == Action.LONG
+    assert decision.metadata["jev_evaluation_mode"] == "READ_ONLY_SHADOW"
+
+
+@pytest.mark.asyncio
+async def test_live_shadow_records_a_veto_without_promoting_the_candidate():
+    snapshot, _ = long_snapshot()
+    provider = PlansProvider({"*": .2})
+    ctx = context(provider)
+    ctx.mode = OperatingMode.LIVE
+    ctx.weights = replace(ctx.weights, min_abs_score=.95)
+
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert decision.action is Action.NO_TRADE
+    assert provider.requests
+    assert decision.metadata["jev_effect"] == "shadow_veto"
+    assert decision.metadata["jev_shadow_action"] == Action.NO_TRADE
+    assert decision.metadata["jev_continuation"] == pytest.approx(.2)
 
 
 @pytest.mark.asyncio

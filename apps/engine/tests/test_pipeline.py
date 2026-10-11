@@ -368,6 +368,45 @@ async def test_jev_review_shows_decision_when_model_was_not_called():
     assert rows[0]["response"]["trend_continuation_probability"] is None
 
 
+def test_jev_review_distinguishes_live_shadow_candidate_from_final_action():
+    eng = engine()
+    decision_id = "shadow-decision"
+    rows = eng._format_jev_reviews(
+        [
+            (
+                {
+                    "decision_id": decision_id,
+                    "request": {"symbol": "BTCUSDT"},
+                    "response": {
+                        "sent_request": {"state": {"baseline_action": "LONG", "baseline_confidence": 0.2}},
+                        "trend_continuation_probability": 0.7,
+                    },
+                },
+                {
+                    "decision_id": decision_id,
+                    "symbol": "BTCUSDT",
+                    "timestamp": clock().isoformat(),
+                    "action": "NO_TRADE",
+                    "confidence": 0.2,
+                    "metadata": {
+                        "baseline_action": "NO_TRADE",
+                        "candidate_action": "LONG",
+                        "jev_shadow_action": "LONG",
+                        "jev_effect": "shadow_confirm",
+                    },
+                },
+            )
+        ],
+        5,
+    )
+
+    assert rows[0]["action"] == "NO_TRADE"
+    assert rows[0]["jev_action"] == "LONG"
+    assert rows[0]["effect"] == "shadow_confirm"
+    assert rows[0]["state"]["baseline_action"] == "NO_TRADE"
+    assert rows[0]["state"]["candidate_action"] == "LONG"
+
+
 @pytest.mark.asyncio
 async def test_jev_review_uses_postgres_history_after_restart():
     eng = engine()

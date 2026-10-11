@@ -15,7 +15,7 @@ A janela posterior ao deploy das 17:24 UTC contém 140 avaliações por estraté
 | Falhas `JEV_UNAVAILABLE` | 0 |
 | Ordens live enviadas | 0 |
 
-Dos 129 bloqueios da baseline, 126 ficaram abaixo do score mínimo absoluto de 0,55. Os demais motivos se sobrepõem: 59 decisões divergentes, 35 com fluxo contra a direção e 28 com baixa liquidez. Em modo live, candidatos abaixo do threshold não chegam ao JEV. A baseline é, portanto, o primeiro gargalo.
+Dos 129 bloqueios da baseline, 126 ficaram abaixo do score mínimo absoluto de 0,55. Os demais motivos se sobrepõem: 59 decisões divergentes, 35 com fluxo contra a direção e 28 com baixa liquidez. Na versão analisada, candidatos abaixo do threshold não chegavam ao JEV em modo live. A baseline era, portanto, o primeiro gargalo.
 
 Os 11 sinais que passaram pela baseline eram LONG, com confiança de 0,55 a 0,686. O JEV respondeu normalmente, mas recusou todos por probabilidade de continuação abaixo de 0,55. Não houve veto por reversão, falso rompimento, qualidade de inteligência ou expectativa líquida. Mesmo que algum desses sinais tivesse sido confirmado, o risco live recusaria a entrada porque `live_longs_enabled` permanece falso após a amostra live negativa.
 
@@ -46,6 +46,8 @@ O estado enviado ao JEV agora inclui apenas valores normalizados, sem preços ab
 Os vetos agora registram probabilidade de continuação, piso exigido, reversão, falso rompimento, expectativa líquida, probabilidade sob estresse e plano avaliado. Isso permite calibrar o JEV com dados observados em vez de ajustar o threshold por impressão.
 
 Também foi adicionado um analista Binance determinístico em modo `READ_ONLY_SHADOW`. Ele consolida os dados públicos já coletados pela engine em tendência, momentum, fluxo, liquidez, volatilidade, alertas de risco, viés direcional e qualidade. O resultado é persistido nos metadados de cada decisão, aparece nos logs inclusive quando a baseline encerra antes do JEV e segue no contexto do JEV quando as fontes externas estão incompletas. O componente declara `can_execute=false`: ele fornece contexto e nunca envia nem autoriza ordens.
+
+Para formar uma amostra de calibração, candidatos coerentes com score absoluto de pelo menos 0,15 agora também chegam ao JEV em modo live como leitura sombra. A tela separa a ação original da baseline, a direção candidata avaliada e o que o JEV teria decidido. Mesmo quando o JEV confirma, a decisão final continua `NO_TRADE` se a baseline original não atingiu 0,55. Sinais fracos, dados insuficientes e bloqueadores estruturais continuam sem chamada.
 
 ## Como usar Binance AI Agent Skills
 

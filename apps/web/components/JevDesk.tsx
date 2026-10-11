@@ -10,6 +10,7 @@ export type JevReview = {
   symbol?: string;
   timestamp?: string;
   action?: string;
+  jev_action?: string;
   confidence?: number;
   effect?: string;
   required_continuation?: number | null;
@@ -18,6 +19,7 @@ export type JevReview = {
   state?: {
     symbol?: string;
     baseline_action?: string;
+    candidate_action?: string;
     baseline_confidence?: number;
     baseline_scores?: Record<string, number | null>;
     taker_flow_1m?: number | null;
@@ -52,6 +54,9 @@ const EFFECTS: Record<string, string> = {
   fallback: "BASELINE",
   idle: "NÃO CHAMADO",
   not_called: "SEM PLANO",
+  shadow_confirm: "SOMBRA · APROVARIA",
+  shadow_veto: "SOMBRA · VETOU",
+  shadow_unavailable: "SOMBRA · ERRO",
 };
 
 const SCORES: Array<[string, string]> = [
@@ -126,11 +131,14 @@ function Reading({ review, execution }: { review: JevReview; execution?: JevExec
           <div>
             <div className="text-[11px] text-mute">BASELINE PEDIU</div>
             <div className="font-mono text-2xl">{state.baseline_action ?? "NO DATA"}</div>
-            <div className="font-mono text-[11px] text-mute">score {pct(state.baseline_confidence ?? null)} · não é probabilidade</div>
+            <div className="font-mono text-[11px] text-mute">
+              score {pct(state.baseline_confidence ?? null)} · não é probabilidade
+              {state.candidate_action ? ` · candidato sombra ${state.candidate_action}` : ""}
+            </div>
           </div>
           <div className="text-right">
             <div className="text-[11px] text-mute">JEV DEVOLVEU</div>
-            <div className="font-mono text-2xl">{review.action ?? "NO DATA"}</div>
+            <div className="font-mono text-2xl">{review.jev_action ?? review.action ?? "NO DATA"}</div>
             <div className="font-mono text-[11px] text-mute">
               {answer.is_mock ? "MOCK" : answer.model ?? "NO DATA"}
               {answer.latency_ms != null ? ` · ${Math.round(answer.latency_ms)} ms` : ""}
@@ -345,7 +353,8 @@ function effectText(effect?: string, error?: string | null) {
 
 function effectClass(effect?: string, error?: string | null) {
   if (effect === "confirm") return "text-[#3ddc97]";
-  if (effect === "veto" || error) return "text-[#ff6b6b]";
+  if (effect === "shadow_confirm") return "text-[#f3c969]";
+  if (effect === "veto" || effect === "shadow_veto" || effect === "shadow_unavailable" || error) return "text-[#ff6b6b]";
   return "text-mute";
 }
 

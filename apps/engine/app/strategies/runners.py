@@ -126,21 +126,9 @@ class BaselineJevStrategy:
         }
         _stamp_binance_agent(metadata, context.intelligence)
         context_candidate = False
+        live_context_shadow = False
+        baseline_result = result
         if result.action is Action.NO_TRADE:
-            if context.mode is OperatingMode.LIVE:
-                metadata["jev_effect"] = "idle"
-                return _decision(
-                    context=context,
-                    snapshot=snapshot,
-                    strategy=self.key,
-                    action=Action.NO_TRADE,
-                    confidence=result.confidence,
-                    reasons=[BASELINE_NO_TRADE, *result.reason_codes],
-                    metadata=metadata,
-                    model_version=result.version,
-                    prompt_version=None,
-                    started=started,
-                )
             candidate_action = _context_candidate_action(result, context.combination)
             if candidate_action is None:
                 metadata["jev_effect"] = "idle"
@@ -157,19 +145,22 @@ class BaselineJevStrategy:
                     started=started,
                 )
             context_candidate = True
+            live_context_shadow = context.mode is OperatingMode.LIVE
             metadata.update(
                 baseline_action=Action.NO_TRADE.value,
                 candidate_action=candidate_action.value,
                 candidate_min_abs_score=context.combination.candidate_min_abs_score,
+                jev_evaluation_mode="READ_ONLY_SHADOW" if live_context_shadow else "ACTIVE",
             )
             result = replace(result, action=candidate_action)
         request = _jev_request(context, snapshot, result)
         metadata["jev_trade_plan"] = request.trade_plan
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
-            return blocked
+            return _force_live_context_shadow(blocked, baseline_result) if live_context_shadow else blocked
         if context.risk and context.risk.dynamic_rr_enabled:
-            return await _dynamic_decision(context, snapshot, result, metadata, started)
+            decision = await _dynamic_decision(context, snapshot, result, metadata, started)
+            return _force_live_context_shadow(decision, baseline_result) if live_context_shadow else decision
         try:
             assessment = await context.jev.evaluate_market_state(request)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
@@ -190,7 +181,8 @@ class BaselineJevStrategy:
                     prompt_version=request.prompt_version,
                     started=started,
                 )
-            return _decision(
+            metadata["jev_effect"] = "unavailable"
+            decision = _decision(
                 context=context,
                 snapshot=snapshot,
                 strategy=self.key,
@@ -202,6 +194,7 @@ class BaselineJevStrategy:
                 prompt_version=request.prompt_version,
                 started=started,
             )
+            return _force_live_context_shadow(decision, baseline_result) if live_context_shadow else decision
         context.artifacts.append(
             {
                 "kind": "jev",
@@ -226,7 +219,7 @@ class BaselineJevStrategy:
         )
         _stamp_size(metadata, assessment, required, broke, action)
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
-        return _decision(
+        decision = _decision(
             context=context,
             snapshot=snapshot,
             strategy=self.key,
@@ -238,6 +231,7 @@ class BaselineJevStrategy:
             prompt_version=assessment.prompt_version,
             started=started,
         )
+        return _force_live_context_shadow(decision, baseline_result) if live_context_shadow else decision
 
 
 _CONTEXT_CANDIDATE_BLOCKERS = {
@@ -266,6 +260,24 @@ def _context_candidate_action(result: BaselineResult, config: CombinationConfig)
     if result.composite < 0:
         return Action.SHORT
     return None
+
+
+def _force_live_context_shadow(decision: StrategyDecision, baseline_result: BaselineResult) -> StrategyDecision:
+    """Persist the JEV assessment without promoting a rejected live baseline."""
+    metadata = dict(decision.metadata)
+    effect = metadata.get("jev_effect")
+    metadata["jev_shadow_action"] = decision.action.value
+    if effect in {"confirm", "veto", "unavailable"}:
+        metadata["jev_effect"] = f"shadow_{effect}"
+    reasons = list(dict.fromkeys([BASELINE_NO_TRADE, *decision.reason_codes]))
+    return decision.model_copy(
+        update={
+            "action": Action.NO_TRADE,
+            "confidence": baseline_result.confidence,
+            "reason_codes": reasons,
+            "metadata": metadata,
+        }
+    )
 
 
 async def _dynamic_decision(context, snapshot, result, metadata, started):

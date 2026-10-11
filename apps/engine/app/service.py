@@ -509,6 +509,15 @@ class TradingEngine:
                     f" agent_quality={_log_number(metadata.get('binance_agent_quality'))}"
                 )
             self._log("decision", f"{key} {snapshot.symbol} NO_TRADE {decision.confidence:.3f} {reasons}{agent}")
+            if str(metadata.get("jev_effect") or "").startswith("shadow_"):
+                self._log(
+                    "decision_shadow",
+                    f"{key} {snapshot.symbol} candidate={metadata.get('candidate_action') or '-'} "
+                    f"jev_result={metadata.get('jev_shadow_action') or '-'} "
+                    f"continuation={_log_number(metadata.get('jev_continuation'))} "
+                    f"required={_log_number(metadata.get('jev_required_continuation'))} "
+                    f"effect={metadata.get('jev_effect')}",
+                )
             if metadata.get("jev_effect") == "veto":
                 plan = metadata.get("jev_trade_plan") or {}
                 self._log(
@@ -1883,12 +1892,18 @@ class TradingEngine:
                     "baseline_class": meta.get("market_class"),
                     "baseline_labels": meta.get("class_labels") or [],
                 }
+            else:
+                state = dict(state)
+            state["baseline_action"] = meta.get("baseline_action") or state.get("baseline_action")
+            if meta.get("candidate_action"):
+                state["candidate_action"] = meta["candidate_action"]
             rows.append(
                 {
                     "decision_id": str(call.get("decision_id")),
                     "symbol": decision.get("symbol") or request.get("symbol"),
                     "timestamp": decision.get("timestamp"),
                     "action": decision.get("action"),
+                    "jev_action": meta.get("jev_shadow_action") or decision.get("action"),
                     "confidence": decision.get("confidence"),
                     "effect": meta.get("jev_effect"),
                     "required_continuation": meta.get("jev_required_continuation"),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -153,7 +154,7 @@ def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
 def _normalized_state(payload: dict) -> dict[str, Any]:
     """Scores and unitless features only. Dollar prices stay off the request."""
     features = payload.get("features") or {}
-    frac = features.get("range_60m_frac")
+    frac = _finite(features.get("range_60m_frac"))
     state = {
         "symbol": payload.get("symbol"),
         "market_type": payload.get("market_type"),
@@ -162,12 +163,29 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "baseline_scores": payload.get("baseline_scores") or {},
         "baseline_class": payload.get("baseline_class"),
         "baseline_labels": payload.get("baseline_labels") or [],
-        "taker_flow_1m": features.get("taker_flow_1m"),
-        "return_60m": features.get("return_60m"),
-        "setup_5m_return": features.get("setup_5m_return"),
-        "context_15m_slope": features.get("context_15m_slope"),
-        "price_vs_ema20_15m": features.get("price_vs_ema20_15m"),
-        "range_60m": float(frac) if isinstance(frac, (int, float)) else None,
+        "return_1m": _finite(features.get("return_1m")),
+        "return_5m": _finite(features.get("return_5m")),
+        "return_15m": _finite(features.get("return_15m")),
+        "return_60m": _finite(features.get("return_60m")),
+        "setup_5m_return": _finite(features.get("setup_5m_return")),
+        "context_15m_slope": _finite(features.get("context_15m_slope")),
+        "price_vs_ema20_15m": _finite(features.get("price_vs_ema20_15m")),
+        "rsi": _finite(features.get("rsi")),
+        "roc": _finite(features.get("roc")),
+        "atr_normalized": _finite(features.get("atr_normalized")),
+        "realized_volatility": _finite(features.get("realized_volatility")),
+        "volume_ratio": _finite(features.get("volume_ratio")),
+        "volume_zscore": _finite(features.get("volume_zscore")),
+        "taker_flow_1m": _finite(features.get("taker_flow_1m")),
+        "taker_flow_5m": _finite(features.get("taker_flow_5m")),
+        "orderflow_delta_ratio": _finite(features.get("orderflow_delta_ratio")),
+        "book_imbalance_5": _finite(features.get("imbalance_5")),
+        "book_imbalance_10": _finite(features.get("imbalance_10")),
+        "book_imbalance_20": _finite(features.get("imbalance_20")),
+        "spread_bps": _finite(features.get("spread_bps")),
+        "range_position": _finite(features.get("range_position")),
+        "distance_to_vwap": _finite(features.get("distance_to_vwap")),
+        "range_60m": frac,
         "breakout": features.get("breakout"),
         "breakdown": features.get("breakdown"),
         "bullish_reclaim": features.get("bullish_reclaim"),
@@ -177,10 +195,21 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     if isinstance(plan, dict):
         # Ratios and time are enough to assess the outcome. Absolute prices stay
         # out of the provider request.
+        entry = _positive(plan.get("entry"))
+        stop = _positive(plan.get("stop"))
+        target = _positive(plan.get("target"))
+        stop_distance = abs(entry - stop) / entry if entry and stop else None
+        target_distance = abs(target - entry) / entry if entry and target else None
+        atr_fraction = _positive(features.get("atr_normalized"))
         state["trade_plan"] = {
             "gross_rr": plan.get("gross_rr"),
             "net_rr": plan.get("net_rr"),
             "break_even_probability": plan.get("break_even_probability"),
+            "stop_distance_fraction": stop_distance,
+            "target_distance_fraction": target_distance,
+            "stop_atr_multiple": stop_distance / atr_fraction if stop_distance is not None and atr_fraction else None,
+            "target_atr_multiple": target_distance / atr_fraction if target_distance is not None and atr_fraction else None,
+            "target_range_multiple": target_distance / frac if target_distance is not None and frac else None,
             "horizon_minutes": plan.get("horizon_minutes"),
             "round_trip_fee_rate": plan.get("round_trip_fee_rate"),
             "stress_bps": plan.get("stress_bps"),
@@ -190,6 +219,18 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     if intelligence is not None:
         state["intelligence"] = intelligence
     return state
+
+
+def _finite(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _positive(value: object) -> float | None:
+    number = _finite(value)
+    return number if number is not None and number > 0 else None
 
 
 def _noul_probabilities(body: object) -> dict[str, float]:

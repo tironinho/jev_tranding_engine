@@ -202,7 +202,18 @@ async def test_real_jev_calls_only_the_configured_url():
             "price": 50000,
             "range_60m": 500,
             "range_60m_frac": 0.01,
+            "return_1m": 0.001,
+            "return_5m": 0.003,
+            "return_15m": 0.006,
             "taker_flow_1m": -0.2,
+            "taker_flow_5m": -0.1,
+            "imbalance_5": -0.3,
+            "imbalance_10": -0.25,
+            "imbalance_20": -0.15,
+            "spread_bps": 1.5,
+            "atr_normalized": 0.004,
+            "volume_ratio": 1.2,
+            "rsi": 42,
             "return_60m": 0.004,
             "breakout": False,
             "breakdown": True,
@@ -253,10 +264,18 @@ async def test_real_jev_calls_only_the_configured_url():
             assert json["state"]["baseline_labels"] == ["CLASS_ALIGNED", "BREAKDOWN"]
             assert json["state"]["range_60m"] == 0.01
             assert json["state"]["taker_flow_1m"] == -0.2
+            assert json["state"]["book_imbalance_10"] == -0.25
+            assert json["state"]["spread_bps"] == 1.5
+            assert json["state"]["volume_ratio"] == 1.2
             assert json["state"]["trade_plan"] == {
                 "gross_rr": None,
                 "net_rr": None,
                 "break_even_probability": None,
+                "stop_distance_fraction": pytest.approx(0.01),
+                "target_distance_fraction": pytest.approx(0.03),
+                "stop_atr_multiple": pytest.approx(2.5),
+                "target_atr_multiple": pytest.approx(7.5),
+                "target_range_multiple": pytest.approx(3.0),
                 "horizon_minutes": 60,
                 "round_trip_fee_rate": None,
                 "stress_bps": None,

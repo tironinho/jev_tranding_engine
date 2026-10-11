@@ -501,6 +501,20 @@ class TradingEngine:
         if decision.action is Action.NO_TRADE:
             reasons = ",".join(decision.reason_codes[:4]) or "NO_REASON"
             self._log("decision", f"{key} {snapshot.symbol} NO_TRADE {decision.confidence:.3f} {reasons}")
+            metadata = decision.metadata or {}
+            if metadata.get("jev_effect") == "veto":
+                plan = metadata.get("jev_trade_plan") or {}
+                self._log(
+                    "decision_veto",
+                    f"{key} {snapshot.symbol} reasons={reasons} "
+                    f"continuation={_log_number(metadata.get('jev_continuation'))} "
+                    f"required={_log_number(metadata.get('jev_required_continuation'))} "
+                    f"reversal={_log_number(metadata.get('jev_reversal'))} "
+                    f"false_breakout={_log_number(metadata.get('jev_false_breakout'))} "
+                    f"expected_net_r={_log_number(plan.get('expected_net_r'))} "
+                    f"stress_probability={_log_number(plan.get('stress_probability'))} "
+                    f"plan={metadata.get('best_assessed_plan_id') or plan.get('plan_id') or '-'}",
+                )
             if "JEV_UNAVAILABLE" in decision.reason_codes:
                 self._log(
                     "jev_unavailable",

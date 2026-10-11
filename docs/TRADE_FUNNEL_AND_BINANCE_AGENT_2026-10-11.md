@@ -45,6 +45,8 @@ O estado enviado ao JEV agora inclui apenas valores normalizados, sem preços ab
 
 Os vetos agora registram probabilidade de continuação, piso exigido, reversão, falso rompimento, expectativa líquida, probabilidade sob estresse e plano avaliado. Isso permite calibrar o JEV com dados observados em vez de ajustar o threshold por impressão.
 
+Também foi adicionado um analista Binance determinístico em modo `READ_ONLY_SHADOW`. Ele consolida os dados públicos já coletados pela engine em tendência, momentum, fluxo, liquidez, volatilidade, alertas de risco, viés direcional e qualidade. O resultado é persistido nos metadados de cada decisão, aparece nos logs inclusive quando a baseline encerra antes do JEV e segue no contexto do JEV quando as fontes externas estão incompletas. O componente declara `can_execute=false`: ele fornece contexto e nunca envia nem autoriza ordens.
+
 ## Como usar Binance AI Agent Skills
 
 O pacote oficial da Binance é uma coleção de skills que orienta agentes a usar o `binance-cli`. Ele oferece dados públicos, endpoints Spot, Futures e Margin, consulta de conta e execução. Ele não é um novo modelo de previsão e não deve substituir o executor determinístico da engine.
@@ -60,6 +62,8 @@ Para pesquisa local, a instalação documentada pela Binance é:
 ```bash
 npx skills add https://github.com/binance/binance-skills-hub
 ```
+
+A skill oficial foi instalada no ambiente local do Codex. Ela ficará disponível em uma nova sessão do Codex. O `binance-cli` atual não oferece binário nativo para Windows, portanto não foi incorporado ao processo da engine. A aplicação continua usando diretamente as APIs oficiais já integradas, que também são adequadas ao contêiner Linux do Render e preservam o caminho de risco e execução existente.
 
 O ambiente requer Node.js 22 ou superior. Dados públicos não precisam de chave. Consultas de conta devem usar uma chave read-only. Se a skill for usada para testes de execução, deve começar no Testnet. Em mainnet, a chave deve ter restrição de IP, permissão mínima, saques desabilitados e saldo limitado em subconta.
 

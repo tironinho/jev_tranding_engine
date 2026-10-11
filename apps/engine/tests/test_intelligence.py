@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.intelligence.binance_agent import build_binance_agent_context
 from app.intelligence.asof import asof_backward
 from app.intelligence.freshness import age_seconds, freshness
 from app.intelligence.normalize import (
@@ -111,3 +112,37 @@ def test_raw_observation_keeps_a_null_value():
         received_at=now,
     )
     assert row.value is None
+
+
+def test_binance_agent_is_read_only_and_summarizes_exchange_features():
+    context = build_binance_agent_context(
+        {
+            "ema_alignment": 1.0,
+            "return_15m": 0.01,
+            "context_15m_slope": 0.005,
+            "price_vs_ema20_15m": 0.01,
+            "roc": 0.004,
+            "return_5m": 0.005,
+            "rsi": 65,
+            "taker_flow_1m": 0.6,
+            "taker_flow_5m": 0.4,
+            "orderflow_delta_ratio": 0.5,
+            "imbalance_5": 0.4,
+            "imbalance_10": 0.3,
+            "imbalance_20": 0.2,
+            "spread_bps": 1.0,
+            "volume_ratio": 1.4,
+            "atr_normalized": 0.005,
+        }
+    )
+    assert context["mode"] == "READ_ONLY_SHADOW"
+    assert context["can_execute"] is False
+    assert context["state"] == "BULLISH"
+    assert context["directional_bias"] > 0
+    assert context["quality"] == 1.0
+
+
+def test_binance_agent_withholds_a_bias_when_data_is_thin():
+    context = build_binance_agent_context({"spread_bps": 12.0})
+    assert context["state"] == "INSUFFICIENT_DATA"
+    assert context["risk_flags"] == ["WIDE_SPREAD"]

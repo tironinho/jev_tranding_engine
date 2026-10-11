@@ -21,6 +21,11 @@ _ONCHAIN = (
     "A missing field is unknown, not zero. valuation_stretch and activity are not a side."
 )
 
+_BINANCE_AGENT = (
+    " binance_agent is a read-only deterministic grouping of the same Binance market fields. "
+    "It is not an order or independent evidence, so do not count it twice."
+)
+
 _INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
@@ -30,13 +35,15 @@ _INSTRUCTIONS = {
         "distance, stop distance, trend, momentum, order flow, break or reclaim quality, and market context. "
         "When no trade_plan is present, estimate directional follow-through over the stated horizon."
     )
-    + _ONCHAIN,
-    "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
+    + _ONCHAIN
+    + _BINANCE_AGENT,
+    "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN + _BINANCE_AGENT,
     "false_breakout_probability": (
         "The break or reclaim named in `baseline_class` fails and returns through its structural level. "
         "If the class has no break or reclaim, stay near 0.5."
     )
-    + _ONCHAIN,
+    + _ONCHAIN
+    + _BINANCE_AGENT,
 }
 
 _UNUSED_NOULS = {
@@ -147,8 +154,36 @@ def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
     quality = intelligence.get("data_quality")
     overall = quality.get("overall") if isinstance(quality, dict) else None
     if isinstance(overall, (int, float)) and overall < min_quality:
+        # External feeds can be thin while the Binance snapshot is complete.
+        # Keep only high-quality exchange-native summaries instead of dropping
+        # useful book/trade evidence together with missing third-party data.
+        retained = _exchange_native_intelligence(intelligence, min_quality)
+        if retained:
+            state["intelligence"] = retained
+            return state
         return {key: value for key, value in state.items() if key != "intelligence"}
     return state
+
+
+def _exchange_native_intelligence(intelligence: dict, min_quality: float) -> dict[str, Any]:
+    kept: dict[str, Any] = {}
+    agent = intelligence.get("binance_agent")
+    if isinstance(agent, dict) and _quality(agent) >= min_quality:
+        kept["binance_agent"] = agent
+    micro = intelligence.get("microstructure")
+    if isinstance(micro, dict) and _quality(micro) >= min_quality:
+        kept["microstructure"] = micro
+    if kept:
+        kept["data_quality"] = {
+            "scope": "exchange_native_only",
+            "overall": min((_quality(value) for key, value in kept.items() if key != "data_quality"), default=0.0),
+        }
+    return kept
+
+
+def _quality(value: dict) -> float:
+    raw = value.get("quality")
+    return float(raw) if isinstance(raw, (int, float)) and math.isfinite(raw) else 0.0
 
 
 def _normalized_state(payload: dict) -> dict[str, Any]:

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from app.domain.mathutil import ensure_utc
 from app.intelligence.asof import asof_backward
+from app.intelligence.binance_agent import build_binance_agent_context
 from app.intelligence.freshness import age_seconds, freshness
 from app.intelligence.normalize import (
     direction_of,
@@ -71,6 +72,7 @@ def build_context(
         "feature_set_version": "jev_feature_set_v1",
         "symbol": symbol,
         "timestamp": ensure_utc(now).isoformat(),
+        "binance_agent": build_binance_agent_context(features),
         "microstructure": micro,
         "derivatives": derivatives,
         "sentiment": sentiment,
@@ -301,6 +303,7 @@ def jev_view(payload: dict | None, baseline_action: str | None) -> dict | None:
     if not isinstance(payload, dict):
         return None
     return {
+        "binance_agent": payload.get("binance_agent"),
         "microstructure": payload.get("microstructure"),
         "derivatives": _without(payload.get("derivatives"), {"oi_usd", "margin_price_index"}),
         "sentiment": _sentiment_view(payload.get("sentiment")),

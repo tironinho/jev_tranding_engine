@@ -124,6 +124,7 @@ class BaselineJevStrategy:
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.jev_rule_version,
         }
+        _stamp_binance_agent(metadata, context.intelligence)
         context_candidate = False
         if result.action is Action.NO_TRADE:
             if context.mode is OperatingMode.LIVE:
@@ -554,6 +555,19 @@ def _stamp_size(metadata: dict, assessment, required: float, broke: bool, action
     if action is Action.NO_TRADE:
         return
     metadata["size_scale"] = break_size_scale(assessment.trend_continuation_probability, required, broke)
+
+
+def _stamp_binance_agent(metadata: dict, intelligence: dict | None) -> None:
+    if not isinstance(intelligence, dict):
+        return
+    agent = intelligence.get("binance_agent")
+    if not isinstance(agent, dict):
+        return
+    metadata["binance_agent_version"] = agent.get("version")
+    metadata["binance_agent_state"] = agent.get("state")
+    metadata["binance_agent_bias"] = agent.get("directional_bias")
+    metadata["binance_agent_quality"] = agent.get("quality")
+    metadata["binance_agent_risk_flags"] = list(agent.get("risk_flags") or [])
 
 
 def _jev_request(

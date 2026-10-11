@@ -354,6 +354,50 @@ async def test_thin_external_context_stays_off_the_jev_question():
     assert client.body["state"]["intelligence"]["data_quality"]["overall"] == 0.82
 
 
+@pytest.mark.asyncio
+async def test_high_quality_binance_agent_survives_thin_external_context():
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            names = ("trend_continuation_probability", "reversal_probability", "false_breakout_probability")
+            return {"answers": {name: {"noul": 0.6} for name in names}}
+
+    class _Client:
+        body = None
+
+        async def post(self, url, headers=None, json=None, timeout=None):
+            self.body = json
+            return _Response()
+
+    client = _Client()
+    provider = RealJevProvider(
+        prompt_version="jev_market_v1",
+        base_url="https://jev.example/evaluate",
+        api_key="secret",
+        model="m",
+        client=client,
+    )
+    request = JevMarketRequest(
+        prompt_version="jev_market_v1",
+        symbol="BTCUSDT",
+        market_type="margin",
+        timestamp=clock(),
+        features={"range_60m_frac": 0.01},
+        baseline_action="LONG",
+        intelligence={
+            "data_quality": {"overall": 0.4},
+            "binance_agent": {"state": "BULLISH", "quality": 0.94, "can_execute": False},
+            "sentiment": {"quality": 0.1},
+        },
+    )
+    await provider.evaluate_market_state(request)
+    sent = client.body["state"]["intelligence"]
+    assert sent["binance_agent"]["state"] == "BULLISH"
+    assert sent["data_quality"]["scope"] == "exchange_native_only"
+    assert "sentiment" not in sent
+
+
 def test_prompt_v1_refuses_orders_and_is_locked():
     text = get_prompt("market_interpreter_v1")
     assert "do not place orders" in text.lower()

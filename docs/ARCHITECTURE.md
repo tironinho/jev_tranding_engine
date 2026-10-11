@@ -140,7 +140,7 @@ Versões gravadas em toda decisão:
 - `jev_reclaim_direction_v5` / `target_3r_v1`
 - `openai_jev_break_size_v1`
 - `market_interpreter_v1` (prompt OpenAI; versão nova = chave nova, sem edição silenciosa)
-- `jev_direction_v2` (continuação direcional sem usar target/R:R; o host vem só de `JEV_BASE_URL`)
+- `jev_plan_outcome_v3` (probabilidade do target antes do stop dentro do horizonte; envia apenas geometria normalizada, nunca preços; o host vem só de `JEV_BASE_URL`)
 
 `score_baseline` pesa cada família em `[-1, +1]`, combina o composto e só então classifica. A ordem sai depois da classe. A classe recusa o lado do composto quando os componentes divergem, quando um único componente carrega o score, ou quando o fluxo vai contra esse lado. Além da continuação, existe um setup de reclaim: uma das últimas cinco velas varre o extremo das 20 anteriores e o candle atual recupera esse nível; volume de pelo menos 1,5x, momentum e fluxo precisam confirmar o mesmo lado. Esse setup usa piso 0,40 porque exige quatro confirmações independentes e serve para não esperar as EMAs virarem depois de uma reversão em V. Hard blocks (spread, volatilidade extrema, histórico insuficiente) continuam `NO_TRADE`. Constantes de escala apenas normalizam grandeza; não são resultado de otimização.
 

@@ -643,6 +643,8 @@ class TradingEngine:
             context.equity = float(equity)
             context.cash = room / leverage if leverage > 0 else 0.0
             context.margin_level = level_value
+            available = balance.get("available")
+            context.quote_free = float(available) if isinstance(available, (int, float)) else None
             day = snapshot.timestamp.astimezone(timezone.utc).date()
             if self._real_day != day or self._real_day_start is None:
                 self._real_day = day
@@ -754,9 +756,9 @@ class TradingEngine:
                 risk = RiskDecision.model_validate(pending["risk"])
                 intent = self._intent(decision, snapshot, risk, "BUY" if decision.action is Action.LONG else "SELL", "live")
                 order = _order_from_payload(intent, found, decision.decision_id.hex, OrderType.MARKET)
-                await self._record_live_entry(decision, snapshot, risk, order)
+                await self._record_live_entry(decision, snapshot, risk, order, recovering=True)
 
-    async def _record_live_entry(self, decision, snapshot, risk, order) -> None:
+    async def _record_live_entry(self, decision, snapshot, risk, order, *, recovering: bool = False) -> None:
         econ = risk.economics
         order_payload = self.store.add_order(order)
         if order.filled_quantity <= 0 or not order.average_fill_price:
@@ -797,37 +799,76 @@ class TradingEngine:
         fill_payload = self.store.add_fill(fill)
         position.protection_status = "UNPROTECTED"
         position.stop_client_order_id = decision.decision_id.hex[:31] + "S"
-        # Persist the filled position before attempting exchange protection.
-        await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=[fill_payload])
-        # The entry itself is no longer ambiguous. A stop failure is represented by
-        # UNPROTECTED and blocks new entries through its own safety gate.
-        await self._resolve_entry(str(decision.decision_id))
+        # The durable entry intent already exists. Submit protection before the
+        # slower account checkpoint so a database round-trip does not leave the
+        # exchange position naked for several seconds. If the process dies here,
+        # pending-entry recovery uses the same deterministic stop client ID.
         tick = self.feed.rules.get(snapshot.symbol, {}).get("tick_size")
         intent = self._intent(decision, snapshot, risk, "BUY" if decision.action is Action.LONG else "SELL", "live")
         intent.quantity = held
         if decision.action is Action.LONG and self.settings.market_type == "margin":
             intent.quantity = sellable_quantity(held, await self._free_base(snapshot.symbol, fresh=True), step)
         if intent.quantity <= 0:
+            position.protection_error = "NO_PROTECTABLE_QUANTITY"
+            self._log("live_stop", f"{snapshot.symbol} decision={decision.decision_id} NO_PROTECTABLE_QUANTITY", level=logging.ERROR)
+            await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=[fill_payload])
+            await self._resolve_entry(str(decision.decision_id))
             await self._exit_live(decision.strategy, snapshot.symbol, position, "PROTECTION_FAILED", utcnow(), self.states[snapshot.symbol])
             return
         position.stop_client_order_id = decision.decision_id.hex[:31] + "S"
-        try:
-            stop = await self.live.submit_stop(intent, position.stop, tick=tick)
-        except Exception as exc:
-            self._log("live_stop", f"{snapshot.symbol} decision={decision.decision_id} {exc}")
-            stop = None
+        position.protection_attempted_at = utcnow()
+        stop = None
+        if recovering:
+            # A process may have died after the exchange accepted the stop and
+            # before its checkpoint committed. Reconcile the deterministic ID
+            # before attempting another submission.
+            try:
+                found = await self.live.fetch_verified(snapshot.symbol, position.stop_client_order_id)
+                if found.get("status") != "NOT_FOUND":
+                    from app.execution.binance_live import _order_from_payload
+                    stop_type = (
+                        OrderType.STOP_LOSS_LIMIT
+                        if self.settings.market_type in {"margin", "spot"}
+                        else OrderType.STOP_MARKET
+                    )
+                    stop = _order_from_payload(
+                        intent, found, position.stop_client_order_id, stop_type
+                    )
+                    stop.side = "SELL" if intent.side == "BUY" else "BUY"  # type: ignore[assignment]
+                    stop.price = position.stop
+            except Exception as exc:
+                position.protection_error = f"STOP_RECONCILIATION {exc}"
+                self._log(
+                    "live_stop",
+                    f"{snapshot.symbol} decision={decision.decision_id} {position.protection_error}",
+                    level=logging.ERROR,
+                )
+        if stop is None and position.protection_error is None:
+            try:
+                stop = await self.live.submit_stop(intent, position.stop, tick=tick)
+            except Exception as exc:
+                position.protection_error = str(exc)
+                self._log("live_stop", f"{snapshot.symbol} decision={decision.decision_id} {exc}", level=logging.ERROR)
         orders = [order_payload]
         if stop is not None:
             orders.append(self.store.add_order(stop))
             if stop.status is OrderStatus.NEW:
                 position.protection_status = "PROTECTED"
                 position.stop_client_order_id = stop.client_order_id
+                confirmed = stop.exchange_at or stop.received_at or utcnow()
+                position.protection_confirmed_at = confirmed
+                position.protection_latency_ms = max(0.0, (confirmed - fill.filled_at).total_seconds() * 1000)
+                position.protection_error = None
             else:
+                position.protection_error = f"STOP_STATUS_{stop.status.value}"
                 self._log(
                     "live_stop",
                     f"{snapshot.symbol} decision={decision.decision_id} status={stop.status.value}",
+                    level=logging.ERROR,
                 )
         await self._checkpoint(decision.strategy, positions=[position], orders=orders, fills=[fill_payload])
+        # The fill and its protection outcome are now represented durably.
+        await self._resolve_entry(str(decision.decision_id))
         if position.protection_status != "PROTECTED":
             position.protection_status = "UNPROTECTED"
             await self._checkpoint(decision.strategy, positions=[position], orders=[], fills=[])
@@ -855,7 +896,9 @@ class TradingEngine:
         if position.mode == "live":
             if position.protection_status == "RESIDUAL":
                 return
-            if position.protection_status == "UNPROTECTED" or not position.stop_client_order_id:
+            if position.protection_status == "RECOVERY_EXHAUSTED":
+                return
+            if position.protection_status in {"UNPROTECTED", "RECOVERY_PENDING"} or not position.stop_client_order_id:
                 await self._exit_live(key, symbol, position, "PROTECTION_FAILED", as_of, state)
                 return
             identity = str(position.position_id)
@@ -969,6 +1012,33 @@ class TradingEngine:
 
     async def _exit_live(self, key: str, symbol: str, position, reason: str, as_of: datetime, state) -> None:
         tag = f"{symbol} decision={position.decision_id} position={position.position_id}"
+        if reason == "PROTECTION_FAILED":
+            now = utcnow()
+            if position.next_recovery_at is not None and now < position.next_recovery_at:
+                return
+            maximum = max(1, self.risk.limits.max_protection_recovery_attempts)
+            if position.recovery_attempts >= maximum:
+                if position.protection_status != "RECOVERY_EXHAUSTED":
+                    position.protection_status = "RECOVERY_EXHAUSTED"
+                    position.protection_error = position.protection_error or "AUTOMATIC_RECOVERY_EXHAUSTED"
+                    self.store.add_event("protection_critical", "AUTOMATIC_RECOVERY_EXHAUSTED", {
+                        "position_id": str(position.position_id),
+                        "decision_id": str(position.decision_id),
+                        "symbol": symbol,
+                        "attempts": position.recovery_attempts,
+                    })
+                    self._log("protection_critical", f"{tag} AUTOMATIC_RECOVERY_EXHAUSTED", level=logging.ERROR)
+                    await self._checkpoint(key, positions=[position], orders=[], fills=[])
+                return
+            position.recovery_attempts += 1
+            delay = min(
+                60.0,
+                max(0.5, self.risk.limits.protection_retry_base_seconds)
+                * (2 ** (position.recovery_attempts - 1)),
+            )
+            position.next_recovery_at = now + timedelta(seconds=delay)
+            position.protection_status = "RECOVERY_PENDING"
+            await self._checkpoint(key, positions=[position], orders=[], fills=[])
         # Reconcile the stop on EVERY exit path, including time and target exits.
         if position.stop_client_order_id:
             client_id = position.stop_client_order_id
@@ -990,7 +1060,9 @@ class TradingEngine:
             already = position.exit_processed.get(client_id, 0)
             quantity = max(0, qty - already)
             position.stop_client_order_id = None
-            position.protection_status = "UNPROTECTED"
+            position.protection_status = (
+                "RECOVERY_PENDING" if reason == "PROTECTION_FAILED" else "UNPROTECTED"
+            )
             # Persist the exchange order lifecycle, preserving its identity.
             updated = []
             for stored in self.store.orders.values():
@@ -1033,7 +1105,14 @@ class TradingEngine:
         try:
             order = await self.live.submit_close(intent)
         except Exception as exc:
-            self._log("live_exit", f"{tag} {exc}")
+            position.protection_error = str(exc)
+            self._log(
+                "live_exit",
+                f"{tag} attempt={position.recovery_attempts} {exc}",
+                level=logging.ERROR if reason == "PROTECTION_FAILED" else logging.INFO,
+            )
+            if reason == "PROTECTION_FAILED":
+                await self._checkpoint(key, positions=[position], orders=[], fills=[])
             return
         order_payload = self.store.add_order(order)
         if order.status not in {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
@@ -1617,6 +1696,12 @@ class TradingEngine:
                         "mae": position.mae,
                         "opened_at": position.opened_at.isoformat(),
                         "protection_status": position.protection_status,
+                        "protection_attempted_at": position.protection_attempted_at.isoformat() if position.protection_attempted_at else None,
+                        "protection_confirmed_at": position.protection_confirmed_at.isoformat() if position.protection_confirmed_at else None,
+                        "protection_latency_ms": position.protection_latency_ms,
+                        "protection_error": position.protection_error,
+                        "recovery_attempts": position.recovery_attempts,
+                        "next_recovery_at": position.next_recovery_at.isoformat() if position.next_recovery_at else None,
                     }
                 )
         return rows
@@ -1673,6 +1758,10 @@ class TradingEngine:
                 "take_profit": row["target"],
                 "unrealized_pnl_usdt": row["unrealized"],
                 "protection_status": row["protection_status"],
+                "protection_latency_ms": row["protection_latency_ms"],
+                "protection_error": row["protection_error"],
+                "recovery_attempts": row["recovery_attempts"],
+                "next_recovery_at": row["next_recovery_at"],
                 "mode": row["mode"],
             }
             for row in positions
@@ -1946,11 +2035,11 @@ class TradingEngine:
             return 0.0
         return 0.0
 
-    def _log(self, kind: str, message: str) -> None:
+    def _log(self, kind: str, message: str, *, level: int = logging.INFO) -> None:
         item = {"kind": kind, "message": message, "timestamp": utcnow().isoformat()}
         self.logs.add(item)
         self.store.add_event(kind, message)
-        log.info("%s %s", kind, message)
+        log.log(level, "%s %s", kind, message)
 
 
 def _extreme(batch: list[dict]) -> dict:

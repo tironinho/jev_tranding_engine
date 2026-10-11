@@ -16,6 +16,7 @@ from app.domain.enums import (
     CLASS_FLOW_AGAINST,
     CLASS_SINGLE_DRIVER,
     HIGH_VOLATILITY,
+    INSUFFICIENT_EXPECTED_EDGE,
     INSUFFICIENT_HISTORY,
     JEV_FALLBACK,
     JEV_UNAVAILABLE,
@@ -298,6 +299,9 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             context.combination, breakout=_class_has_break(result), min_continuation=required)
         accepted = action is not Action.NO_TRADE
         reasons = list(vetoes) if action is Action.NO_TRADE else []
+        if accepted and plan["expected_net_r"] < context.risk.min_expected_net_r:
+            accepted = False
+            reasons = [INSUFFICIENT_EXPECTED_EDGE]
         plan.update(eligible=accepted, reason="JEV_CONFIRM" if accepted else ",".join(reasons), required_probability=required)
         return plan, assessment, confidence, accepted, reasons
 
@@ -560,7 +564,7 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=getattr(context.jev, "prompt_version", "jev_direction_v2"),
+        prompt_version=getattr(context.jev, "prompt_version", "jev_plan_outcome_v3"),
         symbol=snapshot.symbol,
         market_type=snapshot.market_type.value,
         timestamp=snapshot.timestamp,

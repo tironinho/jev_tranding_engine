@@ -428,6 +428,27 @@ def test_margin_short_opens_and_spot_boot_uses_the_spot_book():
     assert futures.settings.market_type == "futures"
 
 
+def test_live_margin_short_requires_quote_reserve_for_its_stop():
+    from app.domain.enums import INSUFFICIENT_PROTECTION_BALANCE
+
+    eng = engine(max_symbol_exposure=0.4, market_type="spot")
+    snapshot, book = long_snapshot()
+    blocked = eng.risk.evaluate(
+        _order(snapshot, Action.SHORT),
+        snapshot,
+        _context(
+            market_type="margin",
+            live_requested=True,
+            live_armed=True,
+            quote_free=0.10,
+        ),
+        FeeQuote(0.0002, 0.0005, "config"),
+        book,
+    )
+    assert INSUFFICIENT_PROTECTION_BALANCE in blocked.reject_reasons
+    assert blocked.details["quote_free_before_entry"] == pytest.approx(0.10)
+
+
 def test_paper_margin_can_exceed_equity_up_to_five_times():
     eng = engine(max_symbol_exposure=1, max_total_exposure=1)
     eng.risk.update_limits(risk_per_trade=.02, max_risk_per_trade=.02)

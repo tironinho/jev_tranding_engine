@@ -165,7 +165,9 @@ async def test_failed_protection_attempts_close_and_retains_pending_balance(monk
     eng.live.submit_close = AsyncMock(side_effect=TimeoutError())
     await eng.evaluate_snapshot(snapshot)
     p = eng.accounts.accounts["baseline"].sole("BTCUSDT")
-    assert p.protection_status == "UNPROTECTED"
+    assert p.protection_status == "RECOVERY_PENDING"
+    assert p.recovery_attempts == 1
+    assert p.next_recovery_at is not None
     assert not eng.pending_entries
     eng.live.submit_close.assert_awaited_once()
     await eng.evaluate_snapshot(snapshot)
@@ -184,11 +186,40 @@ async def test_ambiguous_entry_is_recovered_without_second_buy(monkeypatch):
     eng.live.submit = AsyncMock(side_effect=TimeoutError())
     await eng.evaluate_snapshot(snapshot)
     assert len(eng.pending_entries) == 1
-    eng.live.fetch_verified = AsyncMock(return_value={"status": "FILLED", "executedQty": "1", "avgPrice": "100.01"})
+    eng.live.fetch_verified = AsyncMock(side_effect=[
+        {"status": "FILLED", "executedQty": "1", "avgPrice": "100.01"},
+        {"status": "NOT_FOUND", "executedQty": "0"},
+    ])
     await eng._recover_pending_entries()
     assert not eng.pending_entries
     assert eng.accounts.accounts["baseline"].sole("BTCUSDT").quantity == 1
     eng.live.submit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recovery_reuses_an_exchange_stop_accepted_before_crash(monkeypatch):
+    from tests.test_runtime import _arm_live, _Exchange
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(trading_live_enabled=True, allow_real_orders=True, binance_api_key="k", binance_api_secret="s")
+    _arm_live(eng)
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    eng.live.client = _Exchange()
+    eng.live.submit = AsyncMock(side_effect=TimeoutError())
+    await eng.evaluate_snapshot(snapshot)
+    eng.live.fetch_verified = AsyncMock(side_effect=[
+        {"status": "FILLED", "executedQty": "1", "avgPrice": "100.01"},
+        {"status": "NEW", "executedQty": "0", "clientOrderId": "existing-stop"},
+    ])
+    eng.live.submit_stop = AsyncMock()
+
+    await eng._recover_pending_entries()
+
+    position = eng.accounts.accounts["baseline"].sole("BTCUSDT")
+    assert position.protection_status == "PROTECTED"
+    assert position.stop_client_order_id == "existing-stop"
+    eng.live.submit.assert_awaited_once()
+    eng.live.submit_stop.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -283,8 +314,31 @@ async def test_non_resting_stop_is_not_marked_protected(monkeypatch):
     eng.live.submit_close = AsyncMock(side_effect=TimeoutError())
     await eng.evaluate_snapshot(snapshot)
     position = eng.accounts.accounts["baseline"].sole("BTCUSDT")
-    assert position.protection_status == "UNPROTECTED"
+    assert position.protection_status == "RECOVERY_PENDING"
+    assert position.recovery_attempts == 1
     eng.live.submit_close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_protection_recovery_is_bounded_and_becomes_critical(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(binance_api_key="k", binance_api_secret="s")
+    eng.risk.update_limits(max_protection_recovery_attempts=3)
+    p = _open(eng, mode="live", stop_client_order_id=None)
+    p.protection_status = "UNPROTECTED"
+    eng.live.submit_close = AsyncMock(side_effect=TimeoutError())
+    state = eng.states["BTCUSDT"]
+
+    for _ in range(3):
+        p.next_recovery_at = clock()
+        await eng._exit_live("baseline", "BTCUSDT", p, "PROTECTION_FAILED", clock(), state)
+    p.next_recovery_at = clock()
+    await eng._exit_live("baseline", "BTCUSDT", p, "PROTECTION_FAILED", clock(), state)
+
+    assert p.recovery_attempts == 3
+    assert p.protection_status == "RECOVERY_EXHAUSTED"
+    assert eng.live.submit_close.await_count == 3
+    assert any(row["kind"] == "protection_critical" for row in eng.store.events)
 
 
 @pytest.mark.asyncio

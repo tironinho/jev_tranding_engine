@@ -120,6 +120,12 @@ export function PositionTable({
     target_pnl?: number;
     stop_pnl?: number;
     protection_status?: string;
+    protection_attempted_at?: string | null;
+    protection_confirmed_at?: string | null;
+    protection_latency_ms?: number | null;
+    protection_error?: string | null;
+    recovery_attempts?: number;
+    next_recovery_at?: string | null;
   }> | null;
   exchange?: {
     rows: Array<{
@@ -149,7 +155,7 @@ export function PositionTable({
       <table className="w-full text-left text-[11px]">
         <thead className="text-mute">
           <tr className="border-b border-line">
-            {["STRATEGY", "SYMBOL", "SIDE", "QTD ROBÔ", ...(reconciled ? ["LÍQ. BINANCE", "LIVRE", "TRAVADO", "DIF. CONTA", "VALOR CONTA $", "RESÍDUO $", "STATUS"] : []), "VALOR ROBÔ $", "LEV", "FILL ROBÔ", "PNL ROBÔ", "TARGET $", "STOP $"].map((head) => (
+            {["STRATEGY", "SYMBOL", "SIDE", "QTD ROBÔ", ...(reconciled ? ["LÍQ. BINANCE", "LIVRE", "TRAVADO", "DIF. CONTA", "VALOR CONTA $", "RESÍDUO $"] : []), "PROTEÇÃO", "LATÊNCIA", "RECUPERAÇÃO", "VALOR ROBÔ $", "LEV", "FILL ROBÔ", "PNL ROBÔ", "TARGET $", "STOP $"].map((head) => (
               <th key={head} className="px-2 py-2 font-normal tracking-[0.12em]">
                 {head}
               </th>
@@ -178,9 +184,16 @@ export function PositionTable({
                     <td className={`px-2 py-2 ${signedClass(account && account.mark != null ? account.difference * account.mark : null)}`}>
                       {account?.mark == null ? "NO DATA" : positionMoney(account.difference * account.mark)}
                     </td>
-                    <td className="px-2 py-2">{status}</td>
                   </>
                 ) : null}
+                <td className={`px-2 py-2 ${status === "PROTECTED" || status === "PROTEGIDO + RESÍDUO" ? "text-up" : "text-down"}`} title={row.protection_error ?? undefined}>
+                  {status}{row.protection_error ? <><br /><span className="block max-w-48 break-all text-[9px]">{row.protection_error}</span></> : null}
+                </td>
+                <td className="px-2 py-2">{row.protection_latency_ms == null ? "—" : `${num(row.protection_latency_ms, 0)} ms`}</td>
+                <td className="px-2 py-2 whitespace-nowrap">
+                  {row.recovery_attempts ?? 0} tent.
+                  {row.next_recovery_at ? <><br />{new Date(row.next_recovery_at).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" })}</> : null}
+                </td>
                 <td className="px-2 py-2">{row.notional == null ? "NO DATA" : num(row.notional, 2)}</td>
                 <td className="px-2 py-2">{leverageLabel(row.leverage)}</td>
                 <td className="px-2 py-2">{row.entry.toFixed(4)}</td>
@@ -192,7 +205,7 @@ export function PositionTable({
           })}
         </tbody>
       </table>
-      <div className="px-2 pt-2 text-[10px] text-mute">QTD ROBÔ, VALOR ROBÔ $ e FILL ROBÔ pertencem à ordem executada pelo sistema. LÍQ. BINANCE e VALOR CONTA $ incluem todo o saldo da moeda; RESÍDUO $ é a diferença marcada entre a conta e a quantidade do robô. LIVRE e TRAVADO vêm da conta no mesmo instante. A Binance pode mostrar um preço médio e um PnL históricos da conta diferentes do fill e do PNL ROBÔ desta ordem. LEV é o nocional marcado dividido pela margem travada. PNL ROBÔ, TARGET $ e STOP $ usam somente o trade do robô e incluem as taxas configuradas.</div>
+      <div className="px-2 pt-2 text-[10px] text-mute">QTD ROBÔ, VALOR ROBÔ $ e FILL ROBÔ pertencem à ordem executada pelo sistema. LÍQ. BINANCE e VALOR CONTA $ incluem todo o saldo da moeda; RESÍDUO $ é a diferença marcada entre a conta e a quantidade do robô. LIVRE e TRAVADO vêm da conta no mesmo instante. PROTEÇÃO mostra a ordem de stop confirmada pela corretora, sua latência e as tentativas de fechamento de emergência. A Binance pode mostrar um preço médio e um PnL históricos da conta diferentes do fill e do PNL ROBÔ desta ordem. LEV é o nocional marcado dividido pela margem travada. PNL ROBÔ, TARGET $ e STOP $ usam somente o trade do robô e incluem as taxas configuradas.</div>
     </div>
   );
 }

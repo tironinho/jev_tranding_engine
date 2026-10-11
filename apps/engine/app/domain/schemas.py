@@ -188,6 +188,12 @@ class PositionRecord(BaseModel):
     exit_processed: dict[str, float] = Field(default_factory=dict)
     protection_status: str = "UNKNOWN"
     protection_revision: int = 0
+    protection_attempted_at: datetime | None = None
+    protection_confirmed_at: datetime | None = None
+    protection_latency_ms: float | None = None
+    protection_error: str | None = None
+    recovery_attempts: int = 0
+    next_recovery_at: datetime | None = None
 
 
 class TradeRecord(BaseModel):

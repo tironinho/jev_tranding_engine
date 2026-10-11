@@ -23,10 +23,11 @@ _ONCHAIN = (
 _INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
-        "It is not an order. Estimate whether price shows directional follow-through for that side over the "
-        "next 5 to 15 minutes rather than immediately reversing. Use trend, momentum, order flow, break or "
-        "reclaim quality, and supplied market context. Do not condition this probability on target distance, "
-        "stop distance, R:R, fees, expected payoff, or whether a trade_plan target is reached."
+        "It is not an order. When `trade_plan` is present, estimate the probability that price reaches that "
+        "plan's target before its stop within `horizon_minutes`. Use the supplied net R:R and break-even "
+        "probability only as geometry, never as evidence that the outcome is more likely. Account for target "
+        "distance, stop distance, trend, momentum, order flow, break or reclaim quality, and market context. "
+        "When no trade_plan is present, estimate directional follow-through over the stated horizon."
     )
     + _ONCHAIN,
     "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
@@ -165,6 +166,19 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         "bullish_reclaim": features.get("bullish_reclaim"),
         "bearish_reclaim": features.get("bearish_reclaim"),
     }
+    plan = payload.get("trade_plan")
+    if isinstance(plan, dict):
+        # Ratios and time are enough to assess the outcome. Absolute prices stay
+        # out of the provider request.
+        state["trade_plan"] = {
+            "gross_rr": plan.get("gross_rr"),
+            "net_rr": plan.get("net_rr"),
+            "break_even_probability": plan.get("break_even_probability"),
+            "horizon_minutes": plan.get("horizon_minutes"),
+            "round_trip_fee_rate": plan.get("round_trip_fee_rate"),
+            "stress_bps": plan.get("stress_bps"),
+            "requires_structure_break": plan.get("requires_structure_break"),
+        }
     intelligence = jev_view(payload.get("intelligence"), payload.get("baseline_action"))
     if intelligence is not None:
         state["intelligence"] = intelligence

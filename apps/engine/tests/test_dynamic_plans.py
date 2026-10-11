@@ -5,7 +5,7 @@ import pytest
 
 from app.config import BaselineWeightConfig, CombinationConfig, RiskLimits
 from app.domain.enums import Action, OperatingMode, MarketType
-from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, JEV_LOW_CONTINUATION, JEV_UNAVAILABLE
+from app.domain.enums import BASELINE_CONTEXT_CANDIDATE, BASELINE_NO_TRADE, INSUFFICIENT_EXPECTED_EDGE, JEV_LOW_CONTINUATION, JEV_UNAVAILABLE
 from app.providers.jev.mock import MockJevProvider
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy, StrategyContext
@@ -72,6 +72,18 @@ async def test_expected_rr_does_not_reject_a_confirmed_signal():
     decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
     assert decision.action is Action.LONG
     assert decision.metadata["jev_trade_plan"]["gross_rr"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_small_model_edge_is_rejected_after_costs_and_haircut():
+    snapshot, _ = long_snapshot()
+    provider = PlansProvider({"*": .7})
+    ctx = context(provider)
+    ctx.risk = replace(ctx.risk, min_expected_net_r=100.0)
+    decision = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+    assert decision.action is Action.NO_TRADE
+    assert INSUFFICIENT_EXPECTED_EDGE in decision.reason_codes
+    assert decision.metadata["jev_trade_plan"]["expected_net_r"] < 100.0
 
 
 @pytest.mark.asyncio

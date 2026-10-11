@@ -253,8 +253,16 @@ async def test_real_jev_calls_only_the_configured_url():
             assert json["state"]["baseline_labels"] == ["CLASS_ALIGNED", "BREAKDOWN"]
             assert json["state"]["range_60m"] == 0.01
             assert json["state"]["taker_flow_1m"] == -0.2
-            assert "trade_plan" not in json["state"]
-            assert "Do not condition this probability on target distance" in json["questions"]["trend_continuation_probability"]["instructions"]
+            assert json["state"]["trade_plan"] == {
+                "gross_rr": None,
+                "net_rr": None,
+                "break_even_probability": None,
+                "horizon_minutes": 60,
+                "round_trip_fee_rate": None,
+                "stress_bps": None,
+                "requires_structure_break": None,
+            }
+            assert "reaches that plan's target before its stop" in json["questions"]["trend_continuation_probability"]["instructions"]
             assert "symbol" not in json
             return _Response()
 

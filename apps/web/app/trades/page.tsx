@@ -49,6 +49,7 @@ export default async function TradesPage({
   const open = (positions.ok ? positions.data?.rows ?? [] : []).filter(
     (row) => row?.mode === "live" && row.protection_status !== "RESIDUAL",
   );
+  const protectionCritical = open.filter((row) => row.protection_status !== "PROTECTED");
   const rows = result.ok ? result.data?.rows ?? [] : null;
   const totals = rows?.reduce(
     (sum, trade) => {
@@ -90,6 +91,11 @@ export default async function TradesPage({
       <Panel title="CONTA BINANCE — TODAS AS EXPOSIÇÕES E DÍVIDAS">
         <ExchangeExposure data={positions.ok ? positions.data?.exchange : undefined} />
       </Panel>
+      {protectionCritical.length ? (
+        <div className="border border-down bg-down/10 px-3 py-3 text-xs text-down" role="alert">
+          PROTEÇÃO CRÍTICA: {protectionCritical.map((row) => `${row.symbol} ${row.protection_status ?? "UNKNOWN"} (${row.recovery_attempts ?? 0} tent.)`).join(" · ")}. Entradas novas permanecem bloqueadas enquanto houver exposição sem stop confirmado.
+        </div>
+      ) : null}
       <Panel title={`ABERTAS — CONTROLE DO ROBÔ (${open.length})`}>
         {!positions.ok ? <Empty label="FALHA AO CONSULTAR POSIÇÕES" /> : open.length ? <PositionTable rows={open} exchange={positions.data?.exchange} /> : <Empty label="NENHUM TRADE NO CONTROLE INTERNO — CONSULTE A CONTA ACIMA" />}
       </Panel>

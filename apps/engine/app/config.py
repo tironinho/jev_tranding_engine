@@ -124,6 +124,15 @@ class RiskLimits:
     probability_haircut: float = 0.05
     borrow_hourly_stress_rate: float = 0.0001
     max_portfolio_stop_risk: float = 0.02
+    # Live margin shorts must leave real quote balance available for the
+    # buy-stop premium, fees and exchange rounding after the entry sale.
+    min_protection_quote_reserve: float = 0.25
+    # Model edge must survive this additional uncertainty margin after fees.
+    min_expected_net_r: float = 0.10
+    # Longs remain observable in paper while production evidence is negative.
+    live_longs_enabled: bool = False
+    max_protection_recovery_attempts: int = 5
+    protection_retry_base_seconds: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -265,6 +274,11 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         probability_haircut=float(payload.get("probability_haircut", 0.05)),
         borrow_hourly_stress_rate=float(payload.get("borrow_hourly_stress_rate", 0.0001)),
         max_portfolio_stop_risk=float(payload.get("max_portfolio_stop_risk", 0.02)),
+        min_protection_quote_reserve=float(payload.get("min_protection_quote_reserve", 0.25)),
+        min_expected_net_r=float(payload.get("min_expected_net_r", 0.10)),
+        live_longs_enabled=bool(payload.get("live_longs_enabled", False)),
+        max_protection_recovery_attempts=int(payload.get("max_protection_recovery_attempts", 5)),
+        protection_retry_base_seconds=float(payload.get("protection_retry_base_seconds", 2.0)),
     )
 
 
@@ -299,7 +313,7 @@ class Settings(BaseSettings):
     jev_api_key: str = ""
     jev_base_url: str = ""
     jev_model: str = ""
-    jev_prompt_version: str = "jev_direction_v2"
+    jev_prompt_version: str = "jev_plan_outcome_v3"
     jev_failure_policy: str = "NO_TRADE"
     jev_timeout_s: float = 3.0
     engine_api_secret: str = ""

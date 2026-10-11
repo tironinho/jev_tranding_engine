@@ -13,6 +13,8 @@ from app.domain.enums import (
     EXCHANGE_RULES_UNAVAILABLE,
     INSUFFICIENT_LIQUIDITY,
     INSUFFICIENT_MARGIN,
+    INSUFFICIENT_PROTECTION_BALANCE,
+    LIVE_LONG_DISABLED,
     LIVE_LOCKED,
     MAX_DAILY_DRAWDOWN,
     MAX_DAILY_LOSS,
@@ -66,6 +68,7 @@ class RiskContext:
     rules_required: bool = False
     last_stop_at: datetime | None = None
     open_stop_risk: float = 0.0
+    quote_free: float | None = None
 
 
 @dataclass
@@ -129,6 +132,12 @@ class RiskEngine:
         if not context.trading_enabled:
             reasons.append(ENGINE_DISABLED)
         if decision.mode.value == "live" or context.live_requested:
+            if (
+                decision.strategy == "baseline_jev"
+                and decision.action is Action.LONG
+                and not self.limits.live_longs_enabled
+            ):
+                reasons.append(LIVE_LONG_DISABLED)
             if not context.live_armed:
                 reasons.append(LIVE_LOCKED)
             if not context.persistence_ok:
@@ -203,6 +212,19 @@ class RiskEngine:
         )
         if context.step_size:
             ideal = round_down_to_step(ideal, context.step_size)
+        protection_cap = self._protection_quantity_cap(
+            decision.action, entry_guess, geometry.stop, exit_rate, context
+        )
+        if protection_cap is not None:
+            if protection_cap <= 0:
+                return self._reject(
+                    decision,
+                    [INSUFFICIENT_PROTECTION_BALANCE],
+                    details=self._protection_details(context, entry_guess, geometry.stop, exit_rate, 0),
+                )
+            ideal = min(ideal, protection_cap)
+            if context.step_size:
+                ideal = round_down_to_step(ideal, context.step_size)
         if ideal <= 0:
             return self._reject(decision, [MAX_RISK_PER_TRADE])
         qty = self._fit_to_capital(ideal, entry_guess, context, entry_rate)
@@ -214,6 +236,13 @@ class RiskEngine:
             return self._reject(decision, [INSUFFICIENT_LIQUIDITY])
         entry = preview.estimated_fill_price
         refit = self._fit_to_capital(preview.filled_quantity, entry, context, entry_rate)
+        protection_cap = self._protection_quantity_cap(
+            decision.action, entry, geometry.stop, exit_rate, context
+        )
+        if protection_cap is not None:
+            refit = min(refit, protection_cap)
+            if context.step_size:
+                refit = round_down_to_step(refit, context.step_size)
         if refit <= 0:
             return self._reject(decision, [self._capital_reason(context, entry_rate)])
         if refit + 1e-12 < preview.filled_quantity:
@@ -224,6 +253,17 @@ class RiskEngine:
         qty = preview.filled_quantity
         floor = self._min_notional(context)
         if entry * abs(qty) + 1e-9 < floor:
+            # Never lift a margin short back above the quantity whose stop can
+            # be funded. A minimum-sized entry without a fundable stop is not
+            # an executable trade.
+            if protection_cap is not None and protection_cap * entry + 1e-9 < floor:
+                return self._reject(
+                    decision,
+                    [INSUFFICIENT_PROTECTION_BALANCE],
+                    details=self._protection_details(
+                        context, entry, geometry.stop, exit_rate, protection_cap
+                    ),
+                )
             lifted = self._lift_to_notional(floor, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book)
             if lifted is None:
                 return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL])
@@ -303,8 +343,66 @@ class RiskEngine:
                 "slippage_bps": preview.slippage_bps,
                 "warnings": preview.warnings,
                 "preview_warnings": preview.warnings,
+                "protection_quote": self._protection_details(
+                    context, entry, geometry.stop, exit_rate, qty
+                ) if protection_cap is not None else None,
             },
         )
+
+    def _protection_quantity_cap(
+        self,
+        action: Action,
+        entry: float,
+        stop: float,
+        exit_fee_rate: float,
+        context: RiskContext,
+    ) -> float | None:
+        """Maximum margin short whose resting buy-stop can reserve real quote.
+
+        A short sale credits quote at the entry price. The stop-limit reserves
+        quote at 20 bps above its trigger. Only that price gap, exit fee and a
+        fixed cash reserve may consume quote that existed before the entry.
+        """
+        if (
+            not context.live_requested
+            or context.market_type != MarketType.MARGIN.value
+            or action is not Action.SHORT
+        ):
+            return None
+        if context.quote_free is None:
+            return 0.0
+        available = max(0.0, context.quote_free - self.limits.min_protection_quote_reserve)
+        if available <= 0:
+            return 0.0
+        stop_limit = stop * 1.002
+        stressed_stop = stop_limit * (
+            1 + max(exit_fee_rate, 0.0) + self.limits.plan_stress_bps / 10_000
+        )
+        gap = stressed_stop - entry
+        if gap <= 0:
+            return float("inf")
+        return available / gap
+
+    def _protection_details(
+        self,
+        context: RiskContext,
+        entry: float,
+        stop: float,
+        exit_fee_rate: float,
+        quantity: float,
+    ) -> dict:
+        stop_limit = stop * 1.002
+        required = quantity * stop_limit * (
+            1 + max(exit_fee_rate, 0.0) + self.limits.plan_stress_bps / 10_000
+        )
+        proceeds = quantity * entry
+        return {
+            "quote_free_before_entry": context.quote_free,
+            "minimum_quote_reserve": self.limits.min_protection_quote_reserve,
+            "estimated_entry_proceeds": proceeds,
+            "estimated_stop_quote": required,
+            "estimated_quote_after_stop": (context.quote_free or 0.0) + proceeds - required,
+        }
 
     def _fill(self, side: str, quantity: float, snapshot: MarketSnapshot, book: OrderBook | None):
         preview = simulate_fill(

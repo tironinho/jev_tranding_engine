@@ -88,6 +88,11 @@ export default async function TradesPage({
         <input name="regime" placeholder="regime" defaultValue={query.regime} className="border border-line bg-ink px-2 py-1" />
         <button className="border border-line px-2 py-1">filtrar</button>
       </form>
+      {!positions.ok ? (
+        <div className="border border-down bg-down/10 px-3 py-3 text-xs text-down" role="alert">
+          ENGINE INDISPONÍVEL: não foi possível consultar a conta nem o controle interno. O número de posições abertas é desconhecido; não interprete a ausência de linhas como conta zerada.
+        </div>
+      ) : null}
       <Panel title="CONTA BINANCE — TODAS AS EXPOSIÇÕES E DÍVIDAS">
         <ExchangeExposure data={positions.ok ? positions.data?.exchange : undefined} />
       </Panel>
@@ -96,7 +101,7 @@ export default async function TradesPage({
           PROTEÇÃO CRÍTICA: {protectionCritical.map((row) => `${row.symbol} ${row.protection_status ?? "UNKNOWN"} (${row.recovery_attempts ?? 0} tent.)`).join(" · ")}. Entradas novas permanecem bloqueadas enquanto houver exposição sem stop confirmado.
         </div>
       ) : null}
-      <Panel title={`ABERTAS — CONTROLE DO ROBÔ (${open.length})`}>
+      <Panel title={`ABERTAS — CONTROLE DO ROBÔ (${positions.ok ? open.length : "INDISPONÍVEL"})`}>
         {!positions.ok ? <Empty label="FALHA AO CONSULTAR POSIÇÕES" /> : open.length ? <PositionTable rows={open} exchange={positions.data?.exchange} /> : <Empty label="NENHUM TRADE NO CONTROLE INTERNO — CONSULTE A CONTA ACIMA" />}
       </Panel>
       <Panel title="FECHADAS — PRODUÇÃO">

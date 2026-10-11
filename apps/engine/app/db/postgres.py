@@ -111,6 +111,12 @@ def prepare_asyncpg(url: str) -> tuple[str, dict]:
     return cleaned, connect_args
 
 
+def database_identity(url: str) -> tuple[str, str]:
+    """Return the non-secret endpoint identity used in operational logs."""
+    parts = urlsplit(to_async_url(url))
+    return parts.hostname or "unknown", parts.path.lstrip("/") or "unknown"
+
+
 class PostgresMirror:
     """Best-effort durable copy. Reads stay on the in-memory store for the live API."""
 
@@ -138,6 +144,8 @@ class PostgresMirror:
                 self.factory = async_sessionmaker(engine, expire_on_commit=False)
                 self.healthy = True
                 self.last_error = None
+                host, database = database_identity(self.url)
+                log.info("postgres connected host=%s database=%s", host, database)
                 return True
             except Exception as exc:
                 self.healthy = False

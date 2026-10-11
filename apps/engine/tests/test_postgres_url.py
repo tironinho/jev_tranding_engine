@@ -1,4 +1,4 @@
-from app.db.postgres import prepare_asyncpg
+from app.db.postgres import database_identity, prepare_asyncpg
 
 
 def test_neon_sslmode_is_not_passed_to_asyncpg():
@@ -18,6 +18,14 @@ def test_pooler_disables_statement_cache_and_drops_channel_binding():
     assert "sslmode" not in url
     assert args["statement_cache_size"] == 0
     assert "ssl" in args
+
+
+def test_database_identity_never_contains_credentials():
+    identity = database_identity(
+        "postgresql://user:secret@dpg-example.oregon-postgres.render.com/trading_engine?sslmode=require"
+    )
+    assert identity == ("dpg-example.oregon-postgres.render.com", "trading_engine")
+    assert "secret" not in repr(identity)
 
 
 def test_binance_urls_drop_pasted_newlines():

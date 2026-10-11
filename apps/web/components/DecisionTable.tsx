@@ -135,8 +135,13 @@ export function PositionTable({
   };
 }) {
   if (!rows) return <Empty label="Falha na consulta de posições do robô" />;
-  const visible = rows.filter((row) => row.protection_status !== "RESIDUAL");
-  if (!visible.length) return <Empty label="Sem posições gerenciadas · resíduos abaixo do mínimo estão na conta abaixo" />;
+  // A table paired with Binance balances is a live-account view. Keep this
+  // guard even though the API already scopes these rows, so stale/mixed
+  // responses cannot label simulated quantities as real positions.
+  const visible = rows.filter((row) =>
+    row.protection_status !== "RESIDUAL" && (!exchange || row.mode === "live"),
+  );
+  if (!visible.length) return <Empty label="Sem posições live gerenciadas · resíduos abaixo do mínimo estão na conta abaixo" />;
   const exposure = new Map((exchange?.rows ?? []).map((row) => [row.asset, row]));
   const reconciled = Boolean(exchange);
   return (

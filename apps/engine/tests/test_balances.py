@@ -345,3 +345,39 @@ def test_paper_book_and_open_trade_money():
     assert jev["net_pnl"] == 0
     assert book["leverage"] == 5
     assert jev["equity"] == 10_000
+
+
+def test_positions_payload_can_isolate_live_positions_from_paper_book():
+    eng = engine()
+    shared = {
+        "symbol": "BTCUSDT",
+        "side": Action.LONG,
+        "entry_price": 100,
+        "stop": 95,
+        "target": 115,
+        "opened_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "entry_fee": 0,
+        "initial_net_risk": 5,
+        "margin": 20,
+    }
+    paper = eng.accounts.open_position(
+        strategy="baseline",
+        quantity=100,
+        decision_id=uuid4(),
+        mode="paper",
+        **shared,
+    )
+    live = eng.accounts.open_position(
+        strategy="baseline_jev",
+        quantity=0.01,
+        decision_id=uuid4(),
+        mode="live",
+        **shared,
+    )
+
+    assert {row["position_id"] for row in eng.positions_payload()} == {
+        str(paper.position_id),
+        str(live.position_id),
+    }
+    assert [row["position_id"] for row in eng.positions_payload(mode="live")] == [str(live.position_id)]
+    assert [row["position_id"] for row in eng.positions_payload(mode="paper")] == [str(paper.position_id)]

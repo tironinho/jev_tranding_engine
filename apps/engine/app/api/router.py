@@ -135,7 +135,9 @@ async def overview(request: Request, fresh_balance: bool = False) -> dict:
     _actor(request)
     engine = _engine(request)
     performance = engine.performance()
-    positions = engine.positions_payload()
+    # Binance reconciliation is a production view. Paper positions are sized
+    # against the simulated book and must never be shown beside the live account.
+    positions = engine.positions_payload(mode="live")
     balance = await _noted_balance(engine, fresh=fresh_balance)
     from app.execution.reconciliation import reconcile
     exchange = reconcile(balance, positions, engine._marks(), engine.feed.rules)
@@ -306,12 +308,14 @@ async def trades(
 
 
 @router.get("/api/positions")
-async def positions(request: Request, fresh: bool = False) -> dict:
+async def positions(request: Request, fresh: bool = False, mode: str | None = None) -> dict:
     _actor(request)
     engine = _engine(request)
+    if mode not in {None, "paper", "live"}:
+        raise HTTPException(400, "mode must be paper or live")
     from app.execution.reconciliation import reconcile
     balance = await engine.balance.snapshot(fresh=fresh)
-    rows = engine.positions_payload()
+    rows = engine.positions_payload(mode=mode)
     return {"rows": rows, "exchange": reconcile(balance, rows, engine._marks(), engine.feed.rules)}
 
 

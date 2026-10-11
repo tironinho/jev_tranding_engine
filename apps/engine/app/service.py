@@ -1581,11 +1581,15 @@ class TradingEngine:
                 self._log("balance", type(exc).__name__)
             await asyncio.sleep(60)
 
-    def positions_payload(self) -> list[dict]:
+    def positions_payload(self, mode: str | None = None) -> list[dict]:
+        if mode not in {None, "paper", "live"}:
+            raise ValueError("mode must be paper, live, or None")
         rows = []
         marks = self._marks()
         for key, account in self.accounts.accounts.items():
             for position in account.positions.values():
+                if mode is not None and position.mode != mode:
+                    continue
                 mark = marks.get(position.symbol, position.entry_price)
                 notional = abs(mark * position.quantity)
                 margin = account.margin_locked.get(str(position.position_id))

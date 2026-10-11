@@ -44,7 +44,7 @@ export default async function TradesPage({
   params.set("mode", "live");
   const [result, positions] = await Promise.all([
     engineFetch<{ rows: Trade[] }>(`/api/trades?${params.toString()}`),
-    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"]; exchange: ExchangeState }>("/api/positions?fresh=true"),
+    engineFetch<{ rows: Parameters<typeof PositionTable>[0]["rows"]; exchange: ExchangeState }>("/api/positions?fresh=true&mode=live"),
   ]);
   const open = (positions.ok ? positions.data?.rows ?? [] : []).filter(
     (row) => row?.mode === "live" && row.protection_status !== "RESIDUAL",

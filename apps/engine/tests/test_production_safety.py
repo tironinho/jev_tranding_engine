@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -70,6 +70,27 @@ def test_live_loss_streak_uses_only_trailing_losses_from_current_utc_day():
     ]
 
     assert _consecutive_live_losses(trades, now) == 2
+
+
+def test_status_exposes_live_loss_circuit_and_intelligence_health():
+    eng = engine(max_consecutive_live_losses=3)
+    now = datetime.now(timezone.utc)
+    eng.accounts.accounts["baseline_jev"].trades.extend([
+        SimpleNamespace(mode="live", closed_at=now - timedelta(minutes=2), net_pnl=-1),
+        SimpleNamespace(mode="live", closed_at=now - timedelta(minutes=1), net_pnl=-2),
+    ])
+    eng.intelligence.cache.health.update({"coinalyze": "ONLINE", "cryptoquant": "DEGRADED", "coinmetrics": "ONLINE"})
+
+    status = eng.status()
+
+    assert status["risk"] == {
+        "live_loss_streak": 2,
+        "max_consecutive_live_losses": 3,
+        "live_loss_circuit_open": False,
+    }
+    assert status["intelligence"]["providers"]["cryptoquant"] == "DEGRADED"
+    assert status["intelligence"]["degraded_providers"] == ["cryptoquant"]
+    assert not status["intelligence"]["healthy"]
 
 
 def test_partial_exit_preserves_remaining_position_margin_and_fee():

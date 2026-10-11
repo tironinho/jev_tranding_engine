@@ -18,6 +18,8 @@ type Overview = {
     binance: { status: string };
     openai: { status: string };
     jev: { status: string; is_mock: boolean };
+    intelligence: { enabled: boolean; providers: Record<string, string>; degraded_providers: string[]; healthy: boolean };
+    risk: { live_loss_streak: number; max_consecutive_live_losses: number; live_loss_circuit_open: boolean };
     database: { mode: string; healthy: boolean };
   };
   strategies: StrategyCardData[];

@@ -1925,6 +1925,15 @@ class TradingEngine:
         if self.openai.configured():
             openai_status = "open_circuit" if self.openai.breaker.state == "open" else "configured"
         openai_status = f"{openai_status}|calls_off"
+        live_account = self.accounts.accounts["baseline_jev"]
+        live_loss_streak = _consecutive_live_losses(live_account.trades, utcnow())
+        live_loss_limit = self.risk.limits.max_consecutive_live_losses
+        provider_health = dict(sorted(self.intelligence.cache.health.items()))
+        degraded_providers = sorted(
+            provider
+            for provider, provider_status in provider_health.items()
+            if provider_status in {"DEGRADED", "ERROR", "OFFLINE", "STALE"}
+        )
         return {
             "engine": "online",
             "uptime_s": time.monotonic() - self.started_monotonic,
@@ -1944,6 +1953,17 @@ class TradingEngine:
                 "status": jev_name,
                 "provider_version": getattr(self.jev, "provider_version", None),
                 "is_mock": jev_name == "mock",
+            },
+            "intelligence": {
+                "enabled": self.settings.external_intelligence_enabled,
+                "providers": provider_health,
+                "degraded_providers": degraded_providers,
+                "healthy": not degraded_providers,
+            },
+            "risk": {
+                "live_loss_streak": live_loss_streak,
+                "max_consecutive_live_losses": live_loss_limit,
+                "live_loss_circuit_open": live_loss_streak >= live_loss_limit,
             },
             "database": {"mode": self.persistence_mode, "healthy": self.db_healthy if self.persistence_mode != "memory" else True, "error": self.db_error},
             "strategies": {

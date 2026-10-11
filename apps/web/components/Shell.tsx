@@ -9,6 +9,8 @@ type Status = {
   binance?: { status?: string };
   openai?: { status?: string };
   jev?: { status?: string; is_mock?: boolean };
+  intelligence?: { enabled?: boolean; providers?: Record<string, string>; degraded_providers?: string[]; healthy?: boolean };
+  risk?: { live_loss_streak?: number; max_consecutive_live_losses?: number; live_loss_circuit_open?: boolean };
   database?: { mode?: string; healthy?: boolean };
 };
 
@@ -20,13 +22,30 @@ export function EngineStatus({ status }: { status: Status | null }) {
       </div>
     );
   }
+  const providerHealth = status.intelligence?.providers ?? {};
+  const activeProviders = Object.values(providerHealth).filter((value) => value !== "DISABLED");
+  const onlineProviders = activeProviders.filter((value) => value === "ONLINE").length;
+  const intelligenceStatus = !status.intelligence?.enabled
+    ? "OFF"
+    : activeProviders.length === 0
+      ? "WARMING"
+      : status.intelligence?.healthy
+        ? `${onlineProviders}/${activeProviders.length} OK`
+        : `${onlineProviders}/${activeProviders.length} DEGRADED`;
+  const streak = status.risk?.live_loss_streak;
+  const streakLimit = status.risk?.max_consecutive_live_losses;
+  const lossCircuit = streak == null || streakLimit == null
+    ? "NO DATA"
+    : `${streak}/${streakLimit}${status.risk?.live_loss_circuit_open ? " BLOCKED" : ""}`;
   const items = [
     ["ENGINE", status.engine === "online" ? "ONLINE" : "OFFLINE"],
     ["ENTRIES", status.trading_enabled ? "OPEN" : "STOPPED"],
     ["BINANCE", (status.binance?.status ?? "NO DATA").toUpperCase()],
     ["OPENAI", (status.openai?.status ?? "NO DATA").toUpperCase()],
     ["JEV", status.jev?.is_mock ? "MOCK" : (status.jev?.status ?? "NO DATA").toUpperCase()],
-    ["DB", (status.database?.mode ?? "NO DATA").toUpperCase()],
+    ["INTEL", intelligenceStatus],
+    ["LOSS STREAK", lossCircuit],
+    ["DB", `${(status.database?.mode ?? "NO DATA").toUpperCase()}${status.database?.healthy === false ? " DEGRADED" : ""}`],
     ["MARKET", (status.market_type ?? "NO DATA").toUpperCase()],
   ];
   return (

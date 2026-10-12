@@ -1,5 +1,6 @@
 from __future__ import annotations
 import math
+import os
 
 import asyncio
 import logging
@@ -57,6 +58,7 @@ from app.market.state import SymbolMarketState
 from app.providers.binance_account import BinanceBalanceProvider
 from app.providers.fees import BinanceFeeProvider, ConfigFeeProvider
 from app.providers.jev.factory import build_jev_provider
+from app.providers.jev.scheduler import JevScheduler
 from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
 from app.risk.engine import RiskContext, RiskEngine, margin_borrow_room
@@ -86,8 +88,12 @@ class FutureReturnLabeler:
 
     def __init__(self) -> None:
         self.pending: list[dict] = []
+        self._next_due: dict[str, datetime] = {}
 
     def register(self, snapshot: MarketSnapshot) -> None:
+        due = snapshot.timestamp + timedelta(seconds=min(self.HORIZONS.values()))
+        previous = self._next_due.get(snapshot.symbol)
+        self._next_due[snapshot.symbol] = min(previous, due) if previous is not None else due
         self.pending.append(
             {
                 "snapshot_id": snapshot.snapshot_id,
@@ -100,6 +106,9 @@ class FutureReturnLabeler:
 
     def on_price(self, symbol: str, timestamp: datetime, price: float | None) -> list[dict]:
         if price is None or price <= 0:
+            return []
+        due = self._next_due.get(symbol)
+        if due is None or timestamp < due:
             return []
         done: list[dict] = []
         still: list[dict] = []
@@ -117,6 +126,15 @@ class FutureReturnLabeler:
             else:
                 done.append(item)
         self.pending = still[-5000:]
+        remaining = [
+            item["timestamp"] + timedelta(seconds=seconds)
+            for item in self.pending if item["symbol"] == symbol
+            for name, seconds in self.HORIZONS.items() if name not in item["labels"]
+        ]
+        if remaining:
+            self._next_due[symbol] = min(remaining)
+        else:
+            self._next_due.pop(symbol, None)
         return done
 
 
@@ -158,6 +176,12 @@ class TradingEngine:
         self.labeler = FutureReturnLabeler()
         self.openai = OpenAIProvider(settings)
         self.jev = build_jev_provider(settings)
+        self.jev_scheduler = JevScheduler(
+            active_timeout_s=settings.jev_active_timeout_s,
+            shadow_timeout_s=settings.jev_shadow_timeout_s,
+            shadow_interval_s=settings.jev_shadow_interval_s,
+        )
+        self.build_commit = os.environ.get("RENDER_GIT_COMMIT", "local")
         self.fee_provider = BinanceFeeProvider(settings, self.fee_config) if settings.binance_api_key else ConfigFeeProvider(self.fee_config)
         self.balance = BinanceBalanceProvider(settings)
         self.intelligence = IntelligenceRunner(settings)
@@ -232,6 +256,10 @@ class TradingEngine:
             await self.evolution.attach_postgres(self.postgres.factory)
         await self.evolution.start()
         self._arm_live_strategy()
+        self._log("jev_policy", f"active_timeout_s={self.settings.jev_active_timeout_s} "
+            f"shadow_timeout_s={self.settings.jev_shadow_timeout_s} "
+            f"shadow_interval_s={self.settings.jev_shadow_interval_s} "
+            f"active_slots=3 shadow_slots=1 commit={self.build_commit}")
         task = asyncio.create_task(self._balance_loop(), name="balance_samples")
         self._background.add(task)
         task.add_done_callback(self._background.discard)
@@ -382,6 +410,7 @@ class TradingEngine:
     async def evaluate_symbol(self, symbol: str, as_of: datetime, trigger: str) -> list[StrategyDecision]:
         try:
             state = self.states[symbol]
+            feature_started = time.perf_counter()
             snapshot = build_snapshot(
                 state,
                 as_of=as_of,
@@ -390,11 +419,16 @@ class TradingEngine:
             )
             if snapshot is None:
                 return []
-            return await self.evaluate_snapshot(snapshot)
+            return await self.evaluate_snapshot(snapshot, pipeline_timings={
+                "features_ms": (time.perf_counter() - feature_started) * 1000,
+                "received_age_ms": max(0.0, (utcnow() - as_of).total_seconds() * 1000),
+            })
         finally:
             self._evaluating.discard(symbol)
 
-    async def evaluate_snapshot(self, snapshot: MarketSnapshot) -> list[StrategyDecision]:
+    async def evaluate_snapshot(self, snapshot: MarketSnapshot, *, pipeline_timings=None) -> list[StrategyDecision]:
+        pipeline_timings = dict(pipeline_timings or {})
+        snapshot_started = time.perf_counter()
         # Retry a transient database failure before the live risk gate. Without
         # this, one failed write disabled durable history and entries until the
         # process was restarted.
@@ -407,6 +441,7 @@ class TradingEngine:
         self.labeler.register(snapshot)
         if self.postgres and self.postgres.healthy:
             await self.postgres.save_snapshot(self.store.snapshots[str(snapshot.snapshot_id)])
+        pipeline_timings["snapshot_persist_ms"] = (time.perf_counter() - snapshot_started) * 1000
         await self.bus.publish(Event("snapshot_created", {"snapshot_id": str(snapshot.snapshot_id), "symbol": snapshot.symbol}))
         opportunity_id = uuid4()
         correlation_id = uuid4()
@@ -418,7 +453,7 @@ class TradingEngine:
                 self.health[key]["status"] = "off"
                 continue
             active.append(key)
-            tasks.append(asyncio.create_task(self._run_strategy(key, snapshot, opportunity_id, correlation_id)))
+            tasks.append(asyncio.create_task(self._run_strategy(key, snapshot, opportunity_id, correlation_id, pipeline_timings)))
         raw = await asyncio.gather(*tasks, return_exceptions=True)
         decisions: list[StrategyDecision] = []
         for key, result in zip(active, raw, strict=True):
@@ -439,13 +474,15 @@ class TradingEngine:
         await self._execute_decisions(decisions, snapshot)
         return decisions
 
-    async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id) -> StrategyDecision:
+    async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, pipeline_timings=None) -> StrategyDecision:
         started = time.perf_counter()
-        decision, context, _budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0)
+        decision, context, _budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0,
+            pipeline_timings=pipeline_timings)
         async with self._locks[key]:
             return await self._persist_strategy(key, snapshot, decision, context, started)
 
-    async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float):
+    async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float,
+                      pipeline_timings=None):
         cfg = self.strategy_settings[key]
         fee_quote = self.fee_provider.estimate(snapshot.symbol)
         context = StrategyContext(
@@ -461,9 +498,9 @@ class TradingEngine:
             failure_policy=self.settings.jev_failure_policy or self.combination.failure_policy,
             risk=self.risk.limits,
             round_trip_fee=rate_for("taker", fee_quote.maker, fee_quote.taker) * 2,
+            jev_scheduler=self.jev_scheduler,
         )
-        self.intelligence.note_marks(self._marks(), snapshot.timestamp)
-        context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
+        timings = dict(pipeline_timings or {})
         budget_ms = cfg.max_signal_age_ms
         if cfg.mode is OperatingMode.LIVE:
             waited_ms = max(waited_ms, (utcnow() - snapshot.timestamp).total_seconds() * 1000)
@@ -472,8 +509,27 @@ class TradingEngine:
         if waited_ms > budget_ms:
             decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
             decision.signal_status = SignalStatus.EXPIRED
+            timings["decision_start_age_ms"] = waited_ms
+            decision.metadata.update(pipeline_latency=timings, build_commit=self.build_commit)
+            return decision, context, budget_ms
+        context_started = time.perf_counter()
+        if key != "baseline":
+            self.intelligence.note_marks(self._marks(), snapshot.timestamp)
+            context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
+        timings["context_ms"] = (time.perf_counter() - context_started) * 1000
+        if cfg.mode is OperatingMode.LIVE:
+            waited_ms = max(waited_ms, (utcnow() - snapshot.timestamp).total_seconds() * 1000)
+        else:
+            waited_ms += timings["context_ms"]
+        timings["decision_start_age_ms"] = waited_ms
+        if waited_ms >= budget_ms:
+            decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, EXPIRED_SIGNAL)
+            decision.signal_status = SignalStatus.EXPIRED
+            decision.metadata.update(pipeline_latency=timings, build_commit=self.build_commit)
             return decision, context, budget_ms
         timeout = max(0.05, (budget_ms - waited_ms) / 1000)
+        context.evaluation_deadline = time.monotonic() + timeout
+        evaluation_started = time.perf_counter()
         try:
             decision = await asyncio.wait_for(
                 self.strategies[key].evaluate(snapshot, snapshot.features, context),
@@ -488,6 +544,9 @@ class TradingEngine:
             self.health[key]["status"] = "error"
             decision = self._error_decision(key, snapshot, opportunity_id, correlation_id, STRATEGY_ERROR)
             context.artifacts.append({"kind": "error", "error": str(exc)})
+        timings["evaluation_ms"] = (time.perf_counter() - evaluation_started) * 1000
+        timings["jev_ms"] = decision.metadata.get("jev_elapsed_ms", 0.0)
+        decision.metadata.update(pipeline_latency=timings, build_commit=self.build_commit)
         if cfg.mode is OperatingMode.LIVE:
             decision.metadata["snapshot_at"] = snapshot.timestamp.isoformat()
             decision.metadata["decided_at"] = utcnow().isoformat()
@@ -495,11 +554,12 @@ class TradingEngine:
         return decision, context, budget_ms
 
     async def _persist_strategy(self, key: str, snapshot: MarketSnapshot, decision, context, started: float):
+        persist_started = time.perf_counter()
         elapsed = (time.perf_counter() - started) * 1000
         self.health[key]["last_latency_ms"] = elapsed
         self.health[key]["last_decision_at"] = snapshot.timestamp.isoformat()
         if decision.action is Action.NO_TRADE:
-            reasons = ",".join(decision.reason_codes[:4]) or "NO_REASON"
+            reasons = ",".join(decision.reason_codes) or "NO_REASON"
             metadata = decision.metadata or {}
             agent = ""
             if metadata.get("binance_agent_state"):
@@ -516,7 +576,8 @@ class TradingEngine:
                     f"jev_result={metadata.get('jev_shadow_action') or '-'} "
                     f"continuation={_log_number(metadata.get('jev_continuation'))} "
                     f"required={_log_number(metadata.get('jev_required_continuation'))} "
-                    f"effect={metadata.get('jev_effect')}",
+                    f"effect={metadata.get('jev_effect')} "
+                    f"defer_reason={metadata.get('jev_defer_reason') or '-'}",
                 )
             if metadata.get("jev_effect") == "veto":
                 plan = metadata.get("jev_trade_plan") or {}
@@ -571,6 +632,18 @@ class TradingEngine:
                     await self.postgres.save_jev(stored["decision_id"], stored["snapshot_id"], artifact)
         if self.postgres and self.postgres.healthy:
             await self.postgres.save_decision(stored)
+        if key == "baseline_jev":
+            timing = decision.metadata.get("pipeline_latency") or {}
+            self._log("decision_latency", f"{key} {snapshot.symbol} decision={decision.decision_id} "
+                f"features_ms={_log_number(timing.get('features_ms'))} "
+                f"received_age_ms={_log_number(timing.get('received_age_ms'))} "
+                f"snapshot_persist_ms={_log_number(timing.get('snapshot_persist_ms'))} "
+                f"context_ms={_log_number(timing.get('context_ms'))} "
+                f"start_age_ms={_log_number(timing.get('decision_start_age_ms'))} "
+                f"evaluation_ms={_log_number(timing.get('evaluation_ms'))} "
+                f"jev_ms={_log_number(timing.get('jev_ms'))} "
+                f"decision_persist_ms={(time.perf_counter() - persist_started) * 1000:.1f} "
+                f"commit={self.build_commit}")
         await self.bus.publish(Event("decision", {"decision_id": stored["decision_id"], "strategy": key, "action": decision.action.value}))
         return decision
 

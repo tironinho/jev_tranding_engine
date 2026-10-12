@@ -171,6 +171,27 @@ async def test_live_shadow_records_a_veto_without_promoting_the_candidate():
 
 
 @pytest.mark.asyncio
+async def test_deferred_live_shadow_is_not_recorded_as_a_provider_failure():
+    from app.providers.jev.scheduler import JevScheduler
+
+    snapshot, _ = long_snapshot()
+    provider = PlansProvider({"*": .9})
+    ctx = context(provider)
+    ctx.mode = OperatingMode.LIVE
+    ctx.weights = replace(ctx.weights, min_abs_score=.95)
+    ctx.jev_scheduler = JevScheduler()
+    first = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+    second = await BaselineJevStrategy().evaluate(snapshot, {}, ctx)
+
+    assert first.action is second.action is Action.NO_TRADE
+    assert first.metadata["jev_effect"] == "shadow_confirm"
+    assert second.metadata["jev_effect"] == "shadow_deferred"
+    assert "JEV_SHADOW_DEFERRED" in second.reason_codes
+    assert JEV_UNAVAILABLE not in second.reason_codes
+    assert len(provider.requests) == len(ctx.artifacts) == 1
+
+
+@pytest.mark.asyncio
 async def test_live_confirmed_reclaim_reaches_jev_as_a_valid_setup():
     snapshot, _ = long_snapshot(
         ema_alignment=-1,

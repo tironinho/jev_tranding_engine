@@ -57,6 +57,7 @@ const EFFECTS: Record<string, string> = {
   shadow_confirm: "SOMBRA · APROVARIA",
   shadow_veto: "SOMBRA · VETOU",
   shadow_unavailable: "SOMBRA · ERRO",
+  shadow_deferred: "SOMBRA · ADIADA",
 };
 
 const SCORES: Array<[string, string]> = [

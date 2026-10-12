@@ -32,6 +32,48 @@ async def test_same_snapshot_reaches_every_strategy_and_paper_is_isolated():
 
 
 @pytest.mark.asyncio
+async def test_external_context_is_built_once_and_latency_is_persisted():
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    calls = []
+
+    def context_for(symbol, features, timestamp):
+        calls.append(symbol)
+        return None
+
+    eng.intelligence.context_for = context_for
+    decisions = await eng.evaluate_snapshot(snapshot, pipeline_timings={"features_ms": 12.5})
+    assert calls == ["BTCUSDT"]
+    for decision in decisions:
+        assert decision.metadata["pipeline_latency"]["features_ms"] == 12.5
+        assert "context_ms" in decision.metadata["pipeline_latency"]
+        assert "build_commit" in decision.metadata
+
+
+@pytest.mark.asyncio
+async def test_expired_live_signal_skips_external_context_and_model(monkeypatch):
+    import time
+    from uuid import uuid4
+    import app.service as service
+
+    eng = engine()
+    snapshot, _ = long_snapshot()
+    eng.strategy_settings["baseline_jev"].mode = OperatingMode.LIVE
+    monkeypatch.setattr(service, "utcnow", lambda: snapshot.timestamp + timedelta(seconds=60))
+
+    def no_context(*args):
+        raise AssertionError("Expired signal built external context")
+
+    eng.intelligence.context_for = no_context
+    decision, _, _ = await eng._decide("baseline_jev", snapshot, uuid4(), uuid4(), time.perf_counter(), 0)
+    assert decision.action is Action.NO_TRADE
+    assert decision.signal_status.value == "expired"
+    assert "EXPIRED_SIGNAL" in decision.reason_codes
+    assert decision.metadata["pipeline_latency"]["decision_start_age_ms"] == 60000
+
+
+@pytest.mark.asyncio
 async def test_one_strategy_crashing_does_not_stop_the_others():
     eng = engine()
     snapshot, book = long_snapshot()

@@ -104,7 +104,7 @@ class RealJevProvider:
                 self.base_url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 json=body,
-                timeout=self.timeout_s,
+                timeout=request.evaluation_timeout_s or self.timeout_s,
             )
         except Exception as exc:
             error_type = type(exc).__name__.lower()

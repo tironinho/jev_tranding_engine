@@ -23,6 +23,7 @@ class JevMarketRequest(BaseModel):
     market_state: dict[str, Any] | None = None
     intelligence: dict[str, Any] | None = None
     trade_plan: dict[str, Any] | None = None
+    evaluation_timeout_s: float | None = Field(default=None, exclude=True, gt=0, le=30)
     questions: list[str] = Field(
         default_factory=lambda: [
             "trend_continuation_probability",
@@ -71,3 +72,7 @@ class JevNotImplemented(Exception):
 
 class JevProviderError(Exception):
     pass
+
+
+class JevShadowDeferred(Exception):
+    """No provider call was made because research capacity was deferred."""

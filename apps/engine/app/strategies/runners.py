@@ -32,7 +32,7 @@ from app.domain.enums import (
     SignalStatus,
 )
 from app.domain.schemas import MarketSnapshot, StrategyDecision
-from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError
+from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale
@@ -55,6 +55,8 @@ class StrategyContext:
     round_trip_fee: float = 0.001
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     intelligence: dict | None = None
+    jev_scheduler: Any = None
+    evaluation_deadline: float | None = None
 
 
 def _decision(
@@ -162,7 +164,14 @@ class BaselineJevStrategy:
             decision = await _dynamic_decision(context, snapshot, result, metadata, started)
             return _force_live_context_shadow(decision, baseline_result) if live_context_shadow else decision
         try:
-            assessment = await context.jev.evaluate_market_state(request)
+            assessment = await _evaluate_jev(context, request, metadata)
+        except JevShadowDeferred as exc:
+            metadata.update(jev_effect="deferred", jev_defer_reason=str(exc))
+            decision = _decision(context=context, snapshot=snapshot, strategy=self.key,
+                action=Action.NO_TRADE, confidence=baseline_result.confidence,
+                reasons=[BASELINE_NO_TRADE, "JEV_SHADOW_DEFERRED", *baseline_result.reason_codes],
+                metadata=metadata, model_version=baseline_result.version, prompt_version=None, started=started)
+            return _force_live_context_shadow(decision, baseline_result)
         except (JevNotImplemented, JevProviderError, Exception) as exc:
             error_type = type(exc).__name__
             context.artifacts.append({"kind": "jev", "error": str(exc), "error_type": error_type,
@@ -267,7 +276,7 @@ def _force_live_context_shadow(decision: StrategyDecision, baseline_result: Base
     metadata = dict(decision.metadata)
     effect = metadata.get("jev_effect")
     metadata["jev_shadow_action"] = decision.action.value
-    if effect in {"confirm", "veto", "unavailable"}:
+    if effect in {"confirm", "veto", "unavailable", "deferred"}:
         metadata["jev_effect"] = f"shadow_{effect}"
     reasons = list(dict.fromkeys([BASELINE_NO_TRADE, *decision.reason_codes]))
     return decision.model_copy(
@@ -294,11 +303,16 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
     metadata.pop("jev_trade_plan", None)
     eligible = [p for p in plans if p["eligible"]][-3:]
     failures: list[tuple[str, str]] = []
+    deferred: list[str] = []
 
     async def assess(plan):
         request = _jev_request(context, snapshot, result).model_copy(update={"trade_plan": dict(plan)})
         try:
-            assessment = await asyncio.wait_for(context.jev.evaluate_market_state(request), timeout=8)
+            assessment = await _evaluate_jev(context, request, metadata)
+        except JevShadowDeferred as exc:
+            plan.update(eligible=False, reason="JEV_SHADOW_DEFERRED")
+            deferred.append(str(exc))
+            return None
         except Exception as exc:
             plan.update(eligible=False, reason="JEV_UNAVAILABLE")
             failure = (type(exc).__name__, str(exc))
@@ -328,6 +342,8 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
     choices = [item for item in assessed if item[3]]
     if not choices:
         reasons = ["TARGET_PLAN_UNAVAILABLE"] if not eligible else [JEV_UNAVAILABLE]
+        if deferred and not failures:
+            reasons = ["JEV_SHADOW_DEFERRED"]
         model_version = result.version
         prompt_version = None
         if assessed:
@@ -348,6 +364,8 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
             prompt_version = best_assessment.prompt_version
         else:
             metadata["jev_effect"] = "not_called" if not eligible else "unavailable"
+            if deferred and not failures:
+                metadata.update(jev_effect="deferred", jev_defer_reason=deferred[0])
             if failures:
                 metadata["error_type"], metadata["error"] = failures[0]
         return _decision(context=context, snapshot=snapshot, strategy="baseline_jev", action=Action.NO_TRADE,
@@ -364,6 +382,18 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
 
 def _candidate_reasons(metadata: dict) -> list[str]:
     return [BASELINE_CONTEXT_CANDIDATE] if metadata.get("candidate_action") else []
+
+
+async def _evaluate_jev(context, request, metadata):
+    started = time.perf_counter()
+    try:
+        if context.jev_scheduler is not None:
+            return await context.jev_scheduler.evaluate(context.jev, request,
+                shadow=metadata.get("jev_evaluation_mode") == "READ_ONLY_SHADOW",
+                deadline=context.evaluation_deadline)
+        return await asyncio.wait_for(context.jev.evaluate_market_state(request), timeout=8)
+    finally:
+        metadata["jev_elapsed_ms"] = (time.perf_counter() - started) * 1000
 
 
 class BaselineOpenAIJevStrategy:

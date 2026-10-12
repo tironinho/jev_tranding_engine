@@ -24,6 +24,23 @@ class _BoomClient:
         raise AssertionError("live HTTP was called")
 
 
+@pytest.mark.asyncio
+async def test_jev_transport_honors_the_remaining_signal_timeout():
+    class Client:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            assert timeout == 5.5
+            assert "evaluation_timeout_s" not in json["state"]
+            return httpx.Response(200, json={"answers": {
+                name: {"noul": .4} for name in (
+                    "trend_continuation_probability", "reversal_probability", "false_breakout_probability")}})
+
+    provider = RealJevProvider(prompt_version="test", base_url="https://jev.example", api_key="test",
+        model="m", timeout_s=3, client=Client())
+    request = JevMarketRequest(prompt_version="test", symbol="BTCUSDT", market_type="margin",
+        timestamp=clock(), features={}, evaluation_timeout_s=5.5)
+    await provider.evaluate_market_state(request)
+
+
 def _intent():
     from uuid import uuid4
 

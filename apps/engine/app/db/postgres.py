@@ -153,12 +153,16 @@ class PostgresMirror:
                 log.warning("postgres unavailable: %s", exc)
                 return False
 
-    async def _write(self, row) -> None:
+    async def _write(self, row, *following) -> None:
         if not self.factory or not self.healthy:
             return
         try:
             async with self.factory() as session:
                 session.add(row)
+                if following:
+                    # Flush the parent before its feature FK; commit both atomically.
+                    await session.flush()
+                    session.add_all(following)
                 await session.commit()
         except Exception as exc:
             self.last_error = str(exc)
@@ -326,9 +330,9 @@ class PostgresMirror:
                 timestamp=_dt(payload["timestamp"]),
                 price=payload["price"],
                 payload=payload,
-            )
+            ),
+            FeatureSnapshotRow(snapshot_id=snapshot_id, payload=payload.get("features") or {}),
         )
-        await self._write(FeatureSnapshotRow(snapshot_id=snapshot_id, payload=payload.get("features") or {}))
 
     async def save_decision(self, payload: dict) -> None:
         await self._write(

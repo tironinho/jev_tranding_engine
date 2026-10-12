@@ -23,7 +23,7 @@ O resultado é coerente com a configuração: o sistema só pode abrir um SHORT 
 
 ## Limitações encontradas no JEV
 
-O prompt atual pede a probabilidade de o alvo ser atingido antes do stop no horizonte do plano. Para um alvo de pelo menos 3R, o ponto de equilíbrio bruto está perto de 25%, e a expectativa mínima configurada, com haircut, exige aproximadamente um terço de probabilidade. O veto fixo de 55% é muito mais conservador e pode estar misturando duas grandezas diferentes: continuação direcional e probabilidade de atingir um alvo distante antes do stop.
+O prompt atual pede a probabilidade de o alvo ser atingido antes do stop no horizonte do plano. Para um alvo bruto de 3R, o ponto de equilíbrio antes dos custos é 25%. A auditoria posterior dos 44 planos com expectativa registrada mostrou, porém, R:R líquido mediano próximo de 1,326 e probabilidade bruta mínima econômica de aproximadamente 52,28%, incluindo haircut e expectativa mínima de 0,10R. A estimativa inicial de aproximadamente um terço era incompleta para esses custos reais. O corte de 55% está próximo do piso econômico desses planos; reduzi-lo sem auditar custos e calibração não resolve a ausência de vantagem prevista. Consulte [a auditoria cruzada posterior](DEPLOY_MARKET_CROSS_REVIEW_2026-10-12.md).
 
 Esse threshold não foi reduzido nesta alteração. A probabilidade do JEV ainda não está calibrada contra resultados observados, e diminuir o piso diretamente poderia liberar risco sem evidência suficiente.
 
@@ -47,7 +47,7 @@ Os vetos agora registram probabilidade de continuação, piso exigido, reversão
 
 Também foi adicionado um analista Binance determinístico em modo `READ_ONLY_SHADOW`. Ele consolida os dados públicos já coletados pela engine em tendência, momentum, fluxo, liquidez, volatilidade, alertas de risco, viés direcional e qualidade. O resultado é persistido nos metadados de cada decisão, aparece nos logs inclusive quando a baseline encerra antes do JEV e segue no contexto do JEV quando as fontes externas estão incompletas. O componente declara `can_execute=false`: ele fornece contexto e nunca envia nem autoriza ordens.
 
-Para formar uma amostra de calibração, candidatos coerentes com score absoluto de pelo menos 0,15 agora também chegam ao JEV em modo live como leitura sombra. A tela separa a ação original da baseline, a direção candidata avaliada e o que o JEV teria decidido. Mesmo quando o JEV confirma, a decisão final continua `NO_TRADE` se a baseline original não atingiu 0,55. Sinais fracos, dados insuficientes e bloqueadores estruturais continuam sem chamada.
+Para formar uma amostra de calibração, candidatos coerentes com score absoluto de pelo menos 0,15 agora também chegam ao JEV em modo live como leitura sombra. A tela separa a ação original da baseline, a direção candidata avaliada e o que o JEV teria decidido. Mesmo quando o JEV confirma, a decisão final continua `NO_TRADE` se a baseline original recusou. O corte habitual é 0,55, com exceção de reclaim confirmado a partir de 0,40. Sinais fracos, dados insuficientes e bloqueadores estruturais continuam sem chamada.
 
 ## Como usar Binance AI Agent Skills
 

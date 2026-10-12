@@ -320,6 +320,9 @@ class Settings(BaseSettings):
     jev_prompt_version: str = "jev_plan_outcome_v3"
     jev_failure_policy: str = "NO_TRADE"
     jev_timeout_s: float = 3.0
+    jev_active_timeout_s: float = Field(default=6.0, gt=0, le=20)
+    jev_shadow_timeout_s: float = Field(default=4.0, gt=0, le=20)
+    jev_shadow_interval_s: float = Field(default=120.0, ge=60)
     engine_api_secret: str = ""
     service_role: str = "engine"
     balance_upstream_url: str = ""

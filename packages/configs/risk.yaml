@@ -2,13 +2,15 @@
 # Limites aplicados pelo motor antes da execução; armar produção é uma configuração separada.
 
 target_mode: structure
-# O target usa 3R como piso. Se faixa/estrutura calcularem um alvo maior, ele é preservado.
-# A decisão só abre quando a expectativa líquida continua positiva após custos e haircut.
+# Política da primeira entrada live, commit d5b2f6d.
+# Alvo limitado à faixa de 60m e 2,5R; entrada exige R:R líquido de pelo menos 1,5.
+target_rule_version: initial_live_2026_10_08
+min_net_rr: 1.5
 target_fallback: rr
 fixed_target_pct: 0.01
-rr_target_multiple: 3.0
-step_stop_to_breakeven: true
-dynamic_rr_enabled: true
+rr_target_multiple: 2.5
+step_stop_to_breakeven: false
+dynamic_rr_enabled: false
 plan_stress_bps: 2.0
 probability_haircut: 0.05
 # Cenário de estresse (1 bp/h), não taxa efetiva da conta. Usa a maior entre esta e a observada.
@@ -18,11 +20,10 @@ max_portfolio_stop_risk: 0.02
 # Caixa real mínimo que precisa continuar livre antes de um short de margem.
 # O restante do prêmio do stop é financiado pelos recursos da própria venda.
 min_protection_quote_reserve: 0.25
-# Rejeita vantagem prevista pequena demais para sobreviver ao erro do modelo.
+# Mantido para o perfil de planos dinâmicos; o perfil inicial usa min_net_rr.
 min_expected_net_r: 0.10
-# A amostra live atual dos longs é negativa; eles continuam no paper para
-# revalidação sem colocar capital real em risco.
-live_longs_enabled: false
+# A configuração inicial avaliava LONG e SHORT.
+live_longs_enabled: true
 # Três perdas live consecutivas pausam novas entradas até o próximo dia UTC.
 # O paper continua coletando evidência durante a pausa.
 max_consecutive_live_losses: 3
@@ -41,10 +42,9 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# O horizonte continua sendo enviado ao JEV para avaliar a continuação. A posição
-# não fecha pelo relógio: sai no alvo de 3R ou no stop, que sobe em 1R e 2R.
+# Política inicial: após 60m fecha posição perdedora; vencedora continua até alvo/stop.
 max_hold_minutes: 60
-time_exit_enabled: false
+time_exit_enabled: true
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false
 # Teto de alavancagem para dimensionamento; não altera a autorização de ordens reais.

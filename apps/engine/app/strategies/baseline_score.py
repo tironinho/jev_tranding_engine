@@ -80,6 +80,9 @@ def _num(features: dict, name: str) -> float | None:
 
 def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> dict[str, float | None] | None:
     """Map explainable features into [-1, 1]. Scale constants are not fitted edges."""
+    if config.version == "baseline_weights_v1":
+        from app.strategies.initial_live_baseline import score_components as initial_components
+        return initial_components(snapshot, config)
     features = snapshot.features
     alignment = _num(features, "ema_alignment")
     slope = _num(features, "ema_20_slope")
@@ -298,6 +301,9 @@ def combine_scores(scores: dict[str, float | None], config: BaselineWeightConfig
 
 
 def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> BaselineResult:
+    if config.version == "baseline_weights_v1":
+        from app.strategies.initial_live_baseline import score_baseline as initial_baseline
+        return initial_baseline(snapshot, config)
     if snapshot.data_quality.stale:
         return BaselineResult(Action.NO_TRADE, 0.0, 0.0, {}, [STALE_MARKET_DATA], config.version)
     scores = score_components(snapshot, config)

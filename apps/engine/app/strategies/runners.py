@@ -35,7 +35,7 @@ from app.domain.schemas import MarketSnapshot, StrategyDecision
 from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
-from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale
+from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
 from app.risk.plans import candidate_plans, score_probability
 
 
@@ -131,7 +131,8 @@ class BaselineJevStrategy:
         live_context_shadow = False
         baseline_result = result
         if result.action is Action.NO_TRADE:
-            candidate_action = _context_candidate_action(result, context.combination)
+            candidate_action = (None if context.combination.jev_request_profile == "initial_live_2026_10_08"
+                                else _context_candidate_action(result, context.combination))
             if candidate_action is None:
                 metadata["jev_effect"] = "idle"
                 return _decision(
@@ -160,7 +161,8 @@ class BaselineJevStrategy:
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return _force_live_context_shadow(blocked, baseline_result) if live_context_shadow else blocked
-        if context.risk and context.risk.dynamic_rr_enabled:
+        if (context.risk and context.risk.dynamic_rr_enabled
+                and context.combination.jev_request_profile != "initial_live_2026_10_08"):
             decision = await _dynamic_decision(context, snapshot, result, metadata, started)
             return _force_live_context_shadow(decision, baseline_result) if live_context_shadow else decision
         try:
@@ -590,7 +592,8 @@ def _class_metadata(result: BaselineResult) -> dict[str, Any]:
 
 def _class_has_break(result: BaselineResult) -> bool:
     structural = {"BREAKOUT", "BREAKDOWN", "BULLISH_RECLAIM", "BEARISH_RECLAIM"}
-    return bool(structural.intersection(result.market_class.labels))
+    labels = result.reason_codes if result.version == "baseline_weights_v1" else result.market_class.labels
+    return bool(structural.intersection(labels))
 
 
 def _stamp_size(metadata: dict, assessment, required: float, broke: bool, action: Action) -> None:
@@ -620,7 +623,8 @@ def _jev_request(
 ) -> JevMarketRequest:
     from app.risk.economics import plan_geometry
     plan = None
-    if context.risk is not None:
+    initial = context.combination.jev_request_profile == "initial_live_2026_10_08"
+    if context.risk is not None and not initial:
         entry = (snapshot.best_ask if result.action is Action.LONG else snapshot.best_bid) or snapshot.price
         geometry = plan_geometry(result.action, entry, snapshot.features, context.risk)
         if not isinstance(geometry, str):
@@ -629,7 +633,8 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=getattr(context.jev, "prompt_version", "jev_plan_outcome_v3"),
+        prompt_version="jev_initial_live_2026_10_08" if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3"),
+        evaluation_profile=context.combination.jev_request_profile,
         symbol=snapshot.symbol,
         market_type=snapshot.market_type.value,
         timestamp=snapshot.timestamp,
@@ -670,6 +675,12 @@ def _quality_gate(context, snapshot, metadata, started, strategy):
 
 def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext, action: Action) -> float:
     configured = context.combination.min_short_continuation if action is Action.SHORT else context.combination.min_trend_continuation
+    if context.combination.jev_request_profile == "initial_live_2026_10_08":
+        configured = context.combination.min_trend_continuation
+        atr = snapshot.features.get("atr")
+        if context.risk is not None and snapshot.price > 0 and isinstance(atr, (int, float)) and atr > 0:
+            stop_pct = max(context.risk.min_stop_pct, context.risk.atr_stop_mult * atr / snapshot.price)
+            return max(configured, meta_hit_probability(context.risk.rr_target_multiple, context.round_trip_fee, stop_pct))
     return configured
 
 

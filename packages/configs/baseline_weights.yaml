@@ -1,8 +1,8 @@
-# baseline_weights_v4
+# baseline_weights_v1, restaurada da primeira entrada live (d5b2f6d).
 # Constantes de escala só comprimem grandezas típicas de cripto para [-1, 1].
 # Não são parâmetros otimizados. Não usar live sem calibração por backtest.
 
-version: baseline_weights_v4
+version: baseline_weights_v1
 weights:
   trend: 0.25
   momentum: 0.20
@@ -11,7 +11,7 @@ weights:
   structure: 0.15
   volatility: 0.00
   liquidity: 0.00
-min_abs_score: 0.55
+min_abs_score: 0.45
 max_spread_bps: 8.0
 min_volume_ratio: 0.40
 extreme_atr_normalized: 0.05
@@ -19,15 +19,7 @@ high_atr_normalized: 0.02
 slope_scale: 0.001
 price_vs_ema_scale: 0.005
 roc_scale: 0.004
-# Contexto de candles fechados: inclinação da EMA20 em 15m, distância do
-# preço à EMA20 de 15m e retorno do último candle fechado de 5m.
-context_15m_slope_scale: 0.005
-context_15m_distance_scale: 0.01
-setup_5m_return_scale: 0.005
 # 1% in an hour maps to the edge of [-1, 1]. Scale only, not a fitted edge.
 return_60m_scale: 0.01
 imbalance_strong: 0.25
 volume_z_strong: 1.0
-# Reclaim é um setup separado: varrida estrutural recuperada com volume, momentum e fluxo.
-reclaim_min_abs_score: 0.40
-reclaim_min_volume_ratio: 1.50

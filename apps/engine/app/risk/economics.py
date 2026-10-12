@@ -111,6 +111,10 @@ def _fit_target(side: Action, entry: float, distance: float, features: dict, lim
     hour = features.get("range_60m")
     if not isinstance(hour, (int, float)) or hour <= 0 or distance <= 0:
         return HOUR_RANGE_UNAVAILABLE
+    if limits.target_rule_version == "initial_live_2026_10_08":
+        reward = min(distance * limits.rr_target_multiple, float(hour))
+        fitted = entry + reward if side is Action.LONG else entry - reward
+        return fitted if fitted > 0 else HOUR_RANGE_UNAVAILABLE
     calculated = float(hour)
     boundary_key = "resistance_15m" if side is Action.LONG else "support_15m"
     boundary = features.get(boundary_key)

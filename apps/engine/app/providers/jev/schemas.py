@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class JevMarketRequest(BaseModel):
     prompt_version: str
+    evaluation_profile: Literal["plan_outcome_v3", "initial_live_2026_10_08"] = "plan_outcome_v3"
     symbol: str
     market_type: str
     timestamp: datetime

@@ -53,6 +53,12 @@ _UNUSED_NOULS = {
     "liquidity_sweep_probability": 0.5,
 }
 
+_INITIAL_LIVE_INSTRUCTIONS = {
+    "trend_continuation_probability": "The `baseline_action` side reaches the target before the stop.",
+    "reversal_probability": "Price reverses against `baseline_action`.",
+    "false_breakout_probability": "The `breakout` or `breakdown` flag is a false break.",
+}
+
 
 class RealJevProvider:
     """POST a TypeSafe System One request to the configured URL. No host is built in.
@@ -91,11 +97,13 @@ class RealJevProvider:
             raise JevProviderError("Jev HTTP client is not available")
         started = time.perf_counter()
         payload = request.model_dump(mode="json")
+        instructions = (_INITIAL_LIVE_INSTRUCTIONS
+                        if request.evaluation_profile == "initial_live_2026_10_08" else _INSTRUCTIONS)
         body = {
             "model": self.model,
             "state": _state_for_model(payload, self.min_data_quality),
             "questions": {
-                name: {"type": "noul", "instructions": _INSTRUCTIONS[name]}
+                name: {"type": "noul", "instructions": instructions[name]}
                 for name in _NOULS
             },
         }
@@ -131,7 +139,8 @@ class RealJevProvider:
                     "provider": "real",
                     "is_mock": False,
                     "provider_version": self.provider_version,
-                    "prompt_version": self.prompt_version,
+                    "prompt_version": (request.prompt_version
+                                       if request.evaluation_profile == "initial_live_2026_10_08" else self.prompt_version),
                     "model": parsed.get("model") if isinstance(parsed, dict) else self.model,
                     "latency_ms": (time.perf_counter() - started) * 1000,
                     "error": None,
@@ -190,6 +199,23 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     """Scores and unitless features only. Dollar prices stay off the request."""
     features = payload.get("features") or {}
     frac = _finite(features.get("range_60m_frac"))
+    if payload.get("evaluation_profile") == "initial_live_2026_10_08":
+        state = {
+            "symbol": payload.get("symbol"),
+            "market_type": payload.get("market_type"),
+            "baseline_action": payload.get("baseline_action"),
+            "baseline_confidence": payload.get("baseline_confidence"),
+            "baseline_scores": payload.get("baseline_scores") or {},
+            "taker_flow_1m": features.get("taker_flow_1m"),
+            "return_60m": features.get("return_60m"),
+            "range_60m": frac,
+            "breakout": features.get("breakout"),
+            "breakdown": features.get("breakdown"),
+        }
+        intelligence = payload.get("intelligence")
+        if isinstance(intelligence, dict):
+            state["intelligence"] = intelligence
+        return state
     state = {
         "symbol": payload.get("symbol"),
         "market_type": payload.get("market_type"),

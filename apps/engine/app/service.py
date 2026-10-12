@@ -259,7 +259,11 @@ class TradingEngine:
         self._log("jev_policy", f"active_timeout_s={self.settings.jev_active_timeout_s} "
             f"shadow_timeout_s={self.settings.jev_shadow_timeout_s} "
             f"shadow_interval_s={self.settings.jev_shadow_interval_s} "
-            f"active_slots=3 shadow_slots=1 commit={self.build_commit}")
+            f"active_slots=3 shadow_slots=1 commit={self.build_commit} "
+            f"request_profile={self.combination.jev_request_profile} "
+            f"baseline_version={self.weights.version} baseline_floor={self.weights.min_abs_score} "
+            f"target_rule={self.risk.limits.target_rule_version} rr={self.risk.limits.rr_target_multiple} "
+            f"min_net_rr={self.risk.limits.min_net_rr} live_longs={self.risk.limits.live_longs_enabled}")
         task = asyncio.create_task(self._balance_loop(), name="balance_samples")
         self._background.add(task)
         task.add_done_callback(self._background.discard)
@@ -1062,6 +1066,7 @@ class TradingEngine:
         hold_minutes = max(0.0, (as_of - position.opened_at).total_seconds() / 60)
         time_exit_floor = _net_break_even_price(position, self.fee_config)
         protected_after_horizon = _stop_protects_price(position, time_exit_floor)
+        initial_time_policy = self.risk.limits.target_rule_version == "initial_live_2026_10_08"
         reason = position_exit_observed(
             position.side,
             min_bid=observed["min_bid"],
@@ -1073,9 +1078,9 @@ class TradingEngine:
             hold_minutes=hold_minutes,
             max_hold_minutes=(self.risk.limits.max_hold_minutes
                               if self.risk.limits.time_exit_enabled else 0),
-            # Past the assessed horizon, extend only a position whose stop
-            # already protects total break-even. Otherwise the clock closes it.
-            entry=time_exit_floor if protected_after_horizon else None,
+            # Initial live policy keeps a winner until target/stop. The later
+            # plan policy additionally requires protected net breakeven.
+            entry=time_exit_floor if initial_time_policy or protected_after_horizon else None,
             bid=state.best_bid,
             ask=state.best_ask,
         )

@@ -2,7 +2,7 @@
 strategies:
   baseline:
     enabled: true
-    mode: paper
+    mode: shadow
     max_signal_age_ms: 2000
     call_model: false
 
@@ -16,16 +16,17 @@ strategies:
     call_model: true
 
 combination:
-  baseline_version: baseline_classified_v1
-  jev_rule_version: jev_reclaim_direction_v5
+  baseline_version: baseline_score_v1
+  jev_rule_version: jev_initial_live_2026_10_08
+  jev_request_profile: initial_live_2026_10_08
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
-  # Abertura live exige uma baseline válida e confirmação forte do JEV.
-  # O alvo e o R:R não alteram este piso de qualidade do sinal.
+  # Política da primeira entrada live (d5b2f6d): baseline >=0,45 e Jev >=0,55.
+  # O piso também considera taxa/stop; candidatos recusados não chamam o modelo.
   min_trend_continuation: 0.55
   min_short_continuation: 0.55
-  # Candidatos abaixo do threshold seguem visíveis em paper/shadow para pesquisa,
-  # mas nunca são promovidos para execução live.
+  # Estes dois parâmetros só são usados pelo perfil de planos/classificação.
+  # O perfil inicial encerra NO_TRADE antes de chamar Jev abaixo de 0,45.
   candidate_min_abs_score: 0.15
   # Moderate disagreement may be reviewed by JEV; strong disagreement and
   # flow against the candidate remain blocked before the provider call.

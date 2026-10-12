@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.config import BaselineWeightConfig, Settings
+from app.config import BaselineWeightConfig, CombinationConfig, Settings
 from app.domain.enums import Action, MarketType, OperatingMode
 from app.domain.schemas import BookLevel, DataQuality, MarketSnapshot
 from app.execution.slippage import book_from_levels
@@ -39,7 +39,17 @@ def settings(**overrides) -> Settings:
 
 
 def engine(**overrides) -> TradingEngine:
-    return TradingEngine(settings(**overrides))
+    # Existing unit cases exercise the classified policy explicitly. The
+    # initial-live production profile has its own end-to-end regression cases.
+    eng = TradingEngine(settings(**overrides))
+    eng.weights = BaselineWeightConfig()
+    eng.combination = CombinationConfig(openai_rule_version="openai_jev_economic_gate_v2")
+    eng.strategy_settings["baseline"].mode = OperatingMode.PAPER
+    eng.risk.update_limits(target_rule_version="target_3r_v1", rr_target_multiple=3.0,
+        min_net_rr=0.0, time_exit_enabled=False, step_stop_to_breakeven=True,
+        dynamic_rr_enabled=True, live_longs_enabled=False)
+    eng.risk_limits = eng.risk.limits
+    return eng
 
 
 def clock() -> datetime:

@@ -56,6 +56,7 @@ class CombinationConfig:
     jev_rule_version: str = "jev_reclaim_direction_v5"
     openai_rule_version: str = "openai_jev_break_size_v1"
     failure_policy: str = "NO_TRADE"
+    jev_request_profile: str = "plan_outcome_v3"
     min_trend_continuation: float = 0.55
     min_short_continuation: float = 0.55
     candidate_min_abs_score: float = 0.15
@@ -93,6 +94,8 @@ class RiskLimits:
     target_fallback: str = "rr"
     fixed_target_pct: float = 0.01
     rr_target_multiple: float = 3.0
+    target_rule_version: str = "target_3r_v1"
+    min_net_rr: float = 0.0
     atr_buffer_mult: float = 0.10
     atr_stop_mult: float = 2.0
     max_stop_pct: float = 0.02
@@ -203,6 +206,7 @@ def combination_from_file(payload: dict) -> CombinationConfig:
         jev_rule_version=payload.get("jev_rule_version", "jev_reclaim_direction_v5"),
         openai_rule_version=payload.get("openai_rule_version", "openai_jev_break_size_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
+        jev_request_profile=payload.get("jev_request_profile", "plan_outcome_v3"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
         min_short_continuation=float(payload.get("min_short_continuation", 0.55)),
         candidate_min_abs_score=float(payload.get("candidate_min_abs_score", 0.15)),
@@ -246,6 +250,8 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         target_fallback=str(payload.get("target_fallback", "rr")),
         fixed_target_pct=float(payload.get("fixed_target_pct", 0.01)),
         rr_target_multiple=float(payload.get("rr_target_multiple", 3.0)),
+        target_rule_version=str(payload.get("target_rule_version", "target_3r_v1")),
+        min_net_rr=float(payload.get("min_net_rr", 0.0)),
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
         atr_stop_mult=float(payload.get("atr_stop_mult", 2.0)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),

@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 
 from app.domain.enums import Action
-from app.risk.economics import compute_trade_economics, plan_geometry
+from app.risk.economics import compute_trade_economics, plan_geometry, target_for_net_rr
 
 
 def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allow_structure_extension=False):
@@ -14,7 +14,6 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
         return []
     distance = abs(entry - geometry.stop)
     direction = 1 if side is Action.LONG else -1
-    reward = abs(geometry.target - entry)
     calculated_limit = float(snapshot.features["range_60m"])
     boundary_key = "resistance_15m" if side is Action.LONG else "support_15m"
     boundary = snapshot.features.get(boundary_key)
@@ -26,7 +25,13 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
     assumed_rate = max(rate or 0, limits.borrow_hourly_stress_rate)
     interest = entry * assumed_rate * max(1, math.ceil(limits.max_hold_minutes / 60)) if snapshot.market_type.value == "margin" else 0
     target = geometry.target
-    if target <= 0:
+    original_target = target
+    if limits.cost_aware_target_floor:
+        target = target_for_net_rr(side=side, entry=entry, stop=geometry.stop, target=target,
+            min_net_rr=limits.min_net_rr, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
+            exit_slippage_per_unit=entry*limits.plan_stress_bps/10000, funding_per_unit=-interest)
+    reward = abs(target-entry)
+    if not math.isfinite(target) or target <= 0 or (target-entry)*direction <= 0:
         return []
     econ = compute_trade_economics(side=side, entry=entry, stop=geometry.stop, target=target,
         quantity=1, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
@@ -34,6 +39,9 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
         funding_cashflow_total=-interest, fee_source="plan_estimate")
     label = f"rr_{econ.gross_rr:.2f}".rstrip("0").rstrip(".") if econ.gross_rr is not None else "target"
     return [{"plan_id": label, "entry": entry, "stop": geometry.stop, "target": target,
+        "original_target": original_target,
+        "target_extended_for_costs": abs(target-entry) > abs(original_target-entry)+1e-12,
+        "target_policy": "net_rr_floor_v1" if limits.cost_aware_target_floor else limits.target_rule_version,
         "gross_rr": econ.gross_rr, "net_rr": econ.net_rr, "net_risk_per_unit": econ.net_risk,
         "net_reward_per_unit": econ.net_reward, "break_even_probability": 1 / (1 + econ.net_rr) if econ.net_rr and econ.net_rr > 0 else 1,
         "horizon_minutes": limits.max_hold_minutes, "round_trip_fee_rate": fee_rate * 2,

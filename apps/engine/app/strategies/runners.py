@@ -158,6 +158,13 @@ class BaselineJevStrategy:
             result = replace(result, action=candidate_action)
         request = _jev_request(context, snapshot, result)
         metadata["jev_trade_plan"] = request.trade_plan
+        if (context.risk and context.risk.cost_aware_target_floor and
+                context.combination.jev_request_profile == "live_first_ten_2026_10_09"
+                and request.trade_plan is None):
+            return _decision(context=context, snapshot=snapshot, strategy=self.key,
+                action=Action.NO_TRADE, confidence=0, reasons=["TRADE_PLAN_UNAVAILABLE"],
+                metadata={**metadata, "jev_effect": "idle"}, model_version=result.version,
+                prompt_version=request.prompt_version, started=started)
         blocked = _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return _force_live_context_shadow(blocked, baseline_result) if live_context_shadow else blocked
@@ -217,7 +224,7 @@ class BaselineJevStrategy:
                 "error": assessment.error,
             }
         )
-        required = _continuation_floor(snapshot, context, result.action)
+        required = _continuation_floor(snapshot, context, result.action, request.trade_plan)
         metadata["jev_required_continuation"] = required
         broke = _class_has_break(result)
         action, confidence, vetoes = apply_jev_veto(
@@ -230,6 +237,15 @@ class BaselineJevStrategy:
         )
         _stamp_size(metadata, assessment, required, broke, action)
         _remember_jev(metadata, assessment, "veto" if action is Action.NO_TRADE else "confirm")
+        if request.trade_plan and context.risk and context.risk.cost_aware_target_floor:
+            assessed_plan = dict(request.trade_plan)
+            assessed_plan.update(score_probability(assessed_plan, assessment.trend_continuation_probability,
+                                                   context.risk.probability_haircut))
+            assessed_plan.update(eligible=action is not Action.NO_TRADE,
+                                 reason=",".join(vetoes) if vetoes else "JEV_CONFIRM",
+                                 required_probability=required)
+            metadata.update(jev_trade_plan=assessed_plan, candidate_plans=[assessed_plan],
+                            selected_plan_id=assessed_plan["plan_id"], probability_status="UNCALIBRATED")
         decision = _decision(
             context=context,
             snapshot=snapshot,
@@ -624,7 +640,13 @@ def _jev_request(
     from app.risk.economics import plan_geometry
     plan = None
     initial = context.combination.jev_request_profile != "plan_outcome_v3"
-    if context.risk is not None and not initial:
+    cost_plan = (context.risk is not None and context.risk.cost_aware_target_floor
+                 and context.combination.jev_request_profile == "live_first_ten_2026_10_09")
+    if cost_plan:
+        plans = candidate_plans(snapshot, result.action, context.risk,
+                                context.round_trip_fee/2, context.intelligence)
+        plan = plans[0] if plans else None
+    elif context.risk is not None and not initial:
         entry = (snapshot.best_ask if result.action is Action.LONG else snapshot.best_bid) or snapshot.price
         geometry = plan_geometry(result.action, entry, snapshot.features, context.risk)
         if not isinstance(geometry, str):
@@ -633,7 +655,8 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=("jev_" + context.combination.jev_request_profile) if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3"),
+        prompt_version=(("jev_" + context.combination.jev_request_profile + ("_net_rr_floor_v1" if cost_plan else ""))
+                        if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3")),
         evaluation_profile=context.combination.jev_request_profile,
         symbol=snapshot.symbol,
         market_type=snapshot.market_type.value,
@@ -673,8 +696,11 @@ def _quality_gate(context, snapshot, metadata, started, strategy):
     )
 
 
-def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext, action: Action) -> float:
+def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext, action: Action, plan: dict | None = None) -> float:
     configured = context.combination.min_short_continuation if action is Action.SHORT else context.combination.min_trend_continuation
+    if (context.risk is not None and context.risk.cost_aware_target_floor and plan
+            and isinstance(plan.get("net_rr"), (int, float)) and plan["net_rr"] > 0):
+        return max(configured, 1/(1+plan["net_rr"]))
     if context.combination.jev_request_profile != "plan_outcome_v3":
         if context.combination.jev_request_profile == "initial_live_2026_10_08":
             configured = context.combination.min_trend_continuation

@@ -20,7 +20,11 @@ PROFILE = "live_first_ten_2026_10_09"
 
 
 def first_ten_engine():
-    return TradingEngine(settings())
+    eng = TradingEngine(settings())
+    # Reconstruct the exact tenth-trade policy, before the cost-target correction.
+    eng.risk.update_limits(cost_aware_target_floor=False)
+    eng.risk_limits = eng.risk.limits
+    return eng
 
 
 def test_repository_uses_tenth_trade_policy_and_wider_hour_is_not_capped():

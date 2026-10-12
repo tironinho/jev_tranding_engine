@@ -318,7 +318,7 @@ class RiskEngine:
             slippage_cost=extra_slip,
             spread_included_in_fill=included or preview.model != "fixed_bps",
         )
-        if self.limits.min_net_rr > 0 and (economics.net_rr is None or economics.net_rr < self.limits.min_net_rr):
+        if self.limits.min_net_rr > 0 and (economics.net_rr is None or economics.net_rr + 1e-12 < self.limits.min_net_rr):
             return self._reject(decision, [NET_RR_TOO_LOW], economics=economics,
                                 details={"geometry_reasons": list(geometry.reasons)})
         if economics.net_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:

@@ -3,9 +3,10 @@
 
 target_mode: structure
 # Política vigente no décimo fechamento live, commit a15bc12.
-# Alvo é a faixa de 60m; 2,5R fica na fórmula de continuação, sem limitar o alvo.
+# A faixa de 60m é o alvo base; o piso líquido abaixo é calculado antes do Jev.
 target_rule_version: live_first_ten_2026_10_09
 min_net_rr: 1.5
+cost_aware_target_floor: true
 target_fallback: rr
 fixed_target_pct: 0.01
 rr_target_multiple: 2.5

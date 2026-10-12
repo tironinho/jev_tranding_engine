@@ -136,6 +136,29 @@ def _fit_target(side: Action, entry: float, distance: float, features: dict, lim
     return fitted
 
 
+def target_for_net_rr(
+    *, side: Action, entry: float, stop: float, target: float, min_net_rr: float,
+    entry_fee_rate: float, exit_fee_rate: float, exit_slippage_per_unit: float,
+    funding_per_unit: float = 0.0,
+) -> float:
+    """Fit a target before model assessment, never change an assessed target.
+
+    Solve net reward = min_net_rr * net risk, including the target-dependent
+    exit commission. Preserve any farther target and the original stop.
+    """
+    if min_net_rr <= 0:
+        return target
+    direction = 1 if side is Action.LONG else -1
+    net_risk = (abs(entry-stop) + entry*entry_fee_rate + stop*exit_fee_rate
+                + abs(exit_slippage_per_unit) - funding_per_unit)
+    costs = entry*(entry_fee_rate+exit_fee_rate) + abs(exit_slippage_per_unit) - funding_per_unit
+    denominator = 1 - direction*exit_fee_rate
+    if denominator <= 0 or net_risk <= 0:
+        return target
+    distance = max(direction*(target-entry), (min_net_rr*net_risk+costs)/denominator)
+    return entry + direction*distance
+
+
 def compute_trade_economics(
     *,
     side: Action,

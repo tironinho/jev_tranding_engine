@@ -110,6 +110,15 @@ class RealJevProvider:
         payload = request.model_dump(mode="json")
         instructions = {"initial_live_2026_10_08": _INITIAL_LIVE_INSTRUCTIONS,
                         "live_first_ten_2026_10_09": _FIRST_TEN_INSTRUCTIONS}.get(request.evaluation_profile, _INSTRUCTIONS)
+        if request.evaluation_profile == "live_first_ten_2026_10_09" and request.trade_plan:
+            instructions = {**_FIRST_TEN_INSTRUCTIONS,
+                "trend_continuation_probability": (
+                    "Estimate the probability that the baseline_action candidate reaches the supplied "
+                    "trade_plan target before its stop within horizon_minutes. Use target and stop "
+                    "distances, trend, momentum, flow, and break quality. A target_range_multiple above "
+                    "one requires extension beyond the observed hour range; do not assume it will happen. "
+                    "Net R:R and break_even_probability describe geometry, not evidence of success."
+                ) + _ONCHAIN}
         body = {
             "model": self.model,
             "state": _state_for_model(payload, self.min_data_quality),
@@ -229,6 +238,9 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         if first_ten:
             state.update(baseline_class=payload.get("baseline_class"),
                          baseline_labels=payload.get("baseline_labels") or [])
+            plan = payload.get("trade_plan")
+            if isinstance(plan, dict):
+                state["trade_plan"] = _normalized_plan(plan, features, frac)
         intelligence = (jev_view(payload.get("intelligence"), payload.get("baseline_action"))
                         if first_ten else payload.get("intelligence"))
         if isinstance(intelligence, dict):
@@ -277,30 +289,35 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     if isinstance(plan, dict):
         # Ratios and time are enough to assess the outcome. Absolute prices stay
         # out of the provider request.
-        entry = _positive(plan.get("entry"))
-        stop = _positive(plan.get("stop"))
-        target = _positive(plan.get("target"))
-        stop_distance = abs(entry - stop) / entry if entry and stop else None
-        target_distance = abs(target - entry) / entry if entry and target else None
-        atr_fraction = _positive(features.get("atr_normalized"))
-        state["trade_plan"] = {
-            "gross_rr": plan.get("gross_rr"),
-            "net_rr": plan.get("net_rr"),
-            "break_even_probability": plan.get("break_even_probability"),
-            "stop_distance_fraction": stop_distance,
-            "target_distance_fraction": target_distance,
-            "stop_atr_multiple": stop_distance / atr_fraction if stop_distance is not None and atr_fraction else None,
-            "target_atr_multiple": target_distance / atr_fraction if target_distance is not None and atr_fraction else None,
-            "target_range_multiple": target_distance / frac if target_distance is not None and frac else None,
-            "horizon_minutes": plan.get("horizon_minutes"),
-            "round_trip_fee_rate": plan.get("round_trip_fee_rate"),
-            "stress_bps": plan.get("stress_bps"),
-            "requires_structure_break": plan.get("requires_structure_break"),
-        }
+        state["trade_plan"] = _normalized_plan(plan, features, frac)
     intelligence = jev_view(payload.get("intelligence"), payload.get("baseline_action"))
     if intelligence is not None:
         state["intelligence"] = intelligence
     return state
+
+
+def _normalized_plan(plan: dict, features: dict, frac: float | None) -> dict:
+    entry = _positive(plan.get("entry"))
+    stop = _positive(plan.get("stop"))
+    target = _positive(plan.get("target"))
+    stop_distance = abs(entry - stop) / entry if entry and stop else None
+    target_distance = abs(target - entry) / entry if entry and target else None
+    atr_fraction = _positive(features.get("atr_normalized"))
+    return {
+        "gross_rr": plan.get("gross_rr"),
+        "net_rr": plan.get("net_rr"),
+        "break_even_probability": plan.get("break_even_probability"),
+        "stop_distance_fraction": stop_distance,
+        "target_distance_fraction": target_distance,
+        "stop_atr_multiple": stop_distance / atr_fraction if stop_distance is not None and atr_fraction else None,
+        "target_atr_multiple": target_distance / atr_fraction if target_distance is not None and atr_fraction else None,
+        "target_range_multiple": target_distance / frac if target_distance is not None and frac else None,
+        "horizon_minutes": plan.get("horizon_minutes"),
+        "round_trip_fee_rate": plan.get("round_trip_fee_rate"),
+        "stress_bps": plan.get("stress_bps"),
+        "requires_structure_break": plan.get("requires_structure_break"),
+        **{key: plan[key] for key in ("target_extended_for_costs", "target_policy") if key in plan},
+    }
 
 
 def _finite(value: object) -> float | None:

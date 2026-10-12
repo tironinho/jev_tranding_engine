@@ -96,6 +96,7 @@ class RiskLimits:
     rr_target_multiple: float = 3.0
     target_rule_version: str = "target_3r_v1"
     min_net_rr: float = 0.0
+    cost_aware_target_floor: bool = False
     atr_buffer_mult: float = 0.10
     atr_stop_mult: float = 2.0
     max_stop_pct: float = 0.02
@@ -252,6 +253,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         rr_target_multiple=float(payload.get("rr_target_multiple", 3.0)),
         target_rule_version=str(payload.get("target_rule_version", "target_3r_v1")),
         min_net_rr=float(payload.get("min_net_rr", 0.0)),
+        cost_aware_target_floor=bool(payload.get("cost_aware_target_floor", False)),
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
         atr_stop_mult=float(payload.get("atr_stop_mult", 2.0)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),

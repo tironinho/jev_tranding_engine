@@ -263,7 +263,8 @@ class TradingEngine:
             f"request_profile={self.combination.jev_request_profile} "
             f"baseline_version={self.weights.version} baseline_floor={self.weights.min_abs_score} "
             f"target_rule={self.risk.limits.target_rule_version} rr={self.risk.limits.rr_target_multiple} "
-            f"min_net_rr={self.risk.limits.min_net_rr} live_longs={self.risk.limits.live_longs_enabled} "
+            f"min_net_rr={self.risk.limits.min_net_rr} cost_target_floor={self.risk.limits.cost_aware_target_floor} "
+            f"live_longs={self.risk.limits.live_longs_enabled} "
             f"long_floor={self.combination.min_trend_continuation} short_floor={self.combination.min_short_continuation}")
         task = asyncio.create_task(self._balance_loop(), name="balance_samples")
         self._background.add(task)
@@ -803,11 +804,25 @@ class TradingEngine:
         await self._record_risk(risk)
         if not risk.accepted:
             reasons = ",".join(risk.reject_reasons[:4]) or "RISK_REJECTED"
-            self._log("live_risk_reject", f"{decision.symbol} {reasons}")
+            econ = risk.economics
+            audit = (f" entry={econ.entry} stop={econ.stop} target={econ.target} qty={econ.quantity} "
+                     f"gross_rr={econ.gross_rr} net_rr={econ.net_rr} net_risk={econ.net_risk} "
+                     f"net_reward={econ.net_reward} fee_source={econ.costs.fee_source} "
+                     f"fees_entry={econ.costs.entry_fee} fees_exit={econ.costs.exit_fee_at_target} "
+                     f"slippage={econ.costs.slippage_cost} funding={econ.costs.funding_cashflow}"
+                     if econ is not None else "")
+            self._log("live_risk_reject", f"{decision.symbol} {reasons} decision_id={decision.decision_id} "
+                      f"snapshot_id={snapshot.snapshot_id} min_net_rr={self.risk.limits.min_net_rr}{audit}")
             return
         if risk.economics is None:
             return
         econ = risk.economics
+        plan = decision.metadata.get("jev_trade_plan") or {}
+        self._log("live_risk_accept", f"{decision.symbol} decision_id={decision.decision_id} "
+                  f"snapshot_id={snapshot.snapshot_id} entry={econ.entry} stop={econ.stop} target={econ.target} "
+                  f"qty={econ.quantity} net_rr={econ.net_rr} net_risk={econ.net_risk} "
+                  f"net_reward={econ.net_reward} target_policy={plan.get('target_policy')} "
+                  f"target_extended={plan.get('target_extended_for_costs')}")
         side = "BUY" if decision.action is Action.LONG else "SELL"
         fresh, freshness = self._live_signal_freshness(decision, snapshot)
         if not fresh:

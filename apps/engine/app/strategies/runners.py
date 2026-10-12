@@ -131,7 +131,7 @@ class BaselineJevStrategy:
         live_context_shadow = False
         baseline_result = result
         if result.action is Action.NO_TRADE:
-            candidate_action = (None if context.combination.jev_request_profile == "initial_live_2026_10_08"
+            candidate_action = (None if context.combination.jev_request_profile != "plan_outcome_v3"
                                 else _context_candidate_action(result, context.combination))
             if candidate_action is None:
                 metadata["jev_effect"] = "idle"
@@ -162,7 +162,7 @@ class BaselineJevStrategy:
         if blocked is not None:
             return _force_live_context_shadow(blocked, baseline_result) if live_context_shadow else blocked
         if (context.risk and context.risk.dynamic_rr_enabled
-                and context.combination.jev_request_profile != "initial_live_2026_10_08"):
+                and context.combination.jev_request_profile == "plan_outcome_v3"):
             decision = await _dynamic_decision(context, snapshot, result, metadata, started)
             return _force_live_context_shadow(decision, baseline_result) if live_context_shadow else decision
         try:
@@ -623,7 +623,7 @@ def _jev_request(
 ) -> JevMarketRequest:
     from app.risk.economics import plan_geometry
     plan = None
-    initial = context.combination.jev_request_profile == "initial_live_2026_10_08"
+    initial = context.combination.jev_request_profile != "plan_outcome_v3"
     if context.risk is not None and not initial:
         entry = (snapshot.best_ask if result.action is Action.LONG else snapshot.best_bid) or snapshot.price
         geometry = plan_geometry(result.action, entry, snapshot.features, context.risk)
@@ -633,7 +633,7 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version="jev_initial_live_2026_10_08" if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3"),
+        prompt_version=("jev_" + context.combination.jev_request_profile) if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3"),
         evaluation_profile=context.combination.jev_request_profile,
         symbol=snapshot.symbol,
         market_type=snapshot.market_type.value,
@@ -675,8 +675,9 @@ def _quality_gate(context, snapshot, metadata, started, strategy):
 
 def _continuation_floor(snapshot: MarketSnapshot, context: StrategyContext, action: Action) -> float:
     configured = context.combination.min_short_continuation if action is Action.SHORT else context.combination.min_trend_continuation
-    if context.combination.jev_request_profile == "initial_live_2026_10_08":
-        configured = context.combination.min_trend_continuation
+    if context.combination.jev_request_profile != "plan_outcome_v3":
+        if context.combination.jev_request_profile == "initial_live_2026_10_08":
+            configured = context.combination.min_trend_continuation
         atr = snapshot.features.get("atr")
         if context.risk is not None and snapshot.price > 0 and isinstance(atr, (int, float)) and atr > 0:
             stop_pct = max(context.risk.min_stop_pct, context.risk.atr_stop_mult * atr / snapshot.price)

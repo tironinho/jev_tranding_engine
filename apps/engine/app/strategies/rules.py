@@ -43,15 +43,16 @@ def apply_jev_veto(
 ) -> tuple[Action, float, list[str]]:
     """Decide the classified candidate. Jev cannot create or flip a trade.
 
-    Continuation below the floor vetoes every candidate, including breaks.
-    Reversal and a clear false breakout also veto.
+    The tenth-trade historical profile scales named breaks below the floor.
+    Other profiles veto them. Reversal and clear false breaks always veto.
     """
     reasons: list[str] = []
     if min_continuation is None:
         required = config.min_short_continuation if action is Action.SHORT else config.min_trend_continuation
     else:
         required = min_continuation
-    if assessment.trend_continuation_probability < required:
+    first_ten_break = breakout and config.jev_request_profile == "live_first_ten_2026_10_09"
+    if not first_ten_break and assessment.trend_continuation_probability < required:
         reasons.append(JEV_LOW_CONTINUATION)
     if assessment.reversal_probability > config.max_reversal:
         reasons.append(JEV_HIGH_REVERSAL)

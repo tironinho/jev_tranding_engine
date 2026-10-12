@@ -1,8 +1,8 @@
-# baseline_weights_v1, restaurada da primeira entrada live (d5b2f6d).
+# Scoring/classificação do a15bc12, vigente ao completar os dez trades live.
 # Constantes de escala só comprimem grandezas típicas de cripto para [-1, 1].
 # Não são parâmetros otimizados. Não usar live sem calibração por backtest.
 
-version: baseline_weights_v1
+version: baseline_first_ten_v1
 weights:
   trend: 0.25
   momentum: 0.20

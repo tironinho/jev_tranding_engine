@@ -2,9 +2,9 @@
 # Limites aplicados pelo motor antes da execução; armar produção é uma configuração separada.
 
 target_mode: structure
-# Política da primeira entrada live, commit d5b2f6d.
-# Alvo limitado à faixa de 60m e 2,5R; entrada exige R:R líquido de pelo menos 1,5.
-target_rule_version: initial_live_2026_10_08
+# Política vigente no décimo fechamento live, commit a15bc12.
+# Alvo é a faixa de 60m; 2,5R fica na fórmula de continuação, sem limitar o alvo.
+target_rule_version: live_first_ten_2026_10_09
 min_net_rr: 1.5
 target_fallback: rr
 fixed_target_pct: 0.01

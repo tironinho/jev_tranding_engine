@@ -16,17 +16,18 @@ strategies:
     call_model: true
 
 combination:
-  baseline_version: baseline_score_v1
-  jev_rule_version: jev_initial_live_2026_10_08
-  jev_request_profile: initial_live_2026_10_08
+  baseline_version: baseline_first_ten_v1
+  jev_rule_version: jev_first_ten_break_size_v1
+  jev_request_profile: live_first_ten_2026_10_09
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
-  # Política da primeira entrada live (d5b2f6d): baseline >=0,45 e Jev >=0,55.
-  # O piso também considera taxa/stop; candidatos recusados não chamam o modelo.
+  # Política vigente no décimo fechamento live (a15bc12).
+  # Sem rompimento: LONG >=0,55, SHORT >=0,40; o piso considera taxa/stop.
+  # Rompimento confirmado na classe reduz tamanho quando fica abaixo do piso.
   min_trend_continuation: 0.55
-  min_short_continuation: 0.55
+  min_short_continuation: 0.40
   # Estes dois parâmetros só são usados pelo perfil de planos/classificação.
-  # O perfil inicial encerra NO_TRADE antes de chamar Jev abaixo de 0,45.
+  # O perfil dos dez trades encerra NO_TRADE se a baseline não tiver sinal válido.
   candidate_min_abs_score: 0.15
   # Moderate disagreement may be reviewed by JEV; strong disagreement and
   # flow against the candidate remain blocked before the provider call.

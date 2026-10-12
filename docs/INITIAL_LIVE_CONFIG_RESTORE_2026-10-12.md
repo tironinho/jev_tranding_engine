@@ -1,5 +1,7 @@
 # Dez primeiros trades live e restauração da configuração inicial
 
+**Referência corrigida após esclarecimento do usuário:** este documento registra a restauração da primeira entrada (`d5b2f6d`). O usuário escolheu depois a configuração vigente ao completar os dez trades (`a15bc12`), que difere em classificação, corte SHORT, rompimentos e alvo. Ver `FIRST_TEN_CONFIG_CORRECTION_2026-10-12.md` para a política ativa corrigida.
+
 ## Identificação do período
 
 Live foi ativado em 08/10/2026 às 11:54:22 de Brasília (14:54:22 UTC), no deploy `9288af7`. A primeira versão que conseguiu executar ordens com o mínimo de 5 USDT foi `d5b2f6d`, live às 12:19:38 de Brasília. Logs registram chamadas de ordem pelo gateway de Singapura às 12:19:54/55 e o primeiro fechamento ETH às 12:32.

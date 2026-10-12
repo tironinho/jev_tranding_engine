@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -102,8 +103,10 @@ def margin_borrow_room(equity: float, margin_level: float | None, min_level: flo
 def _size_scale(decision) -> float:
     """1 keeps the planned risk. A break with soft continuation passes a smaller fraction."""
     raw = (getattr(decision, "metadata", None) or {}).get("size_scale")
-    if not isinstance(raw, (int, float)) or isinstance(raw, bool) or raw <= 0:
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
         return 1.0
+    if not math.isfinite(raw) or raw <= 0:
+        return 0.0
     return min(float(raw), 1.0)
 
 

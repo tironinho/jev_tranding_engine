@@ -1,6 +1,7 @@
 import httpx
 import pytest
 from datetime import timedelta
+from dataclasses import replace
 
 from app.config import BaselineWeightConfig
 from app.domain.enums import Action, OperatingMode, NET_RR_TOO_LOW
@@ -16,8 +17,15 @@ from tests.conftest import settings, long_snapshot, attach_book
 
 
 def initial_engine():
-    # Read the actual repository boot configuration, without live credentials.
-    return TradingEngine(settings())
+    # Preserve regression coverage of the earlier first-entry profile while
+    # the repository default now selects the explicitly requested tenth trade.
+    eng = TradingEngine(settings())
+    eng.weights = BaselineWeightConfig(version="baseline_weights_v1", min_abs_score=.45)
+    eng.combination = replace(eng.combination, jev_request_profile="initial_live_2026_10_08",
+        min_short_continuation=.55)
+    eng.risk.update_limits(target_rule_version="initial_live_2026_10_08")
+    eng.risk_limits = eng.risk.limits
+    return eng
 
 
 def test_initial_profile_uses_the_historical_range_cap_and_net_rr_gate():

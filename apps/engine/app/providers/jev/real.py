@@ -59,6 +59,17 @@ _INITIAL_LIVE_INSTRUCTIONS = {
     "false_breakout_probability": "The `breakout` or `breakdown` flag is a false break.",
 }
 
+_FIRST_TEN_INSTRUCTIONS = {
+    "trend_continuation_probability": (
+        "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
+        "It is not an order. That side reaches the target before the stop."
+    ) + _ONCHAIN,
+    "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
+    "false_breakout_probability": (
+        "The break named in `baseline_class` is a false break. If the class has no break, stay near 0.5."
+    ) + _ONCHAIN,
+}
+
 
 class RealJevProvider:
     """POST a TypeSafe System One request to the configured URL. No host is built in.
@@ -97,8 +108,8 @@ class RealJevProvider:
             raise JevProviderError("Jev HTTP client is not available")
         started = time.perf_counter()
         payload = request.model_dump(mode="json")
-        instructions = (_INITIAL_LIVE_INSTRUCTIONS
-                        if request.evaluation_profile == "initial_live_2026_10_08" else _INSTRUCTIONS)
+        instructions = {"initial_live_2026_10_08": _INITIAL_LIVE_INSTRUCTIONS,
+                        "live_first_ten_2026_10_09": _FIRST_TEN_INSTRUCTIONS}.get(request.evaluation_profile, _INSTRUCTIONS)
         body = {
             "model": self.model,
             "state": _state_for_model(payload, self.min_data_quality),
@@ -140,7 +151,7 @@ class RealJevProvider:
                     "is_mock": False,
                     "provider_version": self.provider_version,
                     "prompt_version": (request.prompt_version
-                                       if request.evaluation_profile == "initial_live_2026_10_08" else self.prompt_version),
+                                       if request.evaluation_profile != "plan_outcome_v3" else self.prompt_version),
                     "model": parsed.get("model") if isinstance(parsed, dict) else self.model,
                     "latency_ms": (time.perf_counter() - started) * 1000,
                     "error": None,
@@ -163,6 +174,8 @@ def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
     quality = intelligence.get("data_quality")
     overall = quality.get("overall") if isinstance(quality, dict) else None
     if isinstance(overall, (int, float)) and overall < min_quality:
+        if payload.get("evaluation_profile") == "live_first_ten_2026_10_09":
+            return {key: value for key, value in state.items() if key != "intelligence"}
         # External feeds can be thin while the Binance snapshot is complete.
         # Keep only high-quality exchange-native summaries instead of dropping
         # useful book/trade evidence together with missing third-party data.
@@ -199,7 +212,7 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     """Scores and unitless features only. Dollar prices stay off the request."""
     features = payload.get("features") or {}
     frac = _finite(features.get("range_60m_frac"))
-    if payload.get("evaluation_profile") == "initial_live_2026_10_08":
+    if payload.get("evaluation_profile") in {"initial_live_2026_10_08", "live_first_ten_2026_10_09"}:
         state = {
             "symbol": payload.get("symbol"),
             "market_type": payload.get("market_type"),
@@ -212,8 +225,16 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
             "breakout": features.get("breakout"),
             "breakdown": features.get("breakdown"),
         }
-        intelligence = payload.get("intelligence")
+        first_ten = payload.get("evaluation_profile") == "live_first_ten_2026_10_09"
+        if first_ten:
+            state.update(baseline_class=payload.get("baseline_class"),
+                         baseline_labels=payload.get("baseline_labels") or [])
+        intelligence = (jev_view(payload.get("intelligence"), payload.get("baseline_action"))
+                        if first_ten else payload.get("intelligence"))
         if isinstance(intelligence, dict):
+            if first_ten:
+                intelligence = {key: value for key, value in intelligence.items()
+                                if key not in {"binance_agent", "microstructure"}}
             state["intelligence"] = intelligence
         return state
     state = {

@@ -194,6 +194,7 @@ class PositionRecord(BaseModel):
     protection_error: str | None = None
     recovery_attempts: int = 0
     notional_recovery_started: bool = False
+    external_reconciled_at: datetime | None = None
     next_recovery_at: datetime | None = None
 
 

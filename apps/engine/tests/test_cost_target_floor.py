@@ -68,12 +68,12 @@ async def test_confirmed_narrow_range_opens_paper_using_the_exact_assessed_targe
 async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
     eng = TradingEngine(settings())
     snapshot, book = narrow_snapshot(Action.SHORT)
-    provider = AssessmentProvider(.30)
+    provider = AssessmentProvider(.50)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features, context(eng, snapshot, provider))
-    assert decision.action is Action.SHORT  # historical break sizing still applies
-    assert decision.metadata["size_scale"] == pytest.approx(.30/.4)
+    assert decision.action is Action.SHORT
+    assert decision.metadata["size_scale"] == 1
     plan = decision.metadata["jev_trade_plan"]
-    assert plan["expected_net_r"] < 0  # diagnostic only in this historical break profile
+    assert plan["expected_net_r"] > 0
     assert decision.metadata["candidate_plans"][0]["target"] == plan["target"]
     ctx = _context(equity=20, cash=20, day_start_equity=20,
                    live_requested=True, live_armed=True, step_size=.001)
@@ -85,7 +85,7 @@ async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
     assert "NET_RR_TOO_LOW" in changed.reject_reasons
     assert changed.economics.target == plan["target"]
     impacted = eng.risk.evaluate(decision, snapshot,
-        replace(ctx, equity=10000,cash=10000,day_start_equity=10000),
+        replace(ctx, equity=7500,cash=7500,day_start_equity=7500),
         FeeQuote(.00075,.00075,"test"), book)
     assert "NET_RR_TOO_LOW" in impacted.reject_reasons
     assert impacted.economics.target == plan["target"]
@@ -119,8 +119,21 @@ async def test_model_receives_larger_target_and_probability_refers_to_this_plan(
         provider = RealJevProvider(prompt_version="default",base_url="https://test.invalid",
             api_key="test-only",model="test",client=client)
         result = await provider.evaluate_market_state(capture.requests[0])
-    assert result.prompt_version.endswith("_net_rr_floor_v1")
+    assert result.prompt_version.endswith("_compact_market_v2")
     assert decision.metadata["jev_trade_plan"]["target"] == capture.requests[0].trade_plan["target"]
+
+
+@pytest.mark.asyncio
+async def test_break_cannot_confirm_a_negative_net_expectancy():
+    eng = TradingEngine(settings())
+    snapshot, _ = narrow_snapshot(Action.SHORT)
+    decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
+        context(eng, snapshot, AssessmentProvider(.30)))
+    assert decision.action is Action.NO_TRADE
+    assert "JEV_NON_POSITIVE_EXPECTANCY" in decision.reason_codes
+    assert decision.metadata["jev_effect"] == "veto"
+    assert not decision.metadata["jev_trade_plan"]["eligible"]
+    assert decision.metadata["jev_trade_plan"]["expected_net_r"] < 0
 
 
 def test_no_impossible_short_target_or_invalid_geometry_is_sent_to_model():

@@ -32,6 +32,7 @@ from app.domain.enums import (
     OperatingMode,
     OrderStatus,
     OrderType,
+    PositionStatus,
     SignalStatus,
     SlippageModelName,
 )
@@ -1842,7 +1843,9 @@ class TradingEngine:
         while True:
             try:
                 await self._recover_pending_entries()
-                await self.note_balance(self.mark_account(await self.balance.snapshot()))
+                balance = await self.balance.snapshot(fresh=True)
+                await self._reconcile_external_flat(balance)
+                await self.note_balance(self.mark_account(balance))
                 for symbol in self.states:
                     await self.manage_positions(symbol)
             except asyncio.CancelledError:
@@ -1850,6 +1853,68 @@ class TradingEngine:
             except Exception as exc:
                 self._log("balance", type(exc).__name__)
             await asyncio.sleep(60)
+
+    async def _reconcile_external_flat(self, balance: dict) -> None:
+        """Archive stale exposure after two independent debt-free margin readings.
+
+        Account balances establish flatness, not execution price or realized PnL.
+        The archived position remains durable with an explicit audit pending tag.
+        """
+        flat = (self.settings.market_type == "margin" and balance.get("status") == "ok"
+                and (self.postgres is None or self.postgres.healthy)
+                and balance.get("total_liability_btc") == 0 and not self.pending_entries
+                and all(r.get("asset") == "USDT" or all(abs(float(r.get(k) or 0)) <= 1e-12
+                    for k in ("total", "free", "locked", "borrowed", "interest"))
+                    for r in balance.get("assets", [])))
+        observed = balance.get("observed_at")
+        now = utcnow()
+        if not flat or not isinstance(observed, (int, float)) or not 0 <= now.timestamp() - observed <= 15:
+            self._flat_margin_observed = None
+            return
+        previous = getattr(self, "_flat_margin_observed", None)
+        self._flat_margin_observed = observed
+        if previous is None or observed - previous < 5:
+            return
+        for key, account in self.accounts.accounts.items():
+            async with self._locks[key]:
+                if self.pending_entries:
+                    return
+                for identity, position in list(account.positions.items()):
+                    if position.mode != "live" or (now - position.opened_at).total_seconds() < 120:
+                        continue
+                    if position.stop_client_order_id:
+                        try:
+                            stop = await self.live.fetch_verified(position.symbol, position.stop_client_order_id)
+                            if stop.get("status") in {"NEW", "PARTIALLY_FILLED"}:
+                                await self.live.cancel(position.symbol, position.stop_client_order_id)
+                                stop = await self.live.fetch_verified(position.symbol, position.stop_client_order_id)
+                            if stop.get("status") not in {"NOT_FOUND", "CANCELED", "EXPIRED", "REJECTED", "FILLED"}:
+                                continue
+                        except Exception:
+                            continue
+                    original = position.model_copy(deep=True)
+                    margin = account.margin_locked.get(identity, 0.0)
+                    position.status = PositionStatus.CLOSED
+                    position.protection_status = "EXTERNAL_CLOSED_PENDING_AUDIT"
+                    position.external_reconciled_at = now
+                    position.stop_client_order_id = None
+                    account.positions.pop(identity)
+                    account.cash += account.margin_locked.pop(identity, 0.0)
+                    try:
+                        await self._checkpoint(key, positions=[position], orders=[], fills=[])
+                        if self.postgres is not None and not self.postgres.healthy:
+                            raise RuntimeError("EXTERNAL_RECONCILIATION_CHECKPOINT_FAILED")
+                    except Exception:
+                        account.positions[identity] = original
+                        account.margin_locked[identity] = margin
+                        account.cash -= margin
+                        raise
+                    self.store.add_event("external_close_reconciled", "EXTERNAL_CLOSED_PENDING_AUDIT", {
+                        "position_id": identity, "symbol": position.symbol,
+                        "quantity": position.quantity, "realized_pnl": None,
+                        "observed_at": observed,
+                    })
+                    self._log("external_close_reconciled", f"{position.symbol} position={identity} PNL_PENDING_AUDIT")
 
     def positions_payload(self, mode: str | None = None) -> list[dict]:
         if mode not in {None, "paper", "live"}:

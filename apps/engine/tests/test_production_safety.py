@@ -492,3 +492,63 @@ async def test_failed_live_stop_replacement_keeps_old_local_stop_and_attempts_ex
     assert p.stop == 99
     assert p.protection_status == "UNPROTECTED"
     eng._exit_live.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_external_flat_reconciliation_requires_two_readings_and_no_debt(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(market_type="margin")
+    p = _open(eng, mode="live", side=Action.SHORT, stop_client_order_id="old-stop",
+              opened_at=clock()-timedelta(days=1))
+    eng.live.fetch_verified = AsyncMock(side_effect=[{"status": "NEW"}, {"status": "CANCELED"}])
+    eng.live.cancel = AsyncMock()
+    eng.live.submit_close = AsyncMock()
+    balance = {"status": "ok", "total_liability_btc": 0,
+               "assets": [{"asset": "USDT", "total": 20}], "observed_at": clock().timestamp()-10}
+    await eng._reconcile_external_flat(balance)
+    assert eng.accounts.accounts["baseline"].positions
+    await eng._reconcile_external_flat(balance)  # cached reading is not confirmation
+    assert eng.accounts.accounts["baseline"].positions
+    await eng._reconcile_external_flat({**balance, "observed_at": clock().timestamp()})
+    assert not eng.accounts.accounts["baseline"].positions
+    assert p.protection_status == "EXTERNAL_CLOSED_PENDING_AUDIT"
+    assert p.closed_at is None  # exact execution time remains unknown
+    assert not eng.accounts.accounts["baseline"].trades  # no invented PnL
+    eng.live.cancel.assert_awaited_once()
+    eng.live.submit_close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    {"total_liability_btc": .00001},
+    {"assets": [{"asset": "XRP", "total": -3.4}]},
+    {"status": "ERROR"},
+    {"observed_at": 0},
+])
+async def test_external_reconciliation_never_archives_unverified_balance(change, monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(market_type="margin")
+    p = _open(eng, mode="live", opened_at=clock()-timedelta(days=1))
+    eng._flat_margin_observed = clock().timestamp()-10
+    balance = {"status": "ok", "total_liability_btc": 0, "assets": [],
+               "observed_at": clock().timestamp(), **change}
+    await eng._reconcile_external_flat(balance)
+    assert str(p.position_id) in eng.accounts.accounts["baseline"].positions
+
+
+@pytest.mark.asyncio
+async def test_external_reconciliation_checkpoint_failure_keeps_position_blocking(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(market_type="margin")
+    p = _open(eng, mode="live", stop_client_order_id=None,
+              opened_at=clock()-timedelta(days=1))
+    p.protection_status = "RECOVERY_EXHAUSTED"
+    cash_before = eng.accounts.accounts["baseline"].cash
+    eng._flat_margin_observed = clock().timestamp()-10
+    eng._checkpoint = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    with pytest.raises(RuntimeError):
+        await eng._reconcile_external_flat({"status": "ok", "total_liability_btc": 0,
+            "assets": [{"asset": "USDT", "total": 20}], "observed_at": clock().timestamp()})
+    restored = eng.accounts.accounts["baseline"].positions[str(p.position_id)]
+    assert restored.protection_status == "RECOVERY_EXHAUSTED"
+    assert eng.accounts.accounts["baseline"].cash == cash_before

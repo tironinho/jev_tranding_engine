@@ -141,3 +141,17 @@ async def test_zero_continuation_cannot_turn_zero_size_into_a_full_order():
     eng.jev=AssessmentProvider(0)
     await eng.evaluate_snapshot(snapshot)
     assert not eng.accounts.accounts["baseline_jev"].positions
+
+
+
+def test_compact_market_observations_survive_degraded_external_provider():
+    from app.providers.jev.real import _state_for_model
+    state = _state_for_model({"evaluation_profile": PROFILE,
+        "features": {"rsi": 61, "return_5m": .002, "volume_ratio": 1.5,
+                     "taker_flow_5m": .4, "imbalance_10": .2},
+        "intelligence": {"data_quality": {"overall": .2}}}, .7)
+    assert state["market_context"]["rsi"] == 61
+    assert state["market_context"]["taker_flow_5m"] == .4
+    assert state["market_context"]["return_15m"] is None
+    assert len(state["market_context"]) == 10
+    assert "intelligence" not in state

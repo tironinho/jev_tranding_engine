@@ -118,6 +118,10 @@ class RealJevProvider:
                     "distances, trend, momentum, flow, and break quality. A target_range_multiple above "
                     "one requires extension beyond the observed hour range; do not assume it will happen. "
                     "Net R:R and break_even_probability describe geometry, not evidence of success."
+                    " market_context contains recent returns, trend alignment, volume and actual order flow. "
+                    "Use these observations once; baseline_scores summarize the same evidence. "
+                    "Missing observations are unknown, not bearish. Estimate the supplied plan honestly; "
+                    "do not raise probability to meet an entry threshold."
                 ) + _ONCHAIN}
         body = {
             "model": self.model,
@@ -238,6 +242,15 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         if first_ten:
             state.update(baseline_class=payload.get("baseline_class"),
                          baseline_labels=payload.get("baseline_labels") or [])
+            # Compact exchange observations survive missing external providers.
+            # No duplicated agent opinions or large third-party payloads.
+            state["market_context"] = {
+                key: _finite(features.get(key)) for key in (
+                    "return_5m", "return_15m", "ema_alignment", "context_15m_slope",
+                    "rsi", "volume_ratio", "taker_flow_5m", "imbalance_10",
+                    "range_position", "spread_bps",
+                )
+            }
             plan = payload.get("trade_plan")
             if isinstance(plan, dict):
                 state["trade_plan"] = _normalized_plan(plan, features, frac)

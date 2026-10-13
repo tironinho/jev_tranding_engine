@@ -241,6 +241,11 @@ class BaselineJevStrategy:
             assessed_plan = dict(request.trade_plan)
             assessed_plan.update(score_probability(assessed_plan, assessment.trend_continuation_probability,
                                                    context.risk.probability_haircut))
+            if action is not Action.NO_TRADE and assessed_plan["expected_net_r"] <= 0:
+                action = Action.NO_TRADE
+                vetoes = ["JEV_NON_POSITIVE_EXPECTANCY"]
+                metadata["jev_effect"] = "veto"
+                metadata.pop("size_scale", None)
             assessed_plan.update(eligible=action is not Action.NO_TRADE,
                                  reason=",".join(vetoes) if vetoes else "JEV_CONFIRM",
                                  required_probability=required)
@@ -655,7 +660,7 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=(("jev_" + context.combination.jev_request_profile + ("_net_rr_floor_v1" if cost_plan else ""))
+        prompt_version=(("jev_" + context.combination.jev_request_profile + ("_compact_market_v2" if cost_plan else ""))
                         if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3")),
         evaluation_profile=context.combination.jev_request_profile,
         symbol=snapshot.symbol,

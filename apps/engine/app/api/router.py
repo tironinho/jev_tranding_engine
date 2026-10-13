@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
@@ -246,7 +247,7 @@ async def decisions(request: Request, limit: int = 100, symbol: str | None = Non
 
 
 @router.get("/api/decisions/audit")
-async def decision_audit(request: Request, limit: int = 100, strategy: str = "baseline") -> dict:
+async def decision_audit(request: Request, limit: int = 100, strategy: str = "baseline", before: datetime | None = None) -> dict:
     _actor(request)
     engine = _engine(request)
     if strategy not in LABELS:
@@ -259,7 +260,8 @@ async def decision_audit(request: Request, limit: int = 100, strategy: str = "ba
     if not engine.postgres or not engine.postgres.healthy:
         raise HTTPException(503, "HISTORY_UNAVAILABLE")
     try:
-        rows = await engine.postgres.recent_decision_audit(limit, strategy)
+        rows = (await engine.postgres.recent_decision_audit(limit, strategy, before=before)
+                if before is not None else await engine.postgres.recent_decision_audit(limit, strategy))
     except Exception as exc:
         raise HTTPException(503, "HISTORY_UNAVAILABLE") from exc
     return {
@@ -267,7 +269,15 @@ async def decision_audit(request: Request, limit: int = 100, strategy: str = "ba
         "rows": rows,
         "labelled": sum(row.get("labels") is not None for row in rows),
         "unlabelled": sum(row.get("labels") is None for row in rows),
+        "next_before": rows[-1]["decision"].get("timestamp") if len(rows) == min(max(limit, 1), 500) else None,
     }
+
+
+@router.get("/api/jev/setup-review")
+async def setup_review(request: Request, limit: int = 500, before: datetime | None = None) -> dict:
+    from app.analytics.setup_review import review_setups
+    audit = await decision_audit(request, limit=limit, strategy="baseline_jev", before=before)
+    return {**review_setups(audit["rows"]), "next_before": audit["next_before"]}
 
 
 @router.get("/api/decisions/{decision_id}")

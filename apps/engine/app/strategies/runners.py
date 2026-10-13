@@ -37,6 +37,7 @@ from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, O
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
 from app.risk.plans import candidate_plans, score_probability
+from app.analytics.setup_review import classify_setup
 
 
 @dataclass
@@ -73,6 +74,9 @@ def _decision(
     started: float,
     status: SignalStatus = SignalStatus.VALID,
 ) -> StrategyDecision:
+    if strategy == "baseline_jev":
+        metadata = {**metadata, "setup_research": classify_setup(
+            {"metadata": metadata}, snapshot.model_dump(mode="json"))}
     return StrategyDecision(
         correlation_id=context.correlation_id,
         opportunity_id=context.opportunity_id,

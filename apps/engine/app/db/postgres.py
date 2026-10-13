@@ -242,7 +242,7 @@ class PostgresMirror:
             log.warning("jev history load failed: %s", exc)
             return []
 
-    async def recent_decision_audit(self, limit: int = 100, strategy: str = "baseline") -> list[dict]:
+    async def recent_decision_audit(self, limit: int = 100, strategy: str = "baseline", before: datetime | None = None) -> list[dict]:
         """Return durable decisions with their recorded market snapshot and future label."""
         if not self.factory or not self.healthy:
             return []
@@ -254,6 +254,7 @@ class PostgresMirror:
                         await session.execute(
                             select(StrategyDecisionRow)
                             .where(StrategyDecisionRow.strategy == strategy)
+                            .where(StrategyDecisionRow.timestamp < before if before else True)
                             .order_by(StrategyDecisionRow.timestamp.desc())
                             .limit(bounded)
                         )
@@ -300,6 +301,12 @@ class PostgresMirror:
                     series_by_symbol[market_row.symbol].append(market_row)
                 snapshot_by_id = {row.id: row.payload for row in snapshots}
                 label_by_snapshot = {row.snapshot_id: row.payload for row in labels}
+                trade_rows = list((await session.execute(select(TradeRow)
+                    .where(TradeRow.payload["decision_id"].astext.in_([str(r.id) for r in decisions]))
+                    .order_by(TradeRow.closed_at))).scalars().all())
+                trades_by_decision: dict[str, list[dict]] = defaultdict(list)
+                for trade in trade_rows:
+                    trades_by_decision[str(trade.payload.get("decision_id"))].append(trade.payload)
                 audited = []
                 for row in decisions:
                     label = label_by_snapshot.get(row.snapshot_id)
@@ -313,6 +320,7 @@ class PostgresMirror:
                         "snapshot": snapshot_by_id.get(row.snapshot_id),
                         "labels": label,
                         "labels_source": source,
+                        "trades": trades_by_decision.get(str(row.id), []),
                     })
                 return audited
         except Exception as exc:

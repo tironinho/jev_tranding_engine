@@ -122,7 +122,7 @@ async def test_model_receives_larger_target_and_probability_refers_to_this_plan(
         provider = RealJevProvider(prompt_version="default",base_url="https://test.invalid",
             api_key="test-only",model="test",client=client)
         result = await provider.evaluate_market_state(capture.requests[0])
-    assert result.prompt_version.endswith("_compact_market_v2")
+    assert result.prompt_version.endswith("_compact_market_v3")
     assert decision.metadata["jev_trade_plan"]["target"] == capture.requests[0].trade_plan["target"]
 
 

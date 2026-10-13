@@ -34,16 +34,12 @@ _INSTRUCTIONS = {
         "probability only as geometry, never as evidence that the outcome is more likely. Account for target "
         "distance, stop distance, trend, momentum, order flow, break or reclaim quality, and market context. "
         "When no trade_plan is present, estimate directional follow-through over the stated horizon."
-    )
-    + _ONCHAIN
-    + _BINANCE_AGENT,
-    "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN + _BINANCE_AGENT,
+    ),
+    "reversal_probability": "Price reverses against the `baseline_action` candidate.",
     "false_breakout_probability": (
         "The break or reclaim named in `baseline_class` fails and returns through its structural level. "
         "If the class has no break or reclaim, stay near 0.5."
-    )
-    + _ONCHAIN
-    + _BINANCE_AGENT,
+    ),
 }
 
 _UNUSED_NOULS = {
@@ -63,11 +59,13 @@ _FIRST_TEN_INSTRUCTIONS = {
     "trend_continuation_probability": (
         "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
         "It is not an order. That side reaches the target before the stop."
-    ) + _ONCHAIN,
-    "reversal_probability": "Price reverses against the `baseline_action` candidate." + _ONCHAIN,
+    ),
+    "reversal_probability": "Price reverses against the `baseline_action` candidate.",
     "false_breakout_probability": (
-        "The break named in `baseline_class` is a false break. If the class has no break, stay near 0.5."
-    ) + _ONCHAIN,
+        "The break_event (BREAKOUT or BREAKDOWN) fails and returns through its structural level. "
+        "When break_event is NONE or UNKNOWN, stay near 0.5. "
+        "baseline_class describes alignment, not the structural event."
+    ),
 }
 
 
@@ -122,12 +120,22 @@ class RealJevProvider:
                     "Use these observations once; baseline_scores summarize the same evidence. "
                     "Missing observations are unknown, not bearish. Estimate the supplied plan honestly; "
                     "do not raise probability to meet an entry threshold."
-                ) + _ONCHAIN}
+                )}
+        state = _state_for_model(payload, self.min_data_quality)
+        # Describe only external evidence that survived normalization and the
+        # quality gate. Missing providers must not add instructions or votes.
+        intelligence = state.get("intelligence") or {}
+        extra = ""
+        if request.evaluation_profile != "initial_live_2026_10_08":
+            if isinstance(intelligence.get("onchain"), dict) and intelligence["onchain"]:
+                extra += _ONCHAIN
+            if isinstance(intelligence.get("binance_agent"), dict) and intelligence["binance_agent"]:
+                extra += _BINANCE_AGENT
         body = {
             "model": self.model,
-            "state": _state_for_model(payload, self.min_data_quality),
+            "state": state,
             "questions": {
-                name: {"type": "noul", "instructions": instructions[name]}
+                name: {"type": "noul", "instructions": instructions[name] + extra}
                 for name in _NOULS
             },
         }
@@ -241,7 +249,8 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         first_ten = payload.get("evaluation_profile") == "live_first_ten_2026_10_09"
         if first_ten:
             state.update(baseline_class=payload.get("baseline_class"),
-                         baseline_labels=payload.get("baseline_labels") or [])
+                         baseline_labels=payload.get("baseline_labels") or [],
+                         break_event=_break_event(features, payload.get("baseline_labels") or []))
             if payload.get("candidate_origin"):
                 state.update(candidate_origin=payload["candidate_origin"],
                              baseline_threshold=payload.get("baseline_threshold"),
@@ -313,6 +322,19 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
     if intelligence is not None:
         state["intelligence"] = intelligence
     return state
+
+
+def _break_event(features: dict, labels: list[str]) -> str:
+    """Alignment can be CLASS_ALIGNED while the structural event is BREAKDOWN."""
+    up = features.get("breakout") is True or "BREAKOUT" in labels
+    down = features.get("breakdown") is True or "BREAKDOWN" in labels
+    if up and down:
+        return "UNKNOWN"
+    if up:
+        return "BREAKOUT"
+    if down:
+        return "BREAKDOWN"
+    return "NONE" if features.get("breakout") is False and features.get("breakdown") is False else "UNKNOWN"
 
 
 def _normalized_plan(plan: dict, features: dict, frac: float | None) -> dict:

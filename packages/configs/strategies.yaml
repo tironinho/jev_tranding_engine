@@ -16,8 +16,8 @@ strategies:
     call_model: true
 
 combination:
-  baseline_version: baseline_first_ten_v1
-  jev_rule_version: jev_market_range_v4
+  baseline_version: baseline_first_ten_v2
+  jev_rule_version: jev_market_range_v5
   jev_request_profile: live_first_ten_2026_10_09
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE

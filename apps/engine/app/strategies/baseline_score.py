@@ -80,7 +80,7 @@ def _num(features: dict, name: str) -> float | None:
 
 def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> dict[str, float | None] | None:
     """Map explainable features into [-1, 1]. Scale constants are not fitted edges."""
-    if config.version == "baseline_first_ten_v1":
+    if config.version in {"baseline_first_ten_v1", "baseline_first_ten_v2"}:
         from app.strategies.first_ten_live_baseline import score_components as first_ten_components
         return first_ten_components(snapshot, config)
     if config.version == "baseline_weights_v1":
@@ -304,7 +304,7 @@ def combine_scores(scores: dict[str, float | None], config: BaselineWeightConfig
 
 
 def score_baseline(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> BaselineResult:
-    if config.version == "baseline_first_ten_v1":
+    if config.version in {"baseline_first_ten_v1", "baseline_first_ten_v2"}:
         from app.strategies.first_ten_live_baseline import score_baseline as first_ten_baseline
         return first_ten_baseline(snapshot, config)
     if config.version == "baseline_weights_v1":

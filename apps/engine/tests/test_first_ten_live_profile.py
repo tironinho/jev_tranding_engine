@@ -1,4 +1,5 @@
 from datetime import timedelta
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
@@ -22,6 +23,8 @@ PROFILE = "live_first_ten_2026_10_09"
 def first_ten_engine():
     eng = TradingEngine(settings())
     # Reconstruct the exact tenth-trade policy, before the cost-target correction.
+    eng.weights = replace(eng.weights, version="baseline_first_ten_v1")
+    eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v1")
     eng.risk.update_limits(cost_aware_target_floor=False, market_range_plans=False, max_hold_minutes=60)
     eng.risk_limits = eng.risk.limits
     return eng
@@ -97,7 +100,7 @@ async def test_first_ten_provider_sends_class_and_drops_low_quality_external_con
         assert "trade_plan" not in state
         assert "intelligence" not in state
         text = payload["questions"]["trend_continuation_probability"]["instructions"]
-        assert "weighted scores" in text and "onchain" in text
+        assert "weighted scores" in text and "onchain" not in text
         assert "horizon_minutes" not in text
         return httpx.Response(200,json={"answers":{k:{"noul":p} for k,p in (
             ("trend_continuation_probability",.6),("reversal_probability",.3),("false_breakout_probability",.2))}})
@@ -107,7 +110,7 @@ async def test_first_ten_provider_sends_class_and_drops_low_quality_external_con
         provider = RealJevProvider(prompt_version="default",base_url="https://test.invalid",
             api_key="test-only",model="test",client=client)
         result = await provider.evaluate_market_state(req)
-    assert result.prompt_version == "jev_"+PROFILE
+    assert result.prompt_version == "jev_"+PROFILE+"_event_v2"
 
 
 @pytest.mark.asyncio

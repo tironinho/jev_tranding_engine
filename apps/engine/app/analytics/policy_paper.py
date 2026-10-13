@@ -93,6 +93,7 @@ class PolicyPaperLab:
                     accepted, risk_reasons = self.enter(policy, decision, snapshot, policy_limits, fees, quote(), rules)
                     reasons += risk_reasons
                 row = {"sample": self.sample_count, "policy": policy, "symbol": snapshot.symbol,
+                    "baseline_version": weights.version, "prompt_version": decision.prompt_version,
                     "snapshot_id": str(snapshot.snapshot_id), "decision_id": str(decision.decision_id),
                     "snapshot_at": snapshot.timestamp.isoformat(), "assessed_at": utcnow().isoformat(),
                     "action": decision.action.value, "accepted": accepted, "reason_codes": reasons,

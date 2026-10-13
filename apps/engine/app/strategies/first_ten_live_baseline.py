@@ -1,4 +1,4 @@
-"""Scoring and classification from a15bc12, active at the tenth live closure."""
+"""First-ten scoring; v2 treats below-average volume as neutral evidence."""
 from __future__ import annotations
 
 from app.config import BaselineWeightConfig
@@ -97,7 +97,10 @@ def score_components(snapshot: MarketSnapshot, config: BaselineWeightConfig) -> 
         volume = None
         orderflow = None
     else:
-        volume_mag = clip((volume_ratio - 1) / 1.5, -1, 1)
+        # Preserve v1 for historical replay. Weak activity in v2 withholds
+        # confirmation instead of inventing a vote against executed flow.
+        volume_floor = -1 if config.version == "baseline_first_ten_v1" else 0
+        volume_mag = clip((volume_ratio - 1) / 1.5, volume_floor, 1)
         volume = clip(volume_mag * (1 if flow >= 0 else -1), -1, 1)
         imb = imbalance if imbalance is not None else 0.0
         orderflow = clip(0.7 * flow + 0.3 * imb, -1, 1)

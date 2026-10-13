@@ -46,6 +46,7 @@ def engine(**overrides) -> TradingEngine:
     eng.combination = CombinationConfig(openai_rule_version="openai_jev_economic_gate_v2")
     eng.strategy_settings["baseline"].mode = OperatingMode.PAPER
     eng.risk.update_limits(target_rule_version="target_3r_v1", rr_target_multiple=3.0,
+        market_range_plans=False, max_hold_minutes=60,
         min_net_rr=0.0, cost_aware_target_floor=False, time_exit_enabled=False, step_stop_to_breakeven=True,
         dynamic_rr_enabled=True, live_longs_enabled=False)
     eng.risk_limits = eng.risk.limits

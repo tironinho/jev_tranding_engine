@@ -22,7 +22,7 @@ PROFILE = "live_first_ten_2026_10_09"
 def first_ten_engine():
     eng = TradingEngine(settings())
     # Reconstruct the exact tenth-trade policy, before the cost-target correction.
-    eng.risk.update_limits(cost_aware_target_floor=False)
+    eng.risk.update_limits(cost_aware_target_floor=False, market_range_plans=False, max_hold_minutes=60)
     eng.risk_limits = eng.risk.limits
     return eng
 

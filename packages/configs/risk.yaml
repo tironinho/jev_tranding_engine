@@ -3,10 +3,12 @@
 
 target_mode: structure
 # Política vigente no décimo fechamento live, commit a15bc12.
-# A faixa de 60m é o alvo base; o piso líquido abaixo é calculado antes do Jev.
+# Targets must fit a measured 60m range, or a full aligned 240m context.
+# Cost fitting never makes an out-of-range plan eligible.
 target_rule_version: live_first_ten_2026_10_09
 min_net_rr: 1.5
 cost_aware_target_floor: true
+market_range_plans: true
 target_fallback: rr
 fixed_target_pct: 0.01
 rr_target_multiple: 2.5
@@ -43,8 +45,8 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# Política inicial: após 60m fecha posição perdedora; vencedora continua até alvo/stop.
-max_hold_minutes: 60
+# Global ceiling; new assessed positions persist and enforce their own 60m/240m deadline.
+max_hold_minutes: 240
 time_exit_enabled: true
 # Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
 allow_pyramiding: false

@@ -48,6 +48,7 @@ def narrow_snapshot(side=Action.LONG):
 @pytest.mark.asyncio
 async def test_confirmed_narrow_range_opens_paper_using_the_exact_assessed_target(side):
     eng = TradingEngine(settings(initial_paper_equity=20))
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     assert eng.risk.limits.cost_aware_target_floor
     snapshot, book = narrow_snapshot(side)
     attach_book(eng, book)
@@ -67,6 +68,7 @@ async def test_confirmed_narrow_range_opens_paper_using_the_exact_assessed_targe
 @pytest.mark.asyncio
 async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
     eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, book = narrow_snapshot(Action.SHORT)
     provider = AssessmentProvider(.50)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features, context(eng, snapshot, provider))
@@ -101,6 +103,7 @@ async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
 @pytest.mark.asyncio
 async def test_model_receives_larger_target_and_probability_refers_to_this_plan():
     eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot()
     capture = AssessmentProvider(.65)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features, context(eng, snapshot, capture))
@@ -126,6 +129,7 @@ async def test_model_receives_larger_target_and_probability_refers_to_this_plan(
 @pytest.mark.asyncio
 async def test_break_cannot_confirm_a_negative_net_expectancy():
     eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot(Action.SHORT)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
         context(eng, snapshot, AssessmentProvider(.30)))
@@ -138,6 +142,7 @@ async def test_break_cannot_confirm_a_negative_net_expectancy():
 
 def test_no_impossible_short_target_or_invalid_geometry_is_sent_to_model():
     eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot(Action.SHORT)
     snapshot = snapshot.model_copy(update={"market_type":MarketType.MARGIN})
     assert candidate_plans(snapshot, Action.SHORT, eng.risk.limits, .00075)[0]["interest_estimate_per_unit"] > 0
@@ -149,6 +154,7 @@ def test_no_impossible_short_target_or_invalid_geometry_is_sent_to_model():
 @pytest.mark.asyncio
 async def test_missing_geometry_does_not_become_a_direction_only_confirmation():
     eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot()
     snapshot = snapshot.model_copy(update={"features":{**snapshot.features,"range_60m":0}})
     provider = AssessmentProvider(.65)

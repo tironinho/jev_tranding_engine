@@ -1104,11 +1104,12 @@ class TradingEngine:
             stop=position.stop,
             target=position.target,
             hold_minutes=hold_minutes,
-            max_hold_minutes=(self.risk.limits.max_hold_minutes
+            max_hold_minutes=(position.max_hold_minutes if position.max_hold_minutes is not None else self.risk.limits.max_hold_minutes
                               if self.risk.limits.time_exit_enabled else 0),
             # Initial live policy keeps a winner until target/stop. The later
             # plan policy additionally requires protected net breakeven.
-            entry=time_exit_floor if initial_time_policy or protected_after_horizon else None,
+            entry=(time_exit_floor if position.max_hold_minutes is None
+                   and (initial_time_policy or protected_after_horizon) else None),
             bid=state.best_bid,
             ask=state.best_ask,
         )
@@ -1467,7 +1468,7 @@ class TradingEngine:
     def _open_from_fill(self, decision, snapshot, econ, price: float, quantity: float, fee: float, mode: str, stop_client_order_id: str | None):
         margin = (price * quantity) / max(self.risk.limits.max_leverage, 1e-9)
         regime = decision.metadata.get("openai_regime")
-        return self.accounts.open_position(
+        position = self.accounts.open_position(
             strategy=decision.strategy,
             symbol=snapshot.symbol,
             side=decision.action,
@@ -1487,6 +1488,11 @@ class TradingEngine:
             mode=mode,
             stop_client_order_id=stop_client_order_id,
         )
+        plan = decision.metadata.get("jev_trade_plan") or {}
+        if plan.get("target_policy") == "market_range_v1":
+            position.forecast_horizon_minutes = int(plan["horizon_minutes"])
+            position.max_hold_minutes = int(plan["max_hold_minutes"])
+        return position
 
     async def _record_risk(self, risk) -> None:
         payload = self.store.add_risk(risk)

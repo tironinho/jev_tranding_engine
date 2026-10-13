@@ -112,6 +112,7 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["return_5m"] = ret(5)
     features["return_15m"] = ret(15)
     features["return_60m"] = ret(60)
+    features["return_240m"] = ret(240)
     features["return_since_close"] = (price / closes[-1] - 1) if closes and closes[-1] else None
 
     lookback = closes[-50:] if closes else []
@@ -213,6 +214,12 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
         features["range_60m"] = None
     span = features["range_60m"]
     features["range_60m_frac"] = (span / price) if isinstance(span, (int, float)) and span > 0 and price > 0 else None
+    # Require a complete contiguous window; never extrapolate one hour to four.
+    window = candles_1m[-240:]
+    complete = (len(window) == 240 and all(
+        b.open_time - a.open_time == timedelta(minutes=1) for a, b in zip(window, window[1:])))
+    features["range_240m"] = max(c.high for c in window) - min(c.low for c in window) if complete else None
+    features["range_240m_frac"] = features["range_240m"] / price if complete and price > 0 else None
     recent_bars = candles_1m[-5:]
     recent_spans = [bar.high - bar.low for bar in recent_bars if bar.high >= bar.low]
     features["range_1m"] = max(recent_spans) if recent_spans else None

@@ -164,6 +164,12 @@ class BaselineJevStrategy:
             result = replace(result, action=candidate_action)
         request = _jev_request(context, snapshot, result)
         metadata["jev_trade_plan"] = request.trade_plan
+        if request.trade_plan and not request.trade_plan.get("eligible", True):
+            return _decision(context=context, snapshot=snapshot, strategy=self.key,
+                action=Action.NO_TRADE, confidence=result.confidence,
+                reasons=[request.trade_plan.get("reason") or "TARGET_PLAN_UNAVAILABLE"],
+                metadata={**metadata, "jev_effect": "not_called", "candidate_plans": [request.trade_plan]},
+                model_version=result.version, prompt_version=request.prompt_version, started=started)
         if (context.risk and context.risk.cost_aware_target_floor and
                 context.combination.jev_request_profile == "live_first_ten_2026_10_09"
                 and request.trade_plan is None):
@@ -656,7 +662,7 @@ def _jev_request(
     if cost_plan:
         plans = candidate_plans(snapshot, result.action, context.risk,
                                 context.round_trip_fee/2, context.intelligence)
-        plan = plans[0] if plans else None
+        plan = next((p for p in plans if p["eligible"]), plans[0] if plans else None)
     elif context.risk is not None and not initial:
         entry = (snapshot.best_ask if result.action is Action.LONG else snapshot.best_bid) or snapshot.price
         geometry = plan_geometry(result.action, entry, snapshot.features, context.risk)
@@ -666,7 +672,8 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=(("jev_" + context.combination.jev_request_profile + ("_compact_market_v2" if cost_plan else ""))
+        prompt_version=(("jev_" + context.combination.jev_request_profile +
+                         ("_market_range_v3" if cost_plan and context.risk.market_range_plans else "_compact_market_v2" if cost_plan else ""))
                         if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3")),
         evaluation_profile=context.combination.jev_request_profile,
         symbol=snapshot.symbol,

@@ -116,7 +116,7 @@ class RealJevProvider:
                     "Estimate the probability that the baseline_action candidate reaches the supplied "
                     "trade_plan target before its stop within horizon_minutes. Use target and stop "
                     "distances, trend, momentum, flow, and break quality. A target_range_multiple above "
-                    "one requires extension beyond the observed hour range; do not assume it will happen. "
+                    "one requires extension beyond the observed reference range; do not assume it will happen. "
                     "Net R:R and break_even_probability describe geometry, not evidence of success."
                     " market_context contains recent returns, trend alignment, volume and actual order flow. "
                     "Use these observations once; baseline_scores summarize the same evidence. "
@@ -258,6 +258,8 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
             plan = payload.get("trade_plan")
             if isinstance(plan, dict):
                 state["trade_plan"] = _normalized_plan(plan, features, frac)
+                if plan.get("target_policy") == "market_range_v1":
+                    state["market_context"]["return_240m"] = _finite(features.get("return_240m"))
         intelligence = (jev_view(payload.get("intelligence"), payload.get("baseline_action"))
                         if first_ten else payload.get("intelligence"))
         if isinstance(intelligence, dict):
@@ -320,6 +322,7 @@ def _normalized_plan(plan: dict, features: dict, frac: float | None) -> dict:
     stop_distance = abs(entry - stop) / entry if entry and stop else None
     target_distance = abs(target - entry) / entry if entry and target else None
     atr_fraction = _positive(features.get("atr_normalized"))
+    reference_fraction = _positive(plan.get("reference_range_fraction")) or frac
     return {
         "gross_rr": plan.get("gross_rr"),
         "net_rr": plan.get("net_rr"),
@@ -328,12 +331,13 @@ def _normalized_plan(plan: dict, features: dict, frac: float | None) -> dict:
         "target_distance_fraction": target_distance,
         "stop_atr_multiple": stop_distance / atr_fraction if stop_distance is not None and atr_fraction else None,
         "target_atr_multiple": target_distance / atr_fraction if target_distance is not None and atr_fraction else None,
-        "target_range_multiple": target_distance / frac if target_distance is not None and frac else None,
+        "target_range_multiple": target_distance / reference_fraction if target_distance is not None and reference_fraction else None,
         "horizon_minutes": plan.get("horizon_minutes"),
         "round_trip_fee_rate": plan.get("round_trip_fee_rate"),
         "stress_bps": plan.get("stress_bps"),
         "requires_structure_break": plan.get("requires_structure_break"),
-        **{key: plan[key] for key in ("target_extended_for_costs", "target_policy") if key in plan},
+        **{key: plan[key] for key in ("target_extended_for_costs", "target_policy",
+                                    "reference_range_minutes", "max_hold_minutes") if key in plan},
     }
 
 

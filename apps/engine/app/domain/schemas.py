@@ -195,6 +195,8 @@ class PositionRecord(BaseModel):
     recovery_attempts: int = 0
     notional_recovery_started: bool = False
     external_reconciled_at: datetime | None = None
+    forecast_horizon_minutes: int | None = None
+    max_hold_minutes: int | None = None
     next_recovery_at: datetime | None = None
 
 

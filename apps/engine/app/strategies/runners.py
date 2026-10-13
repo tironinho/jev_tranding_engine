@@ -135,7 +135,8 @@ class BaselineJevStrategy:
         live_context_shadow = False
         baseline_result = result
         if result.action is Action.NO_TRADE:
-            candidate_action = (None if context.combination.jev_request_profile != "plan_outcome_v3"
+            candidate_action = (None if (context.combination.jev_request_profile != "plan_outcome_v3"
+                                         and not context.combination.review_below_threshold)
                                 else _context_candidate_action(result, context.combination))
             if candidate_action is None:
                 metadata["jev_effect"] = "idle"
@@ -152,7 +153,8 @@ class BaselineJevStrategy:
                     started=started,
                 )
             context_candidate = True
-            live_context_shadow = context.mode is OperatingMode.LIVE
+            live_context_shadow = (context.mode is OperatingMode.LIVE
+                                   or context.combination.jev_request_profile != "plan_outcome_v3")
             metadata.update(
                 baseline_action=Action.NO_TRADE.value,
                 candidate_action=candidate_action.value,

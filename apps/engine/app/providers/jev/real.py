@@ -242,6 +242,10 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
         if first_ten:
             state.update(baseline_class=payload.get("baseline_class"),
                          baseline_labels=payload.get("baseline_labels") or [])
+            if payload.get("candidate_origin"):
+                state.update(candidate_origin=payload["candidate_origin"],
+                             baseline_threshold=payload.get("baseline_threshold"),
+                             candidate_threshold=payload.get("candidate_threshold"))
             # Compact exchange observations survive missing external providers.
             # No duplicated agent opinions or large third-party payloads.
             state["market_context"] = {

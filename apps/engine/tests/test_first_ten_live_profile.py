@@ -155,3 +155,41 @@ def test_compact_market_observations_survive_degraded_external_provider():
     assert state["market_context"]["return_15m"] is None
     assert len(state["market_context"]) == 10
     assert "intelligence" not in state
+
+
+@pytest.mark.asyncio
+async def test_historical_profile_sends_borderline_candidate_to_jev_read_only():
+    from dataclasses import replace
+    from app.domain.enums import OperatingMode
+    eng = first_ten_engine()
+    eng.weights = replace(eng.weights, min_abs_score=.95)
+    eng.combination = replace(eng.combination, review_below_threshold=True)
+    snapshot, _ = long_snapshot()
+    provider = AssessmentProvider(.9)
+    ctx = context(eng, snapshot, provider)
+    ctx.mode = OperatingMode.LIVE
+    result = await BaselineJevStrategy().evaluate(snapshot, snapshot.features, ctx)
+    assert len(provider.requests) == 1
+    assert provider.requests[0].candidate_origin == "BASELINE_BELOW_THRESHOLD"
+    assert result.action is Action.NO_TRADE
+    assert result.metadata["baseline_action"] == "NO_TRADE"
+    assert result.metadata["jev_effect"] == "shadow_confirm"
+    assert result.metadata["jev_evaluation_mode"] == "READ_ONLY_SHADOW"
+
+
+@pytest.mark.asyncio
+async def test_historical_profile_review_can_be_disabled_and_bad_data_stays_blocked():
+    from dataclasses import replace
+    eng = first_ten_engine()
+    eng.weights = replace(eng.weights, min_abs_score=.95)
+    eng.combination = replace(eng.combination, review_below_threshold=False)
+    snapshot, _ = long_snapshot()
+    provider = AssessmentProvider(.9)
+    result = await BaselineJevStrategy().evaluate(snapshot, snapshot.features, context(eng, snapshot, provider))
+    assert not provider.requests
+    assert result.metadata["jev_effect"] == "idle"
+    eng.combination = replace(eng.combination, review_below_threshold=True)
+    snapshot, _ = long_snapshot(spread_bps=20)
+    result = await BaselineJevStrategy().evaluate(snapshot, snapshot.features, context(eng, snapshot, provider))
+    assert not provider.requests
+    assert result.action is Action.NO_TRADE

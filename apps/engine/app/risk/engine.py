@@ -201,7 +201,11 @@ class RiskEngine:
             candidate_entry = entry_guess
             valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
             if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
-                return self._reject(decision, ["JEV_PLAN_CHANGED"])
+                return self._reject(decision, ["JEV_PLAN_CHANGED"], details={
+                    "assessed_entry": plan["entry"], "estimated_entry": candidate_entry,
+                    "price_drift": abs(candidate_entry / float(plan["entry"]) - 1),
+                    "max_price_drift": 0.001, "stop": stop, "target": target,
+                })
             geometry = Geometry(stop=stop, target=target, reasons=("JEV_ASSESSED_PLAN",))
 
         entry_rate = rate_for(self._entry_liquidity(), fees.maker, fees.taker)
@@ -287,7 +291,11 @@ class RiskEngine:
             candidate_entry = entry
             valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
             if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
-                return self._reject(decision, ["JEV_PLAN_CHANGED"])
+                return self._reject(decision, ["JEV_PLAN_CHANGED"], details={
+                    "assessed_entry": plan["entry"], "estimated_entry": candidate_entry,
+                    "price_drift": abs(candidate_entry / float(plan["entry"]) - 1),
+                    "max_price_drift": 0.001, "stop": stop, "target": target,
+                })
             geometry = Geometry(stop=stop, target=target, reasons=("JEV_ASSESSED_PLAN",))
 
         notional = entry * qty

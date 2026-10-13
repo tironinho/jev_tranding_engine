@@ -479,12 +479,14 @@ class TradingEngine:
                 )
             else:
                 decisions.append(result)
+        # Decisions and provider artifacts are already durable. Analytical
+        # consensus must not age an executable signal before the order journal.
+        await self._execute_decisions(decisions, snapshot)
         consensus = consensus_from_decisions(decisions)
         if consensus is not None:
             payload = self.store.add_consensus(consensus)
             if self.postgres and self.postgres.healthy:
                 await self.postgres.save_consensus(payload)
-        await self._execute_decisions(decisions, snapshot)
         cfg = self.strategy_settings["baseline_jev"]
         if (self.combination.paper_policy_comparison and self.trading_enabled and cfg.enabled and cfg.call_model
                 and cfg.mode is OperatingMode.LIVE and self.policy_paper.due(snapshot,self.weights)):
@@ -531,8 +533,11 @@ class TradingEngine:
         started = time.perf_counter()
         decision, context, _budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0,
             pipeline_timings=pipeline_timings)
-        async with self._locks[key]:
-            return await self._persist_strategy(key, snapshot, decision, context, started)
+        # This only appends independent decision/provider records. Holding the
+        # account lock here serialized history writes for all five symbols and
+        # delayed both entries and position management. Account mutations keep
+        # their own lock in the execution/management paths.
+        return await self._persist_strategy(key, snapshot, decision, context, started)
 
     async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float,
                       pipeline_timings=None):

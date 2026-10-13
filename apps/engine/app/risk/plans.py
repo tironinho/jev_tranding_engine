@@ -114,6 +114,9 @@ def score_probability(plan, probability, haircut):
     conservative = max(0, probability - haircut)
     loss, gain = plan["net_risk_per_unit"], plan["net_reward_per_unit"]
     expected = conservative * gain - (1 - conservative) * loss
+    # A rounded break-even result is not evidence of a positive edge.
+    if loss > 0 and abs(expected / loss) <= 1e-12:
+        expected = 0.0
     return {"raw_probability": probability, "stress_probability": conservative,
             "probability_status": "UNCALIBRATED", "expected_net_per_unit": expected,
             "expected_net_r": expected / loss if loss > 0 else -1,

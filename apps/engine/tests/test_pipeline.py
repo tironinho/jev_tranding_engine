@@ -235,6 +235,82 @@ async def test_an_expired_sibling_does_not_block_the_other_book():
 
 
 @pytest.mark.asyncio
+async def test_slow_history_for_one_symbol_does_not_block_other_decisions_or_account_lock():
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    eng = engine(symbols="BTCUSDT,ETHUSDT")
+    first, _ = long_snapshot()
+    second = first.model_copy(update={"symbol":"ETHUSDT", "snapshot_id":uuid4()})
+    both_writing, release = asyncio.Event(), asyncio.Event()
+    writing = []
+
+    async def slow_write(payload):
+        writing.append(payload["symbol"])
+        if len(writing) == 2:
+            both_writing.set()
+        await release.wait()
+
+    class Database:
+        healthy = True
+        save_jev = AsyncMock()
+        save_decision = AsyncMock(side_effect=slow_write)
+
+    eng.postgres = Database()
+    tasks = [asyncio.create_task(eng._run_strategy("baseline_jev", s, uuid4(), uuid4()))
+             for s in (first, second)]
+    try:
+        await asyncio.wait_for(both_writing.wait(), 1)
+        # Position management and risk/execution can still acquire this lock
+        # while the database is slow. No real adapter is called by this test.
+        await asyncio.wait_for(eng._locks["baseline_jev"].acquire(), 1)
+        eng._locks["baseline_jev"].release()
+        assert set(writing) == {"BTCUSDT","ETHUSDT"}
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_execution_waits_for_durable_decisions_but_not_analytical_consensus():
+    from unittest.mock import AsyncMock
+
+    eng = engine()
+    snapshot, book = long_snapshot()
+    attach_book(eng, book)
+    stored = []
+    executed, consensus_started, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def record_decision(payload):
+        stored.append(payload["strategy"])
+
+    async def execute(decisions, snapshot):
+        assert set(stored) == {"baseline","baseline_jev"}
+        executed.set()
+
+    async def consensus(payload):
+        consensus_started.set()
+        await release.wait()
+
+    class Database:
+        healthy = True
+        save_snapshot = AsyncMock()
+        save_jev = AsyncMock()
+        save_decision = AsyncMock(side_effect=record_decision)
+        save_consensus = AsyncMock(side_effect=consensus)
+
+    eng.postgres = Database()
+    eng._execute_decisions = execute
+    task = asyncio.create_task(eng.evaluate_snapshot(snapshot))
+    try:
+        await asyncio.wait_for(consensus_started.wait(),1)
+        assert executed.is_set()
+    finally:
+        release.set()
+        await task
+
+
+@pytest.mark.asyncio
 async def test_baseline_opens_a_new_symbol_while_another_entry_is_fresh():
     eng = engine()
     snapshot, book = long_snapshot()

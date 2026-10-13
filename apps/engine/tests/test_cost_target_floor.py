@@ -140,6 +140,42 @@ async def test_break_cannot_confirm_a_negative_net_expectancy():
     assert decision.metadata["jev_trade_plan"]["expected_net_r"] < 0
 
 
+@pytest.mark.asyncio
+async def test_rounded_break_even_probability_cannot_become_a_positive_expectancy():
+    eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
+    snapshot, _ = narrow_snapshot(Action.SHORT)
+    decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
+        context(eng, snapshot, AssessmentProvider(.45)))
+    assert decision.action is Action.NO_TRADE
+    assert "JEV_NON_POSITIVE_EXPECTANCY" in decision.reason_codes
+    assert decision.metadata["jev_trade_plan"]["expected_net_r"] == 0
+    positive = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
+        context(eng, snapshot, AssessmentProvider(.46)))
+    assert positive.action is Action.SHORT
+    assert positive.metadata["jev_trade_plan"]["expected_net_r"] > 0
+
+
+@pytest.mark.asyncio
+async def test_changed_entry_keeps_price_drift_guard_and_records_both_prices():
+    from app.execution.slippage import book_from_levels
+    from app.domain.schemas import BookLevel
+    eng = TradingEngine(settings())
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
+    snapshot, _ = narrow_snapshot(Action.SHORT)
+    decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
+        context(eng, snapshot, AssessmentProvider(.65)))
+    moved_book = book_from_levels([BookLevel(price=99.8,quantity=100)],
+                                 [BookLevel(price=99.82,quantity=100)],snapshot.timestamp)
+    ctx = _context(equity=20,cash=20,day_start_equity=20,
+                   live_requested=True,live_armed=True,step_size=.001)
+    rejected = eng.risk.evaluate(decision,snapshot,ctx,FeeQuote(.00075,.00075,"test"),moved_book)
+    assert "JEV_PLAN_CHANGED" in rejected.reject_reasons
+    assert rejected.details["assessed_entry"] == decision.metadata["jev_trade_plan"]["entry"]
+    assert rejected.details["estimated_entry"] == 99.8
+    assert rejected.details["price_drift"] > rejected.details["max_price_drift"] == .001
+
+
 def test_no_impossible_short_target_or_invalid_geometry_is_sent_to_model():
     eng = TradingEngine(settings())
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)

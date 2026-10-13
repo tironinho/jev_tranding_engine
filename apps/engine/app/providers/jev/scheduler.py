@@ -49,3 +49,19 @@ class JevScheduler:
             raise JevProviderError("jev_budget_exhausted")
         request = request.model_copy(update={"evaluation_timeout_s": timeout})
         return await asyncio.wait_for(provider.evaluate_market_state(request), timeout=timeout)
+
+    async def research_batch(self, operation):
+        """Low-priority batch; active order decisions never wait on this slot."""
+        await asyncio.sleep(0)
+        if self._active_pending or self._shadow_running:
+            raise JevShadowDeferred("ACTIVE_PRIORITY_OR_SHADOW_BUSY")
+        self._shadow_running = True
+        try:
+            return await operation()
+        finally:
+            self._shadow_running = False
+
+    async def research_assessment(self, provider, request):
+        if self._active_pending:
+            raise JevShadowDeferred("ACTIVE_PRIORITY")
+        return await self._call(provider, request, self.shadow_timeout_s, None)

@@ -104,3 +104,29 @@ async def test_cancelled_shadow_releases_capacity():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert await scheduler.evaluate(MockJevProvider("test"), request(), shadow=True)
+
+
+@pytest.mark.asyncio
+async def test_research_batch_yields_to_active_signal_and_keeps_its_capacity_separate():
+    scheduler = JevScheduler()
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class Provider(MockJevProvider):
+        async def evaluate_market_state(self, req):
+            started.set()
+            await release.wait()
+            return await super().evaluate_market_state(req)
+
+    async def batch():
+        active = asyncio.create_task(scheduler.evaluate(Provider("test"), request()))
+        await asyncio.wait_for(started.wait(), 1)
+        with pytest.raises(JevShadowDeferred, match="ACTIVE_PRIORITY"):
+            await scheduler.research_assessment(MockJevProvider("test"),request("ETHUSDT"))
+        with pytest.raises(JevShadowDeferred, match="ACTIVE_PRIORITY"):
+            await scheduler.research_batch(lambda: asyncio.sleep(0))
+        release.set()
+        await active
+
+    await scheduler.research_batch(batch)
+    assert not scheduler._shadow_running
+    assert await scheduler.evaluate(MockJevProvider("test"), request(), shadow=True)

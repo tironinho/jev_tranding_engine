@@ -11,6 +11,7 @@ from uuid import uuid4
 from app.accounts import AccountBook, unrealized
 from app.analytics.comparison import compare_strategies
 from app.analytics.performance import max_drawdown, slice_performance, summarize_trades
+from app.analytics.policy_paper import PolicyPaperLab
 from app.config import (
     Settings,
     as_paper_margin,
@@ -219,6 +220,7 @@ class TradingEngine:
         self._jev_history_cache: list[dict] = []
         self._jev_history_cached_at = 0.0
         self._jev_history_lock = asyncio.Lock()
+        self.policy_paper = PolicyPaperLab(self.slippage, now)
 
     async def start(self) -> None:
         import httpx
@@ -348,6 +350,10 @@ class TradingEngine:
     async def on_price(self, symbol: str, price: float | None, timestamp: datetime) -> None:
         """Schedule label and exit work. The market socket does not wait for it."""
         state = self.states.get(symbol)
+        if state is not None:
+            # Check every fresh touch before slower label persistence can batch
+            # quotes, so the paper comparison cannot miss a brief stop crossing.
+            self.policy_paper.observe(symbol,self._policy_quote(symbol))
         bucket = self._quotes.setdefault(symbol, [])
         bucket.append(
             {
@@ -479,7 +485,47 @@ class TradingEngine:
             if self.postgres and self.postgres.healthy:
                 await self.postgres.save_consensus(payload)
         await self._execute_decisions(decisions, snapshot)
+        cfg = self.strategy_settings["baseline_jev"]
+        if (self.combination.paper_policy_comparison and self.trading_enabled and cfg.enabled and cfg.call_model
+                and cfg.mode is OperatingMode.LIVE and self.policy_paper.due(snapshot,self.weights)):
+            self.policy_paper.running = True
+            task = asyncio.create_task(self._sample_policy_paper(snapshot))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
         return decisions
+
+    def _policy_quote(self, symbol):
+        state = self.states[symbol]
+        return {"bid":state.best_bid,"ask":state.best_ask,"book":state.book,
+                "book_at":state.last_book_at,"marks":self._marks()}
+
+    async def _save_policy_paper(self):
+        if self.policy_paper.dirty and self.postgres and self.postgres.healthy:
+            payload = self.policy_paper.export()
+            self.policy_paper.dirty = False
+            try:
+                await self.postgres.save_policy_paper(payload)
+            except Exception:
+                self.policy_paper.dirty = True
+                self._log("policy_paper","CHECKPOINT_PENDING",level=logging.WARNING)
+            if not self.postgres.healthy:
+                self.policy_paper.dirty = True
+
+    async def _sample_policy_paper(self, snapshot):
+        try:
+            fees = await self.fee_provider.get_fees(snapshot.symbol)
+            intelligence = self.intelligence.context_for(snapshot.symbol,snapshot.features,snapshot.timestamp)
+            await self.policy_paper.sample(snapshot,self.weights,self.combination,self.risk.limits,fees,
+                intelligence,self.jev,self.jev_scheduler,lambda:self._policy_quote(snapshot.symbol),
+                self.feed.rules.get(snapshot.symbol,{}))
+            self._log("policy_paper",f"sample={self.policy_paper.sample_count} {snapshot.symbol} PAPER_ONLY")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log("policy_paper",f"ERROR {type(exc).__name__}",level=logging.ERROR)
+        finally:
+            self.policy_paper.running = False
+            await self._save_policy_paper()
 
     async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, pipeline_timings=None) -> StrategyDecision:
         started = time.perf_counter()
@@ -1034,6 +1080,7 @@ class TradingEngine:
         if state is None or state.last_price is None:
             return
         moment = as_of or utcnow()
+        self.policy_paper.observe(symbol,self._policy_quote(symbol))
         for key in STRATEGY_KEYS:
             async with self._locks[key]:
                 await self._manage_one(key, symbol, state, moment, extreme)
@@ -1530,6 +1577,7 @@ class TradingEngine:
         self._log("live", "baseline_jev live")
 
     def apply_runtime(self, runtime: dict) -> None:
+        self.policy_paper.restore(runtime.get("policy_paper"))
         self.pending_entries = runtime.get("pending_entries") or {}
         saved_accounts = set()
         accounts = runtime.get("accounts") or {}
@@ -1852,6 +1900,7 @@ class TradingEngine:
                 balance = await self.balance.snapshot(fresh=True)
                 await self._reconcile_external_flat(balance)
                 await self.note_balance(self.mark_account(balance))
+                await self._save_policy_paper()
                 for symbol in self.states:
                     await self.manage_positions(symbol)
             except asyncio.CancelledError:

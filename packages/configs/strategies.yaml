@@ -29,6 +29,7 @@ combination:
   # Borderline coherent candidates may reach JEV for read-only research.
   # They never become live entries solely because the model confirms them.
   review_below_threshold: true
+  paper_policy_comparison: true
   candidate_min_abs_score: 0.15
   # Moderate disagreement may be reviewed by JEV; strong disagreement and
   # flow against the candidate remain blocked before the provider call.

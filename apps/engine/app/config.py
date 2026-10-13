@@ -62,6 +62,7 @@ class CombinationConfig:
     candidate_min_abs_score: float = 0.15
     candidate_min_agreement: float = 0.60
     review_below_threshold: bool = False
+    paper_policy_comparison: bool = False
     extra_entry_min_continuation: float = 0.80
     max_reversal: float = 0.65
     max_false_breakout: float = 0.80
@@ -99,6 +100,7 @@ class RiskLimits:
     min_net_rr: float = 0.0
     cost_aware_target_floor: bool = False
     market_range_plans: bool = False
+    jev_expectancy_gate: bool = True
     atr_buffer_mult: float = 0.10
     atr_stop_mult: float = 2.0
     max_stop_pct: float = 0.02
@@ -215,6 +217,7 @@ def combination_from_file(payload: dict) -> CombinationConfig:
         candidate_min_abs_score=float(payload.get("candidate_min_abs_score", 0.15)),
         candidate_min_agreement=float(payload.get("candidate_min_agreement", 0.60)),
         review_below_threshold=bool(payload.get("review_below_threshold", False)),
+        paper_policy_comparison=bool(payload.get("paper_policy_comparison", False)),
         extra_entry_min_continuation=float(payload.get("extra_entry_min_continuation", 0.80)),
         max_reversal=float(payload.get("max_reversal", 0.65)),
         max_false_breakout=float(payload.get("max_false_breakout", 0.80)),

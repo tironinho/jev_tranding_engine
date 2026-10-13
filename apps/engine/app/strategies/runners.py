@@ -253,7 +253,7 @@ class BaselineJevStrategy:
             assessed_plan = dict(request.trade_plan)
             assessed_plan.update(score_probability(assessed_plan, assessment.trend_continuation_probability,
                                                    context.risk.probability_haircut))
-            if action is not Action.NO_TRADE and assessed_plan["expected_net_r"] <= 0:
+            if context.risk.jev_expectancy_gate and action is not Action.NO_TRADE and assessed_plan["expected_net_r"] <= 0:
                 action = Action.NO_TRADE
                 vetoes = ["JEV_NON_POSITIVE_EXPECTANCY"]
                 metadata["jev_effect"] = "veto"

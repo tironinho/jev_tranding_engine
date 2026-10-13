@@ -280,6 +280,14 @@ async def setup_review(request: Request, limit: int = 500, before: datetime | No
     return {**review_setups(audit["rows"]), "next_before": audit["next_before"]}
 
 
+@router.get("/api/paper/policy-comparison")
+async def paper_policy_comparison(request: Request) -> dict:
+    _actor(request)
+    engine = _engine(request)
+    return {"enabled":engine.combination.paper_policy_comparison,
+            **engine.policy_paper.report(engine._marks())}
+
+
 @router.get("/api/decisions/{decision_id}")
 async def decision_detail(decision_id: str, request: Request) -> dict:
     _actor(request)

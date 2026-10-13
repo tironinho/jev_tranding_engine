@@ -584,6 +584,9 @@ class PostgresMirror:
                     )
                 ).scalars().first()
                 trades = (await session.execute(select(TradeRow))).scalars().all()
+                policy_paper = (await session.execute(select(EngineEventRow)
+                    .where(EngineEventRow.kind == "policy_paper_state")
+                    .order_by(EngineEventRow.timestamp.desc()).limit(1))).scalar_one_or_none()
                 entry_events = (await session.execute(select(EngineEventRow).where(
                     EngineEventRow.kind.in_(["live_entry_intent", "live_entry_resolved"])
                 ).order_by(EngineEventRow.timestamp))).scalars().all()
@@ -600,6 +603,7 @@ class PostgresMirror:
             orphans = {key: value for key, value in grouped.items() if key not in saved}
             return {
                 "accounts": saved,
+                "policy_paper": policy_paper.payload if policy_paper else None,
                 "pending_entries": pending_entries,
                 "trades": grouped,
                 "strategies": [
@@ -619,6 +623,27 @@ class PostgresMirror:
             self.last_error = str(exc)
             log.warning("postgres load failed: %s", exc)
             return empty
+
+    async def save_policy_paper(self, payload: dict) -> None:
+        if not self.factory or not self.healthy:
+            return
+        try:
+            async with self.factory() as session:
+                row = (await session.execute(select(EngineEventRow)
+                    .where(EngineEventRow.kind == "policy_paper_state")
+                    .order_by(EngineEventRow.timestamp.desc()).limit(1).with_for_update())).scalar_one_or_none()
+                if row is None:
+                    row = EngineEventRow(kind="policy_paper_state",message="PAPER_ONLY",payload=payload,
+                                         timestamp=datetime.now(timezone.utc))
+                    session.add(row)
+                else:
+                    row.payload = payload
+                    row.timestamp = datetime.now(timezone.utc)
+                await session.commit()
+        except Exception as exc:
+            self.last_error = str(exc)
+            log.warning("policy paper checkpoint failed: %s",exc)
+            raise
 
     async def save_strategy_config(self, key: str, enabled: bool, mode: str, config: dict) -> None:
         if not self.factory or not self.healthy:

@@ -86,6 +86,9 @@ def market_range_plans(snapshot, side, limits, fee_rate, intelligence, geometry)
             exit_slippage_per_unit=entry*limits.plan_stress_bps/10000, funding_per_unit=-interest)
         reward = abs(target-entry)
         valid = target > 0 and (target-entry)*direction > 0 and reward <= span + entry*1e-10
+        boundary = features.get("resistance_15m" if side is Action.LONG else "support_15m")
+        requires_break = (bool((boundary-entry)*direction > 0 and (target-boundary)*direction > 0)
+                          if isinstance(boundary, (int, float)) and math.isfinite(boundary) else None)
         econ = compute_trade_economics(side=side, entry=entry, stop=geometry.stop, target=target,
             quantity=1, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
             exit_slippage_per_unit=entry*limits.plan_stress_bps/10000,
@@ -101,7 +104,7 @@ def market_range_plans(snapshot, side, limits, fee_rate, intelligence, geometry)
             "round_trip_fee_rate": fee_rate*2, "stress_bps": limits.plan_stress_bps,
             "borrow_hourly_rate": rate, "borrow_stress_rate": stress_rate,
             "interest_estimate_per_unit": interest, "interest_known": rate is not None or snapshot.market_type.value != "margin",
-            "requires_structure_break": True, "stop_policy": "fixed", "eligible": valid,
+            "requires_structure_break": requires_break, "stop_policy": "fixed", "eligible": valid,
             "reason": None if valid else "MARKET_RANGE_BELOW_COST_TARGET"})
     return plans
 

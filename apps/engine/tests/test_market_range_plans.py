@@ -36,6 +36,7 @@ def test_cost_fitted_target_stays_inside_observed_horizon_range():
     assert plans[0]["horizon_minutes"] == 60
     assert plans[0]["net_rr"] >= 1.5-1e-10
     assert abs(plans[0]["target"]-plans[0]["entry"]) <= s.features["range_60m"]
+    assert plans[0]["requires_structure_break"] is False
 
 
 def test_four_hour_plan_requires_aligned_actual_history_and_uses_its_range():

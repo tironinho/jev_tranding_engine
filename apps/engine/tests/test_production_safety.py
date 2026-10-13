@@ -378,6 +378,64 @@ async def test_protection_recovery_is_bounded_and_becomes_critical(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("free_quote,expected_calls", [(20, 1), (4, 0)])
+async def test_margin_short_below_notional_uses_only_available_quote(free_quote, expected_calls):
+    eng = engine(market_type="margin")
+    p = _open(eng, mode="live", side=Action.SHORT, quantity=3.6,
+              entry_price=1.4007, stop=1.41, target=1.38, stop_client_order_id=None)
+    state = eng.states["BTCUSDT"]
+    state.best_ask = state.last_price = 1.37
+    eng.feed.rules["BTCUSDT"] = {"step_size": 0.1, "min_notional": 5}
+    eng.balance.snapshot = AsyncMock(return_value={"status": "ok", "assets": [
+        {"asset": "BTC", "total": -3.436, "free": 0},
+        {"asset": "USDT", "free": free_quote},
+    ]})
+    def filled(intent):
+        return OrderRecord(client_order_id="close", decision_id=p.decision_id,
+            strategy=p.strategy, symbol=p.symbol, side="BUY", order_type=OrderType.MARKET,
+            status=OrderStatus.FILLED, mode="live", quantity=intent.quantity,
+            filled_quantity=intent.quantity, average_fill_price=1.37, created_at=clock())
+    eng.live.submit_close = AsyncMock(side_effect=filled)
+    await eng._exit_live("baseline", p.symbol, p, "PROTECTION_FAILED", clock(), state)
+    assert eng.live.submit_close.await_count == expected_calls
+    if expected_calls:
+        intent = eng.live.submit_close.call_args.args[0]
+        assert intent.quantity == pytest.approx(3.7)
+        assert intent.quantity * 1.37 >= 5.05
+        assert not eng.accounts.accounts["baseline"].positions
+        assert eng.accounts.accounts["baseline"].trades[0].quantity == 3.6
+        assert eng.store.fills[-1]["quantity"] == pytest.approx(3.7)
+        assert any(e["kind"] == "close_notional_adjustment" for e in eng.store.events)
+    else:
+        assert p.protection_error == "MIN_NOTIONAL_CLOSE_INSUFFICIENT_FREE_QUOTE"
+        assert p.quantity == 3.6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error,started,expected", [
+    ("Filter failure: NOTIONAL", False, 1),
+    ("timeout", False, 0),
+    ("Filter failure: NOTIONAL", True, 0),
+])
+async def test_exhausted_notional_recovery_restarts_only_once(error, started, expected):
+    eng = engine(market_type="margin")
+    p = _open(eng, mode="live", side=Action.SHORT, stop_client_order_id=None)
+    p.protection_status = "RECOVERY_EXHAUSTED"
+    p.protection_error = error
+    p.recovery_attempts = 5
+    p.notional_recovery_started = started
+    state = eng.states[p.symbol]
+    state.last_price = 100
+    eng._exit_live = AsyncMock()
+    await eng._manage_position("baseline", p.symbol, p, state, clock(), None)
+    assert eng._exit_live.await_count == expected
+    if expected:
+        assert p.notional_recovery_started
+        assert p.recovery_attempts == 0
+        assert p.protection_status == "RECOVERY_PENDING"
+
+
+@pytest.mark.asyncio
 async def test_pending_recovery_repairs_checkpoint_before_resolution(monkeypatch):
     from tests.test_runtime import _arm_live, _Exchange
     monkeypatch.setattr("app.service.utcnow", clock)

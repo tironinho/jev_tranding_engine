@@ -291,6 +291,18 @@ class RiskEngine:
             geometry = Geometry(stop=stop, target=target, reasons=("JEV_ASSESSED_PLAN",))
 
         notional = entry * qty
+        if context.live_requested and context.market_type in {MarketType.MARGIN.value, "spot"}:
+            # Entry alone passing NOTIONAL is insufficient: the exit and the
+            # resting stop-limit must remain executable after fees and rounding.
+            exit_quantity = qty * (1 - entry_rate if decision.action is Action.LONG else 1)
+            if context.step_size:
+                exit_quantity = round_down_to_step(exit_quantity, context.step_size)
+            lowest_price = min(entry, geometry.target, geometry.stop * 0.998)
+            exit_notional = exit_quantity * lowest_price
+            if exit_notional + 1e-9 < floor * 1.01:
+                return self._reject(decision, ["EXIT_BELOW_MIN_NOTIONAL"], details={
+                    "exit_notional": exit_notional, "required_exit_notional": floor * 1.01,
+                })
         periods = funding_periods(self.limits)
         funding_rate = snapshot.features.get("funding_rate")
         funding_rate_f = float(funding_rate) if isinstance(funding_rate, (int, float)) else None

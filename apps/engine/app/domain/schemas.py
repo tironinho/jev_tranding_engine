@@ -193,6 +193,7 @@ class PositionRecord(BaseModel):
     protection_latency_ms: float | None = None
     protection_error: str | None = None
     recovery_attempts: int = 0
+    notional_recovery_started: bool = False
     next_recovery_at: datetime | None = None
 
 

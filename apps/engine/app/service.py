@@ -35,7 +35,7 @@ from app.domain.enums import (
     SignalStatus,
     SlippageModelName,
 )
-from app.domain.mathutil import utcnow
+from app.domain.mathutil import utcnow, round_up_to_step
 from app.domain.schemas import AuditRecord, FillRecord, MarketSnapshot, OrderRecord, StrategyDecision
 from app.events.bus import EngineLogBuffer, Event, EventBus
 from app.intelligence.runner import IntelligenceRunner
@@ -1050,7 +1050,17 @@ class TradingEngine:
             if position.protection_status == "RESIDUAL":
                 return
             if position.protection_status == "RECOVERY_EXHAUSTED":
-                return
+                # One new bounded recovery for the corrected minimum-notional
+                # close path. Never restart ambiguous/time-out recovery loops.
+                if (self.settings.market_type != "margin" or position.side is not Action.SHORT
+                        or position.notional_recovery_started
+                        or "NOTIONAL" not in (position.protection_error or "").upper()):
+                    return
+                position.notional_recovery_started = True
+                position.recovery_attempts = 0
+                position.next_recovery_at = None
+                position.protection_status = "RECOVERY_PENDING"
+                await self._checkpoint(key, positions=[position], orders=[], fills=[])
             if position.protection_status in {"UNPROTECTED", "RECOVERY_PENDING"} or not position.stop_client_order_id:
                 await self._exit_live(key, symbol, position, "PROTECTION_FAILED", as_of, state)
                 return
@@ -1246,6 +1256,30 @@ class TradingEngine:
                 # Never buy the original short again after an external/stop close.
                 debt_exposure = max(0, -float(asset.get("total") or 0))
                 quantity = lot_quantity(min(quantity, debt_exposure), self.feed.rules.get(symbol, {}).get("step_size"))
+                rules = self.feed.rules.get(symbol, {})
+                minimum = float(rules.get("min_notional") or 0)
+                price = state.best_ask or state.last_price
+                if quantity > 0 and minimum > 0 and price and quantity * price < minimum * 1.01:
+                    # AUTO_REPAY repays the short; only a minimum-sized purchase
+                    # is allowed and any surplus remains visible as account dust.
+                    step = float(rules.get("step_size") or 0)
+                    required = max(minimum * 1.01 / price,
+                                   debt_exposure / max(1 - position.exit_fee_rate, 1e-9))
+                    adjusted = round_up_to_step(required, step)
+                    quote = next((r for r in balance.get("assets", []) if r.get("asset") == "USDT"), {})
+                    free = float(quote.get("free") or 0)
+                    cost = adjusted * price * (1 + position.exit_fee_rate + 0.01)
+                    if cost > free or adjusted * price > minimum * 1.02 + step * price:
+                        position.protection_error = "MIN_NOTIONAL_CLOSE_INSUFFICIENT_FREE_QUOTE"
+                        await self._checkpoint(key, positions=[position], orders=[], fills=[])
+                        self._log("live_exit_blocked", f"{tag} {position.protection_error}")
+                        return
+                    self.store.add_event("close_notional_adjustment", "MINIMUM_AUTO_REPAY_BUY", {
+                        "position_id": str(position.position_id), "symbol": symbol,
+                        "debt_exposure": debt_exposure, "quantity": adjusted,
+                        "estimated_surplus": adjusted - debt_exposure,
+                    })
+                    quantity = adjusted
         if quantity <= 0:
             self._log("live_exit_blocked", f"{tag} NO_CLOSABLE_BALANCE_RECONCILE")
             return
@@ -1274,17 +1308,18 @@ class TradingEngine:
             await self._checkpoint(key, positions=[position], orders=[order_payload], fills=[])
             return
         already = position.exit_processed.get(order.client_order_id, 0)
-        quantity = min(position.quantity, max(0, order.filled_quantity - already))
+        executed_quantity = max(0, order.filled_quantity - already)
+        quantity = min(position.quantity, executed_quantity)
         position.close_sequence += 1
         if quantity <= 0 or not order.average_fill_price:
             await self._checkpoint(key, positions=[position], orders=[order_payload], fills=[])
             return
         position.exit_processed[order.client_order_id] = order.filled_quantity
         exit_price = order.average_fill_price
-        exit_fee = self._order_fee(order, _exit_fee(position, exit_price, quantity, self.fee_config))
+        exit_fee = self._order_fee(order, _exit_fee(position, exit_price, executed_quantity, self.fee_config))
         moment = order.exchange_at or order.received_at or utcnow()
         fill = FillRecord(order_id=order.order_id, decision_id=position.decision_id,
-                          price=exit_price, quantity=quantity, fee=exit_fee, slippage_bps=0,
+                          price=exit_price, quantity=executed_quantity, fee=exit_fee, slippage_bps=0,
                           liquidity="taker", filled_at=moment)
         touch = position.stop if reason == "STOP" else position.target if reason == "TARGET" else exit_price
         await self._finish_exit(key, symbol, position, reason, moment, state, exit_price,

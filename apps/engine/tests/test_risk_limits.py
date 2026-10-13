@@ -130,6 +130,25 @@ def test_small_account_clears_the_exchange_minimum_and_not_the_old_fifty():
     assert opened.accepted
 
 
+def test_live_entry_at_minimum_is_rejected_when_exit_is_below_minimum():
+    from app.domain.schemas import StrategyDecision
+    from app.domain.enums import OperatingMode
+    eng = engine()
+    eng.risk.update_limits(min_order_notional=5, risk_per_trade=0.000001,
+                           live_longs_enabled=True)
+    snapshot, book = long_snapshot()
+    decision = StrategyDecision(correlation_id=snapshot.snapshot_id,
+        opportunity_id=snapshot.snapshot_id, snapshot_id=snapshot.snapshot_id,
+        strategy="baseline", symbol=snapshot.symbol, timestamp=snapshot.timestamp,
+        action=Action.LONG, confidence=0.8, reason_codes=["TREND_UP"], mode=OperatingMode.LIVE)
+    result = eng.risk.evaluate(decision, snapshot,
+        _context(market_type="margin", live_requested=True, live_armed=True,
+                 step_size=0.001, min_notional=5, margin_level=999),
+        FeeQuote(0.0002, 0.0005, "config"), book)
+    assert "EXIT_BELOW_MIN_NOTIONAL" in result.reject_reasons
+    assert result.details["exit_notional"] < result.details["required_exit_notional"]
+
+
 def test_drawdown_and_daily_loss_reject():
     eng = engine()
     snapshot, book = long_snapshot()

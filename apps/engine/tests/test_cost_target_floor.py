@@ -9,9 +9,8 @@ from app.providers.jev.real import RealJevProvider
 from app.risk.economics import compute_trade_economics, target_for_net_rr
 from app.risk.engine import FeeQuote
 from app.risk.plans import candidate_plans
-from app.service import TradingEngine
 from app.strategies.runners import BaselineJevStrategy
-from tests.conftest import settings, long_snapshot, attach_book
+from tests.conftest import market_range_engine, long_snapshot, attach_book
 from tests.test_initial_live_profile import AssessmentProvider, context
 from tests.test_risk_limits import _context
 
@@ -44,10 +43,16 @@ def narrow_snapshot(side=Action.LONG):
     return long_snapshot(**features)
 
 
+def cost_target_engine(**overrides):
+    eng = market_range_engine(**overrides)
+    eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
+    return eng
+
+
 @pytest.mark.parametrize("side", [Action.LONG, Action.SHORT])
 @pytest.mark.asyncio
 async def test_confirmed_narrow_range_opens_paper_using_the_exact_assessed_target(side):
-    eng = TradingEngine(settings(initial_paper_equity=20))
+    eng = cost_target_engine(initial_paper_equity=20)
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     assert eng.risk.limits.cost_aware_target_floor
     snapshot, book = narrow_snapshot(side)
@@ -67,7 +72,7 @@ async def test_confirmed_narrow_range_opens_paper_using_the_exact_assessed_targe
 
 @pytest.mark.asyncio
 async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, book = narrow_snapshot(Action.SHORT)
     provider = AssessmentProvider(.50)
@@ -102,7 +107,7 @@ async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
 
 @pytest.mark.asyncio
 async def test_model_receives_larger_target_and_probability_refers_to_this_plan():
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot()
     capture = AssessmentProvider(.65)
@@ -128,7 +133,7 @@ async def test_model_receives_larger_target_and_probability_refers_to_this_plan(
 
 @pytest.mark.asyncio
 async def test_break_cannot_confirm_a_negative_net_expectancy():
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot(Action.SHORT)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
@@ -142,7 +147,7 @@ async def test_break_cannot_confirm_a_negative_net_expectancy():
 
 @pytest.mark.asyncio
 async def test_rounded_break_even_probability_cannot_become_a_positive_expectancy():
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot(Action.SHORT)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
@@ -160,7 +165,7 @@ async def test_rounded_break_even_probability_cannot_become_a_positive_expectanc
 async def test_changed_entry_keeps_price_drift_guard_and_records_both_prices():
     from app.execution.slippage import book_from_levels
     from app.domain.schemas import BookLevel
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot(Action.SHORT)
     decision = await BaselineJevStrategy().evaluate(snapshot, snapshot.features,
@@ -177,7 +182,7 @@ async def test_changed_entry_keeps_price_drift_guard_and_records_both_prices():
 
 
 def test_no_impossible_short_target_or_invalid_geometry_is_sent_to_model():
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot(Action.SHORT)
     snapshot = snapshot.model_copy(update={"market_type":MarketType.MARGIN})
@@ -189,7 +194,7 @@ def test_no_impossible_short_target_or_invalid_geometry_is_sent_to_model():
 
 @pytest.mark.asyncio
 async def test_missing_geometry_does_not_become_a_direction_only_confirmation():
-    eng = TradingEngine(settings())
+    eng = cost_target_engine()
     eng.risk.update_limits(market_range_plans=False, max_hold_minutes=60)
     snapshot, _ = narrow_snapshot()
     snapshot = snapshot.model_copy(update={"features":{**snapshot.features,"range_60m":0}})

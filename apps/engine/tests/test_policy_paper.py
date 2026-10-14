@@ -9,8 +9,7 @@ from app.analytics.policy_paper import PolicyPaperLab
 from app.api.router import create_app
 from app.providers.jev.scheduler import JevScheduler
 from app.risk.engine import FeeQuote
-from app.service import TradingEngine
-from tests.conftest import clock, engine, settings
+from tests.conftest import clock, engine, market_range_engine
 from tests.test_initial_live_profile import AssessmentProvider
 from tests.test_market_range_plans import snapshot
 
@@ -22,7 +21,7 @@ def quote(book, now=None, bid=99.99, ask=100.01):
 
 async def sample(monkeypatch, probability=.3, span=2, execution_quote=None):
     monkeypatch.setattr("app.analytics.policy_paper.utcnow", clock)
-    eng = TradingEngine(settings(initial_paper_equity=20))
+    eng = market_range_engine(initial_paper_equity=20)
     # Fail immediately if a comparison accidentally uses real execution.
     eng.live.submit_market = AsyncMock(side_effect=AssertionError("live order"))
     s, book = snapshot(span, span)

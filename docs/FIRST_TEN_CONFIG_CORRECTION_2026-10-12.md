@@ -1,5 +1,7 @@
 # Configuração vigente ao completar os dez trades live
 
+Restauração posterior preparada em 14/10/2026: [ORIGINAL_LIVE_POLICY_RESTORE_2026-10-14.md](ORIGINAL_LIVE_POLICY_RESTORE_2026-10-14.md). Ela retira os desvios posteriores e volta à referência `a15bc12`, preservando execução e taxas reais.
+
 Correção posterior preparada para as recusas por R:R líquido: [ENTRY_COST_TARGET_FIX_2026-10-12.md](ENTRY_COST_TARGET_FIX_2026-10-12.md). Esse ajuste muda a geometria e passa a enviar um plano explícito ao Jev; o restante deste documento descreve a restauração histórica publicada em `9fe02da`.
 
 O usuário esclareceu que deseja a configuração **ao completar os dez trades**, e não a da primeira entrada. A referência correta é `a15bc12`, live desde 09/10/2026 às 01:35:27 de Brasília. O décimo fechamento registrado ocorreu às 10:52:19 do mesmo dia. A amostra de dez fechamentos soma +0,5164 USDT (quatro ganhos e seis perdas); os registros e limites da reconstrução estão no relatório anterior.

@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+FIRST_TEN_HISTORICAL_PROMPT = "jev_live_first_ten_2026_10_09_a15bc12_v1"
+
 
 class JevMarketRequest(BaseModel):
     prompt_version: str

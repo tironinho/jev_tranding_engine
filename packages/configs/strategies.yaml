@@ -16,8 +16,8 @@ strategies:
     call_model: true
 
 combination:
-  baseline_version: baseline_first_ten_v2
-  jev_rule_version: jev_market_range_v5
+  baseline_version: baseline_first_ten_v1
+  jev_rule_version: jev_break_size_v1
   jev_request_profile: live_first_ten_2026_10_09
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
@@ -26,10 +26,10 @@ combination:
   # Rompimento confirmado na classe reduz tamanho quando fica abaixo do piso.
   min_trend_continuation: 0.55
   min_short_continuation: 0.40
-  # Borderline coherent candidates may reach JEV for read-only research.
-  # They never become live entries solely because the model confirms them.
-  review_below_threshold: true
-  paper_policy_comparison: true
+  # Referência a15bc12: um pedido compacto por sinal válido da baseline.
+  # Pesquisa e comparação posteriores não compõem a política restaurada.
+  review_below_threshold: false
+  paper_policy_comparison: false
   candidate_min_abs_score: 0.15
   # Moderate disagreement may be reviewed by JEV; strong disagreement and
   # flow against the candidate remain blocked before the provider call.

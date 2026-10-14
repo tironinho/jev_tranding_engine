@@ -9,7 +9,7 @@ from app.providers.jev.real import _normalized_plan
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy
 from app.service import TradingEngine
-from tests.conftest import long_snapshot, clock, engine, settings
+from tests.conftest import long_snapshot, clock, engine, settings, market_range_engine
 from tests.test_initial_live_profile import AssessmentProvider, context
 from tests.test_runtime import _open
 
@@ -112,7 +112,7 @@ def test_four_hour_feature_excludes_future_candles_and_rejects_gaps():
 async def test_four_hour_paper_entry_keeps_assessed_target_and_persisted_deadline():
     from tests.conftest import attach_book
     from app.domain.schemas import PositionRecord
-    eng = TradingEngine(settings(initial_paper_equity=20))
+    eng = market_range_engine(initial_paper_equity=20)
     s, book = snapshot(.3, 1.5)
     attach_book(eng, book)
     provider = AssessmentProvider(.8)

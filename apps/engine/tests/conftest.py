@@ -53,6 +53,20 @@ def engine(**overrides) -> TradingEngine:
     return eng
 
 
+def market_range_engine(**overrides) -> TradingEngine:
+    """Explicit later policy, retained for regression coverage after restoration."""
+    from dataclasses import replace
+    eng = TradingEngine(settings(**overrides))
+    eng.weights = replace(eng.weights, version="baseline_first_ten_v2")
+    eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v2",
+        jev_rule_version="jev_market_range_v5", review_below_threshold=True,
+        paper_policy_comparison=True)
+    eng.risk.update_limits(cost_aware_target_floor=True, market_range_plans=True,
+        jev_expectancy_gate=True, max_hold_minutes=240)
+    eng.risk_limits = eng.risk.limits
+    return eng
+
+
 def clock() -> datetime:
     return datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 

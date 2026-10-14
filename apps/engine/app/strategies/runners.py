@@ -32,7 +32,7 @@ from app.domain.enums import (
     SignalStatus,
 )
 from app.domain.schemas import MarketSnapshot, StrategyDecision
-from app.providers.jev.schemas import JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
+from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
@@ -648,6 +648,18 @@ def _stamp_binance_agent(metadata: dict, intelligence: dict | None) -> None:
     metadata["binance_agent_risk_flags"] = list(agent.get("risk_flags") or [])
 
 
+def jev_prompt_version(combination: CombinationConfig, risk, provider) -> str:
+    profile = combination.jev_request_profile
+    if profile == "plan_outcome_v3":
+        return getattr(provider, "prompt_version", "jev_plan_outcome_v3")
+    if profile == "live_first_ten_2026_10_09":
+        if not (risk and risk.cost_aware_target_floor):
+            return FIRST_TEN_HISTORICAL_PROMPT
+        suffix = "_market_range_v5" if risk.market_range_plans else "_compact_market_v3"
+        return "jev_" + profile + suffix
+    return "jev_" + profile
+
+
 def _jev_request(
     context: StrategyContext,
     snapshot: MarketSnapshot,
@@ -672,10 +684,7 @@ def _jev_request(
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
-        prompt_version=(("jev_" + context.combination.jev_request_profile +
-                         ("_market_range_v5" if cost_plan and context.risk.market_range_plans else "_compact_market_v3" if cost_plan else
-                          "_event_v2" if context.combination.jev_request_profile == "live_first_ten_2026_10_09" else ""))
-                        if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3")),
+        prompt_version=jev_prompt_version(context.combination, context.risk, context.jev),
         evaluation_profile=context.combination.jev_request_profile,
         symbol=snapshot.symbol,
         market_type=snapshot.market_type.value,

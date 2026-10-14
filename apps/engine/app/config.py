@@ -261,6 +261,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         min_net_rr=float(payload.get("min_net_rr", 0.0)),
         cost_aware_target_floor=bool(payload.get("cost_aware_target_floor", False)),
         market_range_plans=bool(payload.get("market_range_plans", False)),
+        jev_expectancy_gate=bool(payload.get("jev_expectancy_gate", True)),
         atr_buffer_mult=float(payload.get("atr_buffer_mult", 0.10)),
         atr_stop_mult=float(payload.get("atr_stop_mult", 2.0)),
         max_stop_pct=float(payload.get("max_stop_pct", 0.02)),

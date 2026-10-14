@@ -6,17 +6,16 @@ import pytest
 
 from app.providers.jev.real import RealJevProvider
 from app.providers.jev.schemas import JevMarketRequest
-from app.service import TradingEngine
 from app.strategies.baseline_score import score_baseline
-from tests.conftest import clock, long_snapshot, settings
+from tests.conftest import clock, long_snapshot, market_range_engine
 
 PROFILE = "live_first_ten_2026_10_09"
 
 
 @pytest.mark.parametrize("flow", [-.8, .8])
 @pytest.mark.parametrize("activity", [.2, .6, .99, 1.0])
-def test_production_baseline_weak_volume_is_neutral_for_both_flow_directions(flow, activity):
-    eng = TradingEngine(settings())
+def test_optional_v2_baseline_weak_volume_is_neutral_for_both_flow_directions(flow, activity):
+    eng = market_range_engine()
     snapshot, _ = long_snapshot(volume_ratio=activity,taker_flow_1m=flow,
                                  orderflow_delta_ratio=-flow)
     result = score_baseline(snapshot,eng.weights)
@@ -27,8 +26,8 @@ def test_production_baseline_weak_volume_is_neutral_for_both_flow_directions(flo
 
 
 @pytest.mark.parametrize("flow", [-.8,.8])
-def test_strong_activity_and_missing_flow_keep_their_meaning_in_production(flow):
-    eng = TradingEngine(settings())
+def test_strong_activity_and_missing_flow_keep_their_meaning_in_v2(flow):
+    eng = market_range_engine()
     snapshot, _ = long_snapshot(volume_ratio=2.5,taker_flow_1m=flow)
     strong = score_baseline(snapshot,eng.weights)
     assert strong.scores["volume_score"]*flow > 0
@@ -40,7 +39,7 @@ def test_strong_activity_and_missing_flow_keep_their_meaning_in_production(flow)
 
 
 def test_old_baseline_can_still_replay_the_historical_volume_vote():
-    eng = TradingEngine(settings())
+    eng = market_range_engine()
     snapshot, _ = long_snapshot(volume_ratio=.6,taker_flow_1m=-.8)
     before = score_baseline(snapshot,replace(eng.weights,version="baseline_first_ten_v1"))
     after = score_baseline(snapshot,eng.weights)

@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 from app.intelligence.context import jev_view
-from app.providers.jev.schemas import JevAssessment, JevMarketRequest, JevProviderError
+from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, JevAssessment, JevMarketRequest, JevProviderError
 
 _NOULS = (
     "trend_continuation_probability",
@@ -68,6 +68,19 @@ _FIRST_TEN_INSTRUCTIONS = {
     ),
 }
 
+# Literal questions from a15bc12. Optional on-chain instructions are appended
+# only for evidence that survives the current data-quality normalization.
+_FIRST_TEN_HISTORICAL_INSTRUCTIONS = {
+    "trend_continuation_probability": (
+        "The `baseline_action` side is the candidate from the weighted scores and `baseline_class`. "
+        "It is not an order. That side reaches the target before the stop."
+    ),
+    "reversal_probability": "Price reverses against the `baseline_action` candidate.",
+    "false_breakout_probability": (
+        "The break named in `baseline_class` is a false break. If the class has no break, stay near 0.5."
+    ),
+}
+
 
 class RealJevProvider:
     """POST a TypeSafe System One request to the configured URL. No host is built in.
@@ -108,6 +121,10 @@ class RealJevProvider:
         payload = request.model_dump(mode="json")
         instructions = {"initial_live_2026_10_08": _INITIAL_LIVE_INSTRUCTIONS,
                         "live_first_ten_2026_10_09": _FIRST_TEN_INSTRUCTIONS}.get(request.evaluation_profile, _INSTRUCTIONS)
+        if request.prompt_version == FIRST_TEN_HISTORICAL_PROMPT:
+            if request.trade_plan is not None:
+                raise JevProviderError("historical_contract_does_not_accept_trade_plan")
+            instructions = _FIRST_TEN_HISTORICAL_INSTRUCTIONS
         if request.evaluation_profile == "live_first_ten_2026_10_09" and request.trade_plan:
             instructions = {**_FIRST_TEN_INSTRUCTIONS,
                 "trend_continuation_probability": (
@@ -263,23 +280,26 @@ def _normalized_state(payload: dict) -> dict[str, Any]:
             "breakdown": features.get("breakdown"),
         }
         first_ten = payload.get("evaluation_profile") == "live_first_ten_2026_10_09"
+        historical = first_ten and payload.get('prompt_version') == FIRST_TEN_HISTORICAL_PROMPT
         if first_ten:
             state.update(baseline_class=payload.get("baseline_class"),
-                         baseline_labels=payload.get("baseline_labels") or [],
-                         break_event=_break_event(features, payload.get("baseline_labels") or []))
+                         baseline_labels=payload.get("baseline_labels") or [])
+            if not historical:
+                state['break_event'] = _break_event(features, payload.get("baseline_labels") or [])
             if payload.get("candidate_origin"):
                 state.update(candidate_origin=payload["candidate_origin"],
                              baseline_threshold=payload.get("baseline_threshold"),
                              candidate_threshold=payload.get("candidate_threshold"))
             # Compact exchange observations survive missing external providers.
             # No duplicated agent opinions or large third-party payloads.
-            state["market_context"] = {
-                key: _finite(features.get(key)) for key in (
-                    "return_5m", "return_15m", "ema_alignment", "context_15m_slope",
-                    "rsi", "volume_ratio", "taker_flow_5m", "imbalance_10",
-                    "range_position", "spread_bps",
-                )
-            }
+            if not historical:
+                state["market_context"] = {
+                    key: _finite(features.get(key)) for key in (
+                        "return_5m", "return_15m", "ema_alignment", "context_15m_slope",
+                        "rsi", "volume_ratio", "taker_flow_5m", "imbalance_10",
+                        "range_position", "spread_bps",
+                    )
+                }
             plan = payload.get("trade_plan")
             if isinstance(plan, dict):
                 state["trade_plan"] = _normalized_plan(plan, features, frac)

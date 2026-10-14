@@ -8,7 +8,7 @@ import pytest
 from app.config import CombinationConfig
 from app.domain.enums import Action
 from app.providers.jev.real import RealJevProvider
-from app.providers.jev.schemas import JevAssessment
+from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, JevAssessment
 from app.risk.economics import plan_geometry
 from app.service import TradingEngine
 from app.strategies.baseline_score import score_baseline
@@ -110,7 +110,7 @@ async def test_first_ten_provider_sends_class_and_drops_low_quality_external_con
         provider = RealJevProvider(prompt_version="default",base_url="https://test.invalid",
             api_key="test-only",model="test",client=client)
         result = await provider.evaluate_market_state(req)
-    assert result.prompt_version == "jev_"+PROFILE+"_event_v2"
+    assert result.prompt_version == FIRST_TEN_HISTORICAL_PROMPT
 
 
 @pytest.mark.asyncio

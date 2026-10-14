@@ -65,7 +65,7 @@ from app.providers.jev.scheduler import JevScheduler
 from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
 from app.risk.engine import RiskContext, RiskEngine, margin_borrow_room
-from app.strategies.runners import BaselineJevStrategy, BaselineStrategy, StrategyContext
+from app.strategies.runners import BaselineJevStrategy, BaselineStrategy, StrategyContext, jev_prompt_version
 log = logging.getLogger(__name__)
 
 STRATEGY_KEYS = ("baseline", "baseline_jev")
@@ -264,9 +264,14 @@ class TradingEngine:
             f"shadow_interval_s={self.settings.jev_shadow_interval_s} "
             f"active_slots=3 shadow_slots=1 commit={self.build_commit} "
             f"request_profile={self.combination.jev_request_profile} "
+            f"prompt_version={jev_prompt_version(self.combination, self.risk.limits, self.jev)} "
+            f"jev_rule={self.combination.jev_rule_version} "
             f"baseline_version={self.weights.version} baseline_floor={self.weights.min_abs_score} "
             f"target_rule={self.risk.limits.target_rule_version} rr={self.risk.limits.rr_target_multiple} "
             f"min_net_rr={self.risk.limits.min_net_rr} cost_target_floor={self.risk.limits.cost_aware_target_floor} "
+            f"market_range_plans={self.risk.limits.market_range_plans} expectancy_gate={self.risk.limits.jev_expectancy_gate} "
+            f"review_below_threshold={self.combination.review_below_threshold} paper_comparison={self.combination.paper_policy_comparison} "
+            f"max_hold_minutes={self.risk.limits.max_hold_minutes} "
             f"live_longs={self.risk.limits.live_longs_enabled} "
             f"long_floor={self.combination.min_trend_continuation} short_floor={self.combination.min_short_continuation}")
         task = asyncio.create_task(self._balance_loop(), name="balance_samples")
@@ -2257,6 +2262,21 @@ class TradingEngine:
                 "status": jev_name,
                 "provider_version": getattr(self.jev, "provider_version", None),
                 "is_mock": jev_name == "mock",
+            },
+            "decision_policy": {
+                "baseline_version": self.weights.version,
+                "baseline_threshold": self.weights.min_abs_score,
+                "jev_rule_version": self.combination.jev_rule_version,
+                "request_profile": self.combination.jev_request_profile,
+                "prompt_version": jev_prompt_version(self.combination, self.risk.limits, self.jev),
+                "target_rule_version": self.risk.limits.target_rule_version,
+                "min_net_rr": self.risk.limits.min_net_rr,
+                "cost_aware_target_floor": self.risk.limits.cost_aware_target_floor,
+                "market_range_plans": self.risk.limits.market_range_plans,
+                "jev_expectancy_gate": self.risk.limits.jev_expectancy_gate,
+                "review_below_threshold": self.combination.review_below_threshold,
+                "paper_policy_comparison": self.combination.paper_policy_comparison,
+                "max_hold_minutes": self.risk.limits.max_hold_minutes,
             },
             "intelligence": {
                 "enabled": self.settings.external_intelligence_enabled,

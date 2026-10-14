@@ -409,6 +409,7 @@ class RiskEngine:
             side=decision.action,
             details={
                 "entry_selection": selection,
+                "role_baseline": decision.metadata.get("role_baseline"),
                 "geometry_reasons": list(geometry.reasons),
                 "extra_open_slot": bool(self.limits.max_open_positions > 0 and extra_slot
                     and context.open_positions >= self.limits.max_open_positions),
@@ -578,7 +579,8 @@ class RiskEngine:
         economics: TradeEconomics | None = None,
         details: dict | None = None,
     ) -> RiskDecision:
-        payload = {"risk_rejected": True, "entry_selection": decision.metadata.get("entry_selection")}
+        payload = {"risk_rejected": True, "entry_selection": decision.metadata.get("entry_selection"),
+                   "role_baseline": decision.metadata.get("role_baseline")}
         if details:
             payload.update(details)
         return RiskDecision(

@@ -36,6 +36,71 @@ def closed_candles(candles: list[Candle], as_of: datetime) -> list[Candle]:
     return [candle for candle in candles if candle.closed and candle.close_time <= as_of]
 
 
+# Proximity of a 5m retest, in the same ATR unit the engine already uses.
+# It is a definition of "near the level", not a threshold fitted to results.
+_RETEST_PROXIMITY_ATR = 0.5
+_RETEST_LOOKBACK = 6
+
+
+def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dict:
+    """Structure on closed 5m bars: break, reclaim and a near-level retest.
+
+    A one-minute impulse is intentionally absent. Missing history stays None
+    so a later reader cannot treat it as "no event".
+    """
+    empty = {
+        "resistance_5m": None, "support_5m": None,
+        "breakout_5m": None, "breakdown_5m": None,
+        "bullish_reclaim_5m": None, "bearish_reclaim_5m": None,
+        "retest_long_5m": None, "retest_short_5m": None,
+        "extension_above_resistance_5m_atr": None,
+        "extension_below_support_5m_atr": None,
+    }
+    if len(candles) < 21:
+        return empty
+    highs = [candle.high for candle in candles]
+    lows = [candle.low for candle in candles]
+    closes = [candle.close for candle in candles]
+    opens = [candle.open for candle in candles]
+    prior_high = max(highs[-21:-1])
+    prior_low = min(lows[-21:-1])
+    last = closes[-1]
+    breakout = last > prior_high
+    breakdown = last < prior_low
+    bullish = bearish = False
+    if len(candles) >= 22:
+        window = min(5, len(candles) - 20)
+        reference_high = max(highs[-(20 + window):-window])
+        reference_low = min(lows[-(20 + window):-window])
+        bullish = bool(
+            min(lows[-window:]) < reference_low and last > opens[-1]
+            and last > reference_low and last > closes[-2]
+        )
+        bearish = bool(
+            max(highs[-window:]) > reference_high and last < opens[-1]
+            and last < reference_high and last < closes[-2]
+        )
+    atr_ok = isinstance(atr_value, (int, float)) and not isinstance(atr_value, bool) and atr_value > 0
+    extension_up = extension_down = None
+    retest_long = retest_short = None
+    if atr_ok:
+        extension_up = (last - prior_high) / atr_value
+        extension_down = (prior_low - last) / atr_value
+        earlier = closes[-_RETEST_LOOKBACK:-1]
+        retest_long = bool(breakout and any(close > prior_high for close in earlier)
+                           and extension_up <= _RETEST_PROXIMITY_ATR)
+        retest_short = bool(breakdown and any(close < prior_low for close in earlier)
+                            and extension_down <= _RETEST_PROXIMITY_ATR)
+    return {
+        "resistance_5m": prior_high, "support_5m": prior_low,
+        "breakout_5m": breakout, "breakdown_5m": breakdown,
+        "bullish_reclaim_5m": bullish, "bearish_reclaim_5m": bearish,
+        "retest_long_5m": retest_long, "retest_short_5m": retest_short,
+        "extension_above_resistance_5m_atr": extension_up,
+        "extension_below_support_5m_atr": extension_down,
+    }
+
+
 def quantitative_regime(features: dict) -> str:
     alignment = features.get("ema_alignment")
     vol_pct = features.get("volatility_percentile")
@@ -391,6 +456,7 @@ def compute_features(state: SymbolMarketState, as_of: datetime, price: float) ->
     features["setup_5m_return"] = (
         (context_closes_5[-1] / context_closes_5[-2] - 1) if len(context_closes_5) >= 2 and context_closes_5[-2] else None
     )
+    features.update(five_minute_structure(candles_5m, features.get("atr")))
 
     missing = [name for name in REQUIRED_FOR_BASELINE if features.get(name) is None]
     if not candles_1m:

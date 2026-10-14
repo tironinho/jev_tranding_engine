@@ -40,6 +40,7 @@ from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_s
 from app.risk.plans import candidate_plans, score_probability
 from app.analytics.setup_review import classify_setup
 from app.strategies.context_policy import classify_entry
+from app.strategies.role_baseline import assess_roles
 
 
 @dataclass
@@ -76,6 +77,9 @@ def _decision(
     started: float,
     status: SignalStatus = SignalStatus.VALID,
 ) -> StrategyDecision:
+    metadata = {**metadata, "role_baseline": assess_roles(
+        _research_side(metadata, action), snapshot.features, stale=snapshot.data_quality.stale,
+        spread_limit_bps=context.weights.max_spread_bps)}
     if strategy == "baseline_jev":
         metadata = {**metadata, "entry_selection": classify_entry(
             Action(metadata.get("baseline_action", action.value)), snapshot.features),
@@ -636,6 +640,19 @@ class BaselineOpenAIJevStrategy:
             prompt_version=record.prompt_version,
             started=started,
         )
+
+
+def _research_side(metadata: dict, action: Action) -> str | None:
+    for key in ("baseline_action", "candidate_action"):
+        value = metadata.get(key)
+        if value in {"LONG", "SHORT"}:
+            return value
+    if action in {Action.LONG, Action.SHORT}:
+        return action.value
+    composite = metadata.get("composite")
+    if isinstance(composite, (int, float)) and not isinstance(composite, bool) and composite:
+        return "LONG" if composite > 0 else "SHORT"
+    return None
 
 
 def _class_metadata(result: BaselineResult) -> dict[str, Any]:

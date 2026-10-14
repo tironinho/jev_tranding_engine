@@ -846,13 +846,10 @@ class TradingEngine:
                 self._real_day = day
                 self._real_day_start = float(equity)
             context.day_start_equity = self._real_day_start
-            points = [point for point in self.balance_points if datetime.fromisoformat(point["t"]).astimezone(timezone.utc).date() == day]
-            if points:
-                self._real_day_start = float(points[0]["wallet"])
-            context.day_start_equity = self._real_day_start
-            context.realized_pnl_today = sum(
-                trade.net_pnl for account in self.accounts.accounts.values() for trade in account.trades
-                if trade.mode == "live" and trade.closed_at.astimezone(timezone.utc).date() == day)
+            context.day_start_equity, context.realized_pnl_today = _live_daily_risk_window(
+                [trade for account in self.accounts.accounts.values() for trade in account.trades],
+                self.balance_points, snapshot.timestamp, self._real_day_start,
+                self.settings.live_daily_risk_reset_at, self.settings.live_daily_risk_reset_equity)
             report = reconcile(balance, self.positions_payload(mode="live"), self._marks(), self.feed.rules)
             if report["blocks_entry"]:
                 await self._record_risk(self.risk._reject(decision, ["ACCOUNT_RECONCILIATION_REQUIRED"], details=report))
@@ -2306,6 +2303,9 @@ class TradingEngine:
                 "healthy": not degraded_providers,
             },
             "risk": {
+                "live_daily_risk_reset_at": (self.settings.live_daily_risk_reset_at.isoformat()
+                    if self.settings.live_daily_risk_reset_at else None),
+                "live_daily_risk_reset_equity": self.settings.live_daily_risk_reset_equity,
                 "live_loss_streak": live_loss_streak,
                 "live_loss_manual_reset_at": (self.settings.live_loss_streak_reset_at.isoformat()
                     if self.settings.live_loss_streak_reset_at else None),
@@ -2333,6 +2333,14 @@ class TradingEngine:
         return {symbol: state.last_price for symbol, state in self.states.items() if state.last_price is not None}
 
     async def _record_live_loss_reset(self) -> None:
+        if self.settings.live_daily_risk_reset_at is not None:
+            await self._audit("operator_env", "live_daily_risk_reset_loaded", {
+                "reset_at": self.settings.live_daily_risk_reset_at.isoformat(),
+                "reset_equity": self.settings.live_daily_risk_reset_equity,
+                "max_daily_loss": self.risk.limits.max_daily_loss,
+                "max_daily_drawdown": self.risk.limits.max_daily_drawdown,
+                "trade_history_preserved": True,
+            })
         cutoff = self.settings.live_loss_streak_reset_at
         if cutoff is None:
             return
@@ -2678,3 +2686,19 @@ def _stable_balance_points(points: list[dict]) -> list[dict]:
     # later sample proves that it was only a short-lived settlement spike.
     accepted.extend(candidate)
     return accepted
+
+
+def _live_daily_risk_window(trades, points, now, fallback_equity, cutoff=None, reset_equity=None):
+    """Fixed operator epoch for daily risk; never erase or relabel a trade."""
+    now = now.astimezone(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    active = cutoff is not None and start <= cutoff <= now
+    window = cutoff if active else start
+    if active:
+        baseline = reset_equity
+    else:
+        daily = [p for p in points if start <= datetime.fromisoformat(p["t"]).astimezone(timezone.utc) <= now]
+        baseline = float(min(daily, key=lambda p: datetime.fromisoformat(p["t"]))["wallet"]) if daily else fallback_equity
+    pnl = sum(t.net_pnl for t in trades if t.mode == "live"
+              and window <= t.closed_at.astimezone(timezone.utc) <= now)
+    return baseline, pnl

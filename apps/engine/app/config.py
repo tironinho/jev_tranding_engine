@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from pydantic import AwareDatetime, Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.enums import MarketType, OperatingMode, SlippageModelName, TargetMode
@@ -382,6 +382,8 @@ class Settings(BaseSettings):
     # Operator-authorized cutoff for baseline_jev's loss streak only. A fixed
     # timestamp survives restarts without forgiving any subsequent losses.
     live_loss_streak_reset_at: AwareDatetime | None = None
+    live_daily_risk_reset_at: AwareDatetime | None = None
+    live_daily_risk_reset_equity: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
@@ -428,12 +430,12 @@ class Settings(BaseSettings):
     min_jev_data_quality: float = 0.70
     jev_intelligence_gate: str = "FALLBACK_TO_BASELINE"
 
-    @field_validator("live_loss_streak_reset_at", mode="before")
+    @field_validator("live_loss_streak_reset_at", "live_daily_risk_reset_at", mode="before")
     @classmethod
     def empty_loss_reset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
 
-    @field_validator("live_loss_streak_reset_at")
+    @field_validator("live_loss_streak_reset_at", "live_daily_risk_reset_at")
     @classmethod
     def validate_loss_reset(cls, value: datetime | None) -> datetime | None:
         if value is not None:
@@ -441,6 +443,12 @@ class Settings(BaseSettings):
                 raise ValueError("live loss reset must not be in the future")
             return value.astimezone(timezone.utc)
         return None
+
+    @model_validator(mode="after")
+    def paired_daily_reset(self):
+        if (self.live_daily_risk_reset_at is None) != (self.live_daily_risk_reset_equity is None):
+            raise ValueError("daily reset requires fixed timestamp and equity together")
+        return self
 
     @field_validator("service_role", mode="before")
     @classmethod

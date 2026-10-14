@@ -17,7 +17,7 @@ export function SettingsForm({
   tradingEnabled,
 }: {
   strategies: Strategy[];
-  limits: Record<string, number | string> | null;
+  limits: Record<string, number | string | boolean> | null;
   tradingEnabled: boolean;
 }) {
   const router = useRouter();
@@ -114,10 +114,15 @@ export function SettingsForm({
           <div className="md:col-span-2 text-[11px] tracking-[0.14em] text-mute">RISK LIMITS</div>
           {["risk_per_trade", "max_daily_drawdown", "max_open_positions"].map((key) => (
             <label key={key} className="grid gap-1">
-              <span className="text-mute">{key}</span>
+              <span className="text-mute">{key === "max_open_positions"
+                ? "Máximo de posições abertas (0 = sem limite por quantidade)" : key}</span>
               <input name={key} defaultValue={String(limits[key] ?? "")} className="border border-line bg-ink px-2 py-1 font-mono" />
             </label>
           ))}
+          <p className="text-mute md:col-span-2">
+            {limits.allow_pyramiding ? "Novos sinais podem abrir posições adicionais no mesmo ativo e sentido. " : ""}
+            Cada operação continua sujeita a saldo, margem, proteção e limites de risco.
+          </p>
           <button type="submit" className="border border-line px-2 py-1 md:col-span-2">
             salvar limites
           </button>

@@ -49,8 +49,9 @@ min_margin_level: 2
 # Posições antigas conservam os prazos explícitos gravados na sua entrada.
 max_hold_minutes: 60
 time_exit_enabled: true
-# Outro ativo pode abrir. O mesmo ativo não ganha uma segunda posição.
-allow_pyramiding: false
+# Novos sinais podem abrir posições adicionais no mesmo ativo e sentido.
+# Cada posição conserva seu próprio fill, stop e fechamento.
+allow_pyramiding: true
 # Teto de alavancagem para dimensionamento; não altera a autorização de ordens reais.
 max_leverage: 5
 apply_funding: true

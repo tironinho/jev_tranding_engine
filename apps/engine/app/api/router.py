@@ -55,7 +55,7 @@ class RiskPatch(BaseModel):
     max_risk_per_trade: float | None = None
     max_daily_loss: float | None = None
     max_daily_drawdown: float | None = None
-    max_open_positions: int | None = None
+    max_open_positions: int | None = Field(default=None, ge=0)
     max_symbol_exposure: float | None = None
     max_total_exposure: float | None = None
     confirm: str = ""
@@ -393,6 +393,7 @@ async def risk_limits(request: Request) -> dict:
         "max_daily_loss": limits.max_daily_loss,
         "max_daily_drawdown": limits.max_daily_drawdown,
         "max_open_positions": limits.max_open_positions,
+        "allow_pyramiding": limits.allow_pyramiding,
         "max_symbol_exposure": limits.max_symbol_exposure,
         "max_total_exposure": limits.max_total_exposure,
         "target_mode": limits.target_mode.value,

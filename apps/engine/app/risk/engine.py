@@ -73,6 +73,7 @@ class RiskContext:
     open_stop_risk: float = 0.0
     quote_free: float | None = None
     consecutive_live_losses: int = 0
+    position_sides_on_symbol: tuple[Action, ...] = ()
 
 
 @dataclass
@@ -160,6 +161,14 @@ class RiskEngine:
             reasons.append(SPOT_SHORT_NOT_SUPPORTED)
         if context.has_position_on_symbol and not self.limits.allow_pyramiding:
             reasons.append(EXISTING_POSITION)
+        elif context.has_position_on_symbol and (decision.mode.value == "live" or context.live_requested):
+            # The current futures adapter uses close-all stops. Margin auto
+            # repayment would net opposite legs instead of funding an owned
+            # independent position. Same-side margin entries remain independent.
+            if context.market_type == "futures":
+                reasons.append("FUTURES_CLOSE_ALL_POSITION")
+            elif any(side is not decision.action for side in context.position_sides_on_symbol):
+                reasons.append("OPPOSITE_POSITION_NETTING")
         if context.last_entry_at is not None:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:
@@ -174,9 +183,10 @@ class RiskEngine:
                 reasons.append(MAX_DAILY_DRAWDOWN)
             if context.realized_pnl_today <= -abs(self.limits.max_daily_loss) * context.day_start_equity:
                 reasons.append(MAX_DAILY_LOSS)
-        cap = self.limits.max_open_positions + (1 if extra_slot else 0)
-        if context.open_positions >= cap:
-            reasons.append(MAX_OPEN_POSITIONS)
+        if self.limits.max_open_positions > 0:
+            cap = self.limits.max_open_positions + (1 if extra_slot else 0)
+            if context.open_positions >= cap:
+                reasons.append(MAX_OPEN_POSITIONS)
         if reasons:
             return self._reject(decision, reasons)
 
@@ -367,7 +377,8 @@ class RiskEngine:
             side=decision.action,
             details={
                 "geometry_reasons": list(geometry.reasons),
-                "extra_open_slot": bool(extra_slot and context.open_positions >= self.limits.max_open_positions),
+                "extra_open_slot": bool(self.limits.max_open_positions > 0 and extra_slot
+                    and context.open_positions >= self.limits.max_open_positions),
                 "quantity_capped": qty + 1e-12 < ideal,
                 "slippage_model": preview.model,
                 "expected_price": preview.expected_price,

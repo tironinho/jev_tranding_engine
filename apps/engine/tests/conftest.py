@@ -49,6 +49,9 @@ def engine(**overrides) -> TradingEngine:
         market_range_plans=False, max_hold_minutes=60,
         min_net_rr=0.0, cost_aware_target_floor=False, time_exit_enabled=False, step_stop_to_breakeven=True,
         dynamic_rr_enabled=True, live_longs_enabled=False)
+    # Classified historical cases keep their original caps. Production's new
+    # concurrent-entry policy has dedicated integration coverage.
+    eng.risk.update_limits(max_open_positions=overrides.get("max_open_positions", 10), allow_pyramiding=False)
     eng.risk_limits = eng.risk.limits
     return eng
 

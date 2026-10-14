@@ -144,7 +144,7 @@ class RiskLimits:
     live_longs_enabled: bool = False
     # Stop opening new live risk for the rest of the UTC day after this many
     # consecutive realized losses. Paper evaluation continues normally.
-    max_consecutive_live_losses: int = 3
+    max_consecutive_live_losses: int = 10
     max_protection_recovery_attempts: int = 5
     protection_retry_base_seconds: float = 2.0
 
@@ -300,7 +300,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         min_protection_quote_reserve=float(payload.get("min_protection_quote_reserve", 0.25)),
         min_expected_net_r=float(payload.get("min_expected_net_r", 0.10)),
         live_longs_enabled=bool(payload.get("live_longs_enabled", False)),
-        max_consecutive_live_losses=max(1, int(payload.get("max_consecutive_live_losses", 3))),
+        max_consecutive_live_losses=max(1, int(payload.get("max_consecutive_live_losses", 10))),
         max_protection_recovery_attempts=int(payload.get("max_protection_recovery_attempts", 5)),
         protection_retry_base_seconds=float(payload.get("protection_retry_base_seconds", 2.0)),
     )

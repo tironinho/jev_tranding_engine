@@ -27,9 +27,9 @@ min_protection_quote_reserve: 0.25
 min_expected_net_r: 0.10
 # A configuração inicial avaliava LONG e SHORT.
 live_longs_enabled: true
-# Três perdas live consecutivas pausam novas entradas até o próximo dia UTC.
+# Dez perdas live consecutivas pausam novas entradas até o próximo dia UTC.
 # O paper continua coletando evidência durante a pausa.
-max_consecutive_live_losses: 3
+max_consecutive_live_losses: 10
 max_protection_recovery_attempts: 5
 protection_retry_base_seconds: 2
 atr_buffer_mult: 0.10

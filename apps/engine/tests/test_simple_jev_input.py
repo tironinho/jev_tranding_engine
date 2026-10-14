@@ -51,7 +51,7 @@ def test_active_configuration_changes_input_and_volume_only():
     assert policy["max_hold_minutes"] == 60 and policy["min_net_rr"] == 1.5
     assert eng.combination.min_trend_continuation == .55
     assert eng.combination.min_short_continuation == .4
-    assert eng.risk.limits.max_consecutive_live_losses == 3
+    assert eng.risk.limits.max_consecutive_live_losses == 10
 
 
 @pytest.mark.parametrize("flow", [-.8, .8])
@@ -263,7 +263,7 @@ async def test_time_exit_off_and_loss_circuit_keep_their_existing_meaning():
     decision, provider = await evaluate(eng, snapshot)
     body = _state_for_model(provider.requests[0].model_dump(mode="json"), .7)
     assert body["trade"]["time_exit"] == {"rule": "TARGET_OR_STOP"}
-    risk = eng.risk.evaluate(decision, snapshot, _context(live_armed=True, consecutive_live_losses=3),
+    risk = eng.risk.evaluate(decision, snapshot, _context(live_armed=True, consecutive_live_losses=10),
                              FeeQuote(.001, .001, "test"), book)
     assert MAX_CONSECUTIVE_LIVE_LOSSES in risk.reject_reasons
 

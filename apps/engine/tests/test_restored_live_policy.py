@@ -34,7 +34,7 @@ def test_historical_policy_remains_available_with_execution_fixes():
         "paper_policy_comparison": False, "max_hold_minutes": 60,
     }
     assert eng.fee_config.maker_fee_rate == eng.fee_config.taker_fee_rate == .001
-    assert eng.risk.limits.max_consecutive_live_losses == 3
+    assert eng.risk.limits.max_consecutive_live_losses == 10
     assert eng.risk.limits.max_protection_recovery_attempts == 5
     assert not eng.risk.limits.step_stop_to_breakeven
 

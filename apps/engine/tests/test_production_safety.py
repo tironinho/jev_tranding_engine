@@ -73,7 +73,8 @@ def test_live_loss_streak_uses_only_trailing_losses_from_current_utc_day():
 
 
 def test_status_exposes_live_loss_circuit_and_intelligence_health():
-    eng = engine(max_consecutive_live_losses=3)
+    eng = engine()
+    eng.risk.update_limits(max_consecutive_live_losses=3)
     now = datetime.now(timezone.utc)
     eng.accounts.accounts["baseline_jev"].trades.extend([
         SimpleNamespace(mode="live", closed_at=now - timedelta(minutes=2), net_pnl=-1),
@@ -97,6 +98,7 @@ def test_status_exposes_live_loss_circuit_and_intelligence_health():
 
 def test_daily_pause_reports_reset_and_does_not_expire_after_idle_hours(monkeypatch):
     eng = engine()
+    eng.risk.update_limits(max_consecutive_live_losses=3)
     account = eng.accounts.accounts["baseline_jev"]
     account.trades.extend(SimpleNamespace(mode="live", net_pnl=-.01,
         closed_at=datetime(2026, 10, 14, 3, minute, tzinfo=timezone.utc)) for minute in (31, 34, 36))
@@ -113,9 +115,11 @@ def test_daily_pause_reports_reset_and_does_not_expire_after_idle_hours(monkeypa
     assert len(account.trades) == 3
 
 
-def test_manual_loss_reset_preserves_history_and_reblocks_on_three_new_losses(monkeypatch):
+@pytest.mark.parametrize("limit", [3, 10])
+def test_manual_loss_reset_preserves_history_and_reblocks_at_configured_limit(monkeypatch, limit):
     cutoff = clock()
     eng = engine(live_loss_streak_reset_at=cutoff)
+    eng.risk.update_limits(max_consecutive_live_losses=limit)
     account = eng.accounts.accounts["baseline_jev"]
     original = [SimpleNamespace(mode="live", closed_at=cutoff - timedelta(minutes=i), net_pnl=-.01)
         for i in (2, 1, 0)]
@@ -135,20 +139,21 @@ def test_manual_loss_reset_preserves_history_and_reblocks_on_three_new_losses(mo
     assert eng._risk_context("baseline", snapshot, live=True).consecutive_live_losses == 3
     assert eng._risk_context("baseline_jev", snapshot, live=False).consecutive_live_losses == 0
 
-    for count in range(1, 4):
+    for count in range(1, limit + 1):
         moment = cutoff + timedelta(minutes=count)
         account.trades.append(SimpleNamespace(mode="live", closed_at=moment, net_pnl=-.01))
         snapshot = snapshot.model_copy(update={"timestamp": moment})
         risk = eng.status()["risk"]
         assert risk["live_loss_streak"] == count
-        assert risk["live_loss_circuit_open"] == (count == 3)
+        assert risk["live_loss_circuit_open"] == (count == limit)
         assert eng._risk_context("baseline_jev", snapshot, live=True).consecutive_live_losses == count
     # Recreating the process with the same configured timestamp keeps new losses.
     restarted = engine(live_loss_streak_reset_at=cutoff)
+    restarted.risk.update_limits(max_consecutive_live_losses=limit)
     restarted.accounts.accounts["baseline_jev"].trades.extend(account.trades)
     assert restarted.status()["risk"]["live_loss_circuit_open"]
-    assert restarted.risk.limits.max_consecutive_live_losses == 3
-    assert len(account.trades) == 6 and all(t.net_pnl == -.01 for t in account.trades)
+    assert restarted.risk.limits.max_consecutive_live_losses == limit
+    assert len(account.trades) == 3 + limit and all(t.net_pnl == -.01 for t in account.trades)
 
 
 @pytest.mark.parametrize("value", ["2026-01-01T12:00:00", "2999-01-01T12:00:00+00:00"])

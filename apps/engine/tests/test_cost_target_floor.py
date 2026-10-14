@@ -97,7 +97,8 @@ async def test_live_risk_keeps_assessed_target_and_rejects_changed_fees():
     assert "NET_RR_TOO_LOW" in impacted.reject_reasons
     assert impacted.economics.target == plan["target"]
     # The repair cannot bypass account/protection and loss-circuit controls.
-    halted = eng.risk.evaluate(decision, snapshot, replace(ctx, consecutive_live_losses=3),
+    halted = eng.risk.evaluate(decision, snapshot,
+                               replace(ctx, consecutive_live_losses=eng.risk.limits.max_consecutive_live_losses),
                                FeeQuote(.00075,.00075,"test"), book)
     assert "MAX_CONSECUTIVE_LIVE_LOSSES" in halted.reject_reasons
     unfunded = eng.risk.evaluate(decision, snapshot,

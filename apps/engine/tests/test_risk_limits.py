@@ -188,7 +188,8 @@ def test_drawdown_and_daily_loss_reject():
     assert MAX_DAILY_LOSS in loss.reject_reasons
 
 
-def test_three_consecutive_live_losses_pause_new_entries():
+@pytest.mark.parametrize("losses", [3, 9, 10, 11])
+def test_ten_consecutive_live_losses_pause_new_entries(losses):
     eng = engine()
     snapshot, book = long_snapshot()
     from app.domain.schemas import StrategyDecision
@@ -213,7 +214,7 @@ def test_three_consecutive_live_losses_pause_new_entries():
             live_requested=True,
             live_armed=True,
             persistence_ok=True,
-            consecutive_live_losses=3,
+            consecutive_live_losses=losses,
             step_size=0.001,
             rules_required=True,
         ),
@@ -221,7 +222,9 @@ def test_three_consecutive_live_losses_pause_new_entries():
         book,
     )
 
-    assert MAX_CONSECUTIVE_LIVE_LOSSES in rejected.reject_reasons
+    assert (MAX_CONSECUTIVE_LIVE_LOSSES in rejected.reject_reasons) == (losses >= 10)
+    if losses < 10:
+        assert rejected.accepted, rejected.reject_reasons
 
 
 def test_kill_switch_blocks_new_risk():

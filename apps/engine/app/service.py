@@ -1318,11 +1318,21 @@ class TradingEngine:
                 minimum = float(rules.get("min_notional") or 0)
                 price = state.best_ask or state.last_price
                 if quantity > 0 and minimum > 0 and price and quantity * price < minimum * 1.01:
+                    siblings = [p for a in self.accounts.accounts.values() for p in a.positions.values()
+                                if p.mode == "live" and p.symbol == symbol and p.side is Action.SHORT
+                                and p.position_id != position.position_id and _managed_position(p)]
+                    if siblings:
+                        # A minimum-sized AUTO_REPAY buy could repay another
+                        # position's principal. Never expand this owned close.
+                        position.protection_error = "MIN_NOTIONAL_CLOSE_WITH_OTHER_POSITIONS"
+                        await self._checkpoint(key, positions=[position], orders=[], fills=[])
+                        self._log("live_exit_blocked", f"{tag} {position.protection_error}")
+                        return
                     # AUTO_REPAY repays the short; only a minimum-sized purchase
                     # is allowed and any surplus remains visible as account dust.
                     step = float(rules.get("step_size") or 0)
                     required = max(minimum * 1.01 / price,
-                                   debt_exposure / max(1 - position.exit_fee_rate, 1e-9))
+                                   quantity / max(1 - position.exit_fee_rate, 1e-9))
                     adjusted = round_up_to_step(required, step)
                     quote = next((r for r in balance.get("assets", []) if r.get("asset") == "USDT"), {})
                     free = float(quote.get("free") or 0)
@@ -1335,7 +1345,7 @@ class TradingEngine:
                     self.store.add_event("close_notional_adjustment", "MINIMUM_AUTO_REPAY_BUY", {
                         "position_id": str(position.position_id), "symbol": symbol,
                         "debt_exposure": debt_exposure, "quantity": adjusted,
-                        "estimated_surplus": adjusted - debt_exposure,
+                        "estimated_surplus": adjusted - quantity,
                     })
                     quantity = adjusted
         if quantity <= 0:
@@ -1650,6 +1660,7 @@ class TradingEngine:
             symbol_exposure_notional=account.symbol_exposure(snapshot.symbol, marks),
             total_exposure_notional=account.exposure(marks),
             has_position_on_symbol=any(position.symbol == snapshot.symbol for position in managed),
+            position_sides_on_symbol=tuple(position.side for position in managed if position.symbol == snapshot.symbol),
             last_entry_at=account.last_entry_by_symbol.get(snapshot.symbol),
             last_stop_at=account.last_stop_at.get(snapshot.symbol),
             now=snapshot.timestamp,

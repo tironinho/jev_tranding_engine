@@ -48,7 +48,7 @@ def test_active_configuration_changes_input_and_volume_only():
     assert policy["jev_rule_version"] == "jev_break_size_v1"
     assert not any(policy[k] for k in ("cost_aware_target_floor", "market_range_plans",
                                       "jev_expectancy_gate", "review_below_threshold"))
-    assert policy["max_hold_minutes"] == 60 and policy["min_net_rr"] == 1.5
+    assert policy["max_hold_minutes"] == 60 and policy["min_net_rr"] == 2.0
     assert eng.combination.min_trend_continuation == .55
     assert eng.combination.min_short_continuation == .4
     assert eng.risk.limits.max_consecutive_live_losses == 10

@@ -73,6 +73,7 @@ class RiskContext:
     open_stop_risk: float = 0.0
     quote_free: float | None = None
     consecutive_live_losses: int = 0
+    position_sides_on_symbol: tuple[Action, ...] = ()
 
 
 @dataclass
@@ -160,6 +161,14 @@ class RiskEngine:
             reasons.append(SPOT_SHORT_NOT_SUPPORTED)
         if context.has_position_on_symbol and not self.limits.allow_pyramiding:
             reasons.append(EXISTING_POSITION)
+        elif context.has_position_on_symbol and (decision.mode.value == "live" or context.live_requested):
+            # The current futures adapter uses close-all stops. Margin auto
+            # repayment would net opposite legs instead of funding an owned
+            # independent position. Same-side margin entries remain independent.
+            if context.market_type == "futures":
+                reasons.append("FUTURES_CLOSE_ALL_POSITION")
+            elif any(side is not decision.action for side in context.position_sides_on_symbol):
+                reasons.append("OPPOSITE_POSITION_NETTING")
         if context.last_entry_at is not None:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:
@@ -174,9 +183,10 @@ class RiskEngine:
                 reasons.append(MAX_DAILY_DRAWDOWN)
             if context.realized_pnl_today <= -abs(self.limits.max_daily_loss) * context.day_start_equity:
                 reasons.append(MAX_DAILY_LOSS)
-        cap = self.limits.max_open_positions + (1 if extra_slot else 0)
-        if context.open_positions >= cap:
-            reasons.append(MAX_OPEN_POSITIONS)
+        if self.limits.max_open_positions > 0:
+            cap = self.limits.max_open_positions + (1 if extra_slot else 0)
+            if context.open_positions >= cap:
+                reasons.append(MAX_OPEN_POSITIONS)
         if reasons:
             return self._reject(decision, reasons)
 
@@ -278,7 +288,11 @@ class RiskEngine:
                 )
             lifted = self._lift_to_notional(floor, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book)
             if lifted is None:
-                return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL])
+                room, limiting_reason = self._capital_room(context, entry_rate)
+                return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL], details={
+                    "order_notional": entry * abs(qty), "required_notional": floor,
+                    "available_notional": room, "capital_limiting_reason": limiting_reason,
+                })
             preview, entry = lifted
             qty = preview.filled_quantity
         # Re-plan geometry off the actual estimated entry so stop distance matches the fill.
@@ -341,6 +355,11 @@ class RiskEngine:
         if self.limits.min_net_rr > 0 and (economics.net_rr is None or economics.net_rr + 1e-12 < self.limits.min_net_rr):
             return self._reject(decision, [NET_RR_TOO_LOW], economics=economics,
                                 details={"geometry_reasons": list(geometry.reasons)})
+        net_target_return = economics.net_reward / notional if notional > 0 else 0.0
+        if net_target_return + 1e-12 < self.limits.min_net_target_return:
+            return self._reject(decision, ["NET_TARGET_RETURN_TOO_LOW"], economics=economics,
+                                details={"net_target_return": net_target_return,
+                                         "required_net_target_return": self.limits.min_net_target_return})
         if economics.net_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
             return self._reject(decision, [MAX_RISK_PER_TRADE], economics=economics)
         if context.open_stop_risk + economics.net_risk > context.equity * self.limits.max_portfolio_stop_risk + 1e-6:
@@ -367,8 +386,12 @@ class RiskEngine:
             side=decision.action,
             details={
                 "geometry_reasons": list(geometry.reasons),
-                "extra_open_slot": bool(extra_slot and context.open_positions >= self.limits.max_open_positions),
+                "extra_open_slot": bool(self.limits.max_open_positions > 0 and extra_slot
+                    and context.open_positions >= self.limits.max_open_positions),
                 "quantity_capped": qty + 1e-12 < ideal,
+                "notional_fraction": notional / context.equity,
+                "net_target_return": net_target_return,
+                "capital_limiting_reason": self._capital_reason(context, entry_rate),
                 "slippage_model": preview.model,
                 "expected_price": preview.expected_price,
                 "slippage_bps": preview.slippage_bps,
@@ -486,8 +509,16 @@ class RiskEngine:
         symbol_room = self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) - context.symbol_exposure_notional
         total_room = self._notional_ceiling(context.equity, self.limits.max_total_exposure) - context.total_exposure_notional
         cash_room = context.cash * self._leverage() / (1 + max(entry_fee_rate, 0.0))
+        trade_room = (context.equity * self.limits.max_trade_notional_fraction
+                      - context.symbol_exposure_notional
+                      if self.limits.max_trade_notional_fraction > 0 else float("inf"))
+        portfolio_room = (context.equity * self.limits.max_portfolio_notional_fraction
+                          - context.total_exposure_notional
+                          if self.limits.max_portfolio_notional_fraction > 0 else float("inf"))
         room, reason = min(
             (
+                (trade_room, "MAX_TRADE_NOTIONAL"),
+                (portfolio_room, "MAX_PORTFOLIO_NOTIONAL"),
                 (symbol_room, MAX_SYMBOL_EXPOSURE),
                 (total_room, MAX_TOTAL_EXPOSURE),
                 (cash_room, INSUFFICIENT_MARGIN),

@@ -48,7 +48,11 @@ def engine(**overrides) -> TradingEngine:
     eng.risk.update_limits(target_rule_version="target_3r_v1", rr_target_multiple=3.0,
         market_range_plans=False, max_hold_minutes=60,
         min_net_rr=0.0, cost_aware_target_floor=False, time_exit_enabled=False, step_stop_to_breakeven=True,
-        dynamic_rr_enabled=True, live_longs_enabled=False)
+        dynamic_rr_enabled=True, live_longs_enabled=False,
+        max_trade_notional_fraction=0, max_portfolio_notional_fraction=0, min_net_target_return=0)
+    # Classified historical cases keep their original caps. Production's new
+    # concurrent-entry policy has dedicated integration coverage.
+    eng.risk.update_limits(max_open_positions=overrides.get("max_open_positions", 10), allow_pyramiding=False)
     eng.risk_limits = eng.risk.limits
     return eng
 
@@ -62,7 +66,9 @@ def market_range_engine(**overrides) -> TradingEngine:
         jev_input_profile="legacy",
         jev_rule_version="jev_market_range_v5", review_below_threshold=True,
         paper_policy_comparison=True)
-    eng.risk.update_limits(cost_aware_target_floor=True, market_range_plans=True,
+    eng.risk.update_limits(min_net_rr=1.5, max_trade_notional_fraction=0,
+        max_portfolio_notional_fraction=0, min_net_target_return=0,
+        cost_aware_target_floor=True, market_range_plans=True,
         jev_expectancy_gate=True, max_hold_minutes=240)
     eng.risk_limits = eng.risk.limits
     return eng

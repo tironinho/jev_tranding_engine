@@ -126,7 +126,12 @@ class RiskLimits:
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
-    max_open_positions: int = 10
+    # Zero disables the position-count cap; financial budgets still apply.
+    max_open_positions: int = 0
+    # Fractions of equity, never multiplied by leverage. Zero disables each cap.
+    max_trade_notional_fraction: float = 0.0
+    max_portfolio_notional_fraction: float = 0.0
+    min_net_target_return: float = 0.0
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
     step_stop_to_breakeven: bool = False
@@ -289,6 +294,9 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_total_exposure=settings.max_total_exposure,
         max_symbol_exposure=settings.max_symbol_exposure,
         max_open_positions=settings.max_open_positions,
+        max_trade_notional_fraction=float(payload.get("max_trade_notional_fraction", 0)),
+        max_portfolio_notional_fraction=float(payload.get("max_portfolio_notional_fraction", 0)),
+        min_net_target_return=float(payload.get("min_net_target_return", 0)),
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),
         step_stop_to_breakeven=bool(payload.get("step_stop_to_breakeven", False)),
@@ -364,7 +372,7 @@ class Settings(BaseSettings):
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
-    max_open_positions: int = 10
+    max_open_positions: int = Field(default=0, ge=0)
     initial_paper_equity: float = 10_000
     maker_fee_rate: float = 0.0002
     taker_fee_rate: float = 0.0005

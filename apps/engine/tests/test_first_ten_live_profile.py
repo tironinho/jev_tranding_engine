@@ -22,6 +22,8 @@ PROFILE = "live_first_ten_2026_10_09"
 
 def first_ten_engine():
     eng = TradingEngine(settings())
+    eng.risk.update_limits(time_exit_enabled=True, min_net_rr=1.5, max_trade_notional_fraction=0,
+                          max_portfolio_notional_fraction=0, min_net_target_return=0)
     # Reconstruct the exact tenth-trade policy, before the cost-target correction.
     eng.weights = replace(eng.weights, version="baseline_first_ten_v1")
     eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v1", jev_input_profile="legacy")

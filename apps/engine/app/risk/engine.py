@@ -74,6 +74,7 @@ class RiskContext:
     quote_free: float | None = None
     consecutive_live_losses: int = 0
     position_sides_on_symbol: tuple[Action, ...] = ()
+    same_side_entry_prices: tuple[float, ...] = ()
 
 
 @dataclass
@@ -169,6 +170,28 @@ class RiskEngine:
                 reasons.append("FUTURES_CLOSE_ALL_POSITION")
             elif any(side is not decision.action for side in context.position_sides_on_symbol):
                 reasons.append("OPPOSITE_POSITION_NETTING")
+        from app.strategies.context_policy import classify_entry
+        selection = classify_entry(decision.action, snapshot.features)
+        repeat_reasons = []
+        if context.has_position_on_symbol:
+            direction = 1 if decision.action is Action.LONG else -1
+            atr = snapshot.features.get("atr")
+            elapsed = ((context.now - context.last_entry_at).total_seconds() / 60
+                       if context.last_entry_at else 0)
+            event = (snapshot.features.get("breakout" if direction == 1 else "breakdown") is True
+                     or snapshot.features.get("bullish_reclaim" if direction == 1 else "bearish_reclaim") is True)
+            progressed = (isinstance(atr, (float, int)) and math.isfinite(atr) and atr > 0
+                          and bool(context.same_side_entry_prices)
+                          and all(direction * (snapshot.price - price) >= atr * self.limits.repeat_entry_atr_distance
+                                  for price in context.same_side_entry_prices))
+            if not event or not progressed or elapsed < self.limits.repeat_entry_interval_minutes:
+                repeat_reasons.append("REPEATED_ENTRY_WITHOUT_NEW_SETUP")
+        selection.update(mode=self.limits.entry_selection_mode, repeat_reasons=repeat_reasons,
+                         would_accept=selection["eligible"] and not repeat_reasons)
+        decision.metadata["entry_selection"] = selection
+        if self.limits.entry_selection_mode == "enforce":
+            reasons.extend(selection["reasons"])
+            reasons.extend(repeat_reasons)
         if context.last_entry_at is not None:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:
@@ -288,7 +311,11 @@ class RiskEngine:
                 )
             lifted = self._lift_to_notional(floor, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book)
             if lifted is None:
-                return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL])
+                room, limiting_reason = self._capital_room(context, entry_rate)
+                return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL], details={
+                    "order_notional": entry * abs(qty), "required_notional": floor,
+                    "available_notional": room, "capital_limiting_reason": limiting_reason,
+                })
             preview, entry = lifted
             qty = preview.filled_quantity
         # Re-plan geometry off the actual estimated entry so stop distance matches the fill.
@@ -351,6 +378,11 @@ class RiskEngine:
         if self.limits.min_net_rr > 0 and (economics.net_rr is None or economics.net_rr + 1e-12 < self.limits.min_net_rr):
             return self._reject(decision, [NET_RR_TOO_LOW], economics=economics,
                                 details={"geometry_reasons": list(geometry.reasons)})
+        net_target_return = economics.net_reward / notional if notional > 0 else 0.0
+        if net_target_return + 1e-12 < self.limits.min_net_target_return:
+            return self._reject(decision, ["NET_TARGET_RETURN_TOO_LOW"], economics=economics,
+                                details={"net_target_return": net_target_return,
+                                         "required_net_target_return": self.limits.min_net_target_return})
         if economics.net_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
             return self._reject(decision, [MAX_RISK_PER_TRADE], economics=economics)
         if context.open_stop_risk + economics.net_risk > context.equity * self.limits.max_portfolio_stop_risk + 1e-6:
@@ -376,10 +408,14 @@ class RiskEngine:
             economics=economics,
             side=decision.action,
             details={
+                "entry_selection": selection,
                 "geometry_reasons": list(geometry.reasons),
                 "extra_open_slot": bool(self.limits.max_open_positions > 0 and extra_slot
                     and context.open_positions >= self.limits.max_open_positions),
                 "quantity_capped": qty + 1e-12 < ideal,
+                "notional_fraction": notional / context.equity,
+                "net_target_return": net_target_return,
+                "capital_limiting_reason": self._capital_reason(context, entry_rate),
                 "slippage_model": preview.model,
                 "expected_price": preview.expected_price,
                 "slippage_bps": preview.slippage_bps,
@@ -497,8 +533,16 @@ class RiskEngine:
         symbol_room = self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) - context.symbol_exposure_notional
         total_room = self._notional_ceiling(context.equity, self.limits.max_total_exposure) - context.total_exposure_notional
         cash_room = context.cash * self._leverage() / (1 + max(entry_fee_rate, 0.0))
+        trade_room = (context.equity * self.limits.max_trade_notional_fraction
+                      - context.symbol_exposure_notional
+                      if self.limits.max_trade_notional_fraction > 0 else float("inf"))
+        portfolio_room = (context.equity * self.limits.max_portfolio_notional_fraction
+                          - context.total_exposure_notional
+                          if self.limits.max_portfolio_notional_fraction > 0 else float("inf"))
         room, reason = min(
             (
+                (trade_room, "MAX_TRADE_NOTIONAL"),
+                (portfolio_room, "MAX_PORTFOLIO_NOTIONAL"),
                 (symbol_room, MAX_SYMBOL_EXPOSURE),
                 (total_room, MAX_TOTAL_EXPOSURE),
                 (cash_room, INSUFFICIENT_MARGIN),
@@ -534,7 +578,7 @@ class RiskEngine:
         economics: TradeEconomics | None = None,
         details: dict | None = None,
     ) -> RiskDecision:
-        payload = {"risk_rejected": True}
+        payload = {"risk_rejected": True, "entry_selection": decision.metadata.get("entry_selection")}
         if details:
             payload.update(details)
         return RiskDecision(

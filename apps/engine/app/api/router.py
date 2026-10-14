@@ -230,6 +230,15 @@ async def jev_reviews(request: Request, limit: int = 40) -> dict:
     return {"rows": await engine.jev_reviews_with_history(min(limit, 80)), "history": history}
 
 
+@router.get("/api/jev/selection-review")
+async def entry_selection_review(request: Request) -> dict:
+    _actor(request)
+    from app.analytics.selection_review import selection_review
+    engine = _engine(request)
+    trades = engine.store.filter_trades(strategy="baseline_jev", mode="live")
+    return selection_review(engine.store.inspector(str(t["decision_id"])) for t in trades)
+
+
 @router.get("/api/jev/performance")
 async def jev_performance(request: Request, mode: str = "live", limit: int = 200) -> dict:
     _actor(request)
@@ -398,6 +407,12 @@ async def risk_limits(request: Request) -> dict:
         "max_total_exposure": limits.max_total_exposure,
         "target_mode": limits.target_mode.value,
         "max_leverage": limits.max_leverage,
+        "max_trade_notional_fraction": limits.max_trade_notional_fraction,
+        "max_portfolio_notional_fraction": limits.max_portfolio_notional_fraction,
+        "min_net_target_return": limits.min_net_target_return,
+        "entry_selection_mode": limits.entry_selection_mode,
+        "repeat_entry_interval_minutes": limits.repeat_entry_interval_minutes,
+        "repeat_entry_atr_distance": limits.repeat_entry_atr_distance,
         "dynamic_rr_enabled": limits.dynamic_rr_enabled,
         "time_exit_enabled": limits.time_exit_enabled,
         "plan_stress_bps": limits.plan_stress_bps,

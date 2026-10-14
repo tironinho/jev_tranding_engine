@@ -38,7 +38,7 @@ async def evaluate(eng, snapshot, probability=.43, intelligence=None):
     return decision, provider
 
 
-def test_active_configuration_changes_input_and_volume_only():
+def test_active_configuration_uses_cost_aware_target_and_simple_input():
     eng = TradingEngine(settings())
     policy = eng.status()["decision_policy"]
     assert policy["baseline_version"] == "baseline_first_ten_v2"
@@ -46,9 +46,10 @@ def test_active_configuration_changes_input_and_volume_only():
     assert policy["prompt_version"] == SIMPLE_MARKET_PROMPT
     assert policy["request_profile"] == "live_first_ten_2026_10_09"
     assert policy["jev_rule_version"] == "jev_break_size_v1"
-    assert not any(policy[k] for k in ("cost_aware_target_floor", "market_range_plans",
+    assert policy["cost_aware_target_floor"]
+    assert not any(policy[k] for k in ("market_range_plans",
                                       "jev_expectancy_gate", "review_below_threshold"))
-    assert policy["max_hold_minutes"] == 60 and policy["min_net_rr"] == 1.5
+    assert policy["max_hold_minutes"] == 60 and policy["min_net_rr"] == 2.0
     assert eng.combination.min_trend_continuation == .55
     assert eng.combination.min_short_continuation == .4
     assert eng.risk.limits.max_consecutive_live_losses == 10
@@ -70,7 +71,8 @@ def test_active_baseline_keeps_seven_components_and_weak_volume_never_inverts_fl
 @pytest.mark.parametrize("side", [Action.LONG, Action.SHORT])
 async def test_actual_http_body_has_seven_groups_and_raw_answers_survive(side):
     eng = TradingEngine(settings())
-    snapshot, _ = candidate(side)
+    snapshot, _ = candidate(side, context_15m_slope=.002, return_5m=.003,
+                            return_15m=.004, return_60m=.005)
     bodies = []
     def handler(request):
         body = json.loads(request.content)
@@ -80,6 +82,9 @@ async def test_actual_http_body_has_seven_groups_and_raw_answers_survive(side):
         assert state["candidate_side"] == side.value
         assert set(state["evidence"]) == {"trend", "momentum", "volume", "flow", "structure", "volatility", "liquidity"}
         assert state["evidence"]["flow"]["taker_5m"] == snapshot.features["taker_flow_5m"]
+        assert state["evidence"]["trend"]["context_15m_slope_pct"] == pytest.approx(snapshot.features["context_15m_slope"]*100)
+        assert state["evidence"]["trend"]["distance_to_vwap_pct"] == pytest.approx(snapshot.features["distance_to_vwap"]*100)
+        assert state["evidence"]["momentum"]["return_15m_pct"] == pytest.approx(snapshot.features["return_15m"]*100)
         assert state["evidence"]["volatility"]["atr_14_pct"] == pytest.approx(.4)
         assert state["evidence"]["liquidity"]["spread_bps"] == 2
         assert state["evidence"]["structure"]["event"] == ("BREAKOUT" if side is Action.LONG else "BREAKDOWN")
@@ -87,9 +92,8 @@ async def test_actual_http_body_has_seven_groups_and_raw_answers_survive(side):
         assert state["trade"]["target_distance_pct"] > 0
         assert state["trade"]["stop_distance_pct"] > 0
         rule = state["trade"]["time_exit"]
-        assert rule["rule"] == "EXIT_IF_NET_PNL_NON_POSITIVE"
-        assert rule["after_minutes"] == 60
-        assert rule["estimated_breakeven_distance_pct"] > 0
+        assert rule["rule"] == "TARGET_OR_STOP"
+        assert "after_minutes" not in rule
         assert "onchain" not in request.content.decode()
         assert "baseline_confidence" not in request.content.decode()
         assert len(body["questions"]) == 3
@@ -109,7 +113,7 @@ async def test_actual_http_body_has_seven_groups_and_raw_answers_survive(side):
     assert result.metadata["jev_continuation"] == .27
     assert result.metadata["jev_reversal"] == .31
     assert result.metadata["jev_false_breakout"] == .32
-    assert result.metadata["jev_trade_plan"] is None
+    assert result.metadata["jev_trade_plan"]["target"] == result.metadata["jev_observation_plan"]["target"]
     assert result.metadata["jev_observation_plan"]["estimate_only"]
     assert ctx.artifacts[-1]["response"]["sent_request"] == bodies[0]
 
@@ -219,18 +223,19 @@ async def test_unavailable_geometry_has_a_clear_reason_and_never_calls_provider(
     decision, provider = await evaluate(eng, snapshot)
     assert not provider.requests
     assert decision.action is Action.NO_TRADE
-    assert "JEV_INPUT_UNAVAILABLE" in decision.reason_codes
-    assert "HOUR_RANGE_UNAVAILABLE" in decision.metadata["input_error"]
+    assert "TRADE_PLAN_UNAVAILABLE" in decision.reason_codes
 
 
 @pytest.mark.asyncio
-async def test_small_range_reaches_model_then_normal_risk_still_rejects_it():
+async def test_small_range_target_is_extended_before_model_and_preserved_by_risk():
     eng = TradingEngine(settings())
     snapshot, book = candidate(atr=.01, atr_normalized=.0001, range_60m=.1)
     decision, provider = await evaluate(eng, snapshot, probability=.9)
     assert len(provider.requests) == 1
     risk = eng.risk.evaluate(decision, snapshot, _context(live_armed=True), FeeQuote(.001, .001, "test"), book)
-    assert NET_RR_TOO_LOW in risk.reject_reasons
+    assert risk.accepted, risk.reject_reasons
+    assert decision.metadata["jev_trade_plan"]["target_extended_for_costs"]
+    assert risk.economics.target == provider.requests[0].trade_plan["target"]
 
 
 @pytest.mark.asyncio

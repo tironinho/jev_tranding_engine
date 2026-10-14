@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from pydantic import AwareDatetime, Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.enums import MarketType, OperatingMode, SlippageModelName, TargetMode
@@ -128,6 +128,13 @@ class RiskLimits:
     max_symbol_exposure: float = 0.40
     # Zero disables the position-count cap; financial budgets still apply.
     max_open_positions: int = 0
+    # Fractions of equity, never multiplied by leverage. Zero disables each cap.
+    max_trade_notional_fraction: float = 0.0
+    max_portfolio_notional_fraction: float = 0.0
+    entry_selection_mode: str = "shadow"
+    repeat_entry_interval_minutes: int = 5
+    repeat_entry_atr_distance: float = 0.5
+    min_net_target_return: float = 0.0
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
     step_stop_to_breakeven: bool = False
@@ -148,6 +155,13 @@ class RiskLimits:
     max_consecutive_live_losses: int = 10
     max_protection_recovery_attempts: int = 5
     protection_retry_base_seconds: float = 2.0
+
+
+    def __post_init__(self):
+        if self.entry_selection_mode not in {"shadow", "enforce"}:
+            raise ValueError("entry_selection_mode must be shadow or enforce")
+        if self.repeat_entry_interval_minutes < 0 or self.repeat_entry_atr_distance < 0:
+            raise ValueError("repeat entry limits must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -290,6 +304,12 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_total_exposure=settings.max_total_exposure,
         max_symbol_exposure=settings.max_symbol_exposure,
         max_open_positions=settings.max_open_positions,
+        max_trade_notional_fraction=float(payload.get("max_trade_notional_fraction", 0)),
+        max_portfolio_notional_fraction=float(payload.get("max_portfolio_notional_fraction", 0)),
+        entry_selection_mode=str(payload.get("entry_selection_mode", "shadow")),
+        repeat_entry_interval_minutes=int(payload.get("repeat_entry_interval_minutes", 5)),
+        repeat_entry_atr_distance=float(payload.get("repeat_entry_atr_distance", 0.5)),
+        min_net_target_return=float(payload.get("min_net_target_return", 0)),
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),
         step_stop_to_breakeven=bool(payload.get("step_stop_to_breakeven", False)),
@@ -362,6 +382,8 @@ class Settings(BaseSettings):
     # Operator-authorized cutoff for baseline_jev's loss streak only. A fixed
     # timestamp survives restarts without forgiving any subsequent losses.
     live_loss_streak_reset_at: AwareDatetime | None = None
+    live_daily_risk_reset_at: AwareDatetime | None = None
+    live_daily_risk_reset_equity: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
@@ -408,12 +430,12 @@ class Settings(BaseSettings):
     min_jev_data_quality: float = 0.70
     jev_intelligence_gate: str = "FALLBACK_TO_BASELINE"
 
-    @field_validator("live_loss_streak_reset_at", mode="before")
+    @field_validator("live_loss_streak_reset_at", "live_daily_risk_reset_at", mode="before")
     @classmethod
     def empty_loss_reset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
 
-    @field_validator("live_loss_streak_reset_at")
+    @field_validator("live_loss_streak_reset_at", "live_daily_risk_reset_at")
     @classmethod
     def validate_loss_reset(cls, value: datetime | None) -> datetime | None:
         if value is not None:
@@ -421,6 +443,12 @@ class Settings(BaseSettings):
                 raise ValueError("live loss reset must not be in the future")
             return value.astimezone(timezone.utc)
         return None
+
+    @model_validator(mode="after")
+    def paired_daily_reset(self):
+        if (self.live_daily_risk_reset_at is None) != (self.live_daily_risk_reset_equity is None):
+            raise ValueError("daily reset requires fixed timestamp and equity together")
+        return self
 
     @field_validator("service_role", mode="before")
     @classmethod

@@ -114,7 +114,7 @@ def test_saved_runtime_cannot_reenable_later_policy_flags():
 
 
 @pytest.mark.asyncio
-async def test_old_position_keeps_its_explicit_240_minute_deadline_on_restart(monkeypatch):
+async def test_disabled_time_exit_overrides_old_deadline_on_restart(monkeypatch):
     monkeypatch.setattr("app.service.utcnow", clock)
     eng = TradingEngine(settings())
     position = _open(eng, opened_at=clock()-timedelta(minutes=61))
@@ -129,5 +129,5 @@ async def test_old_position_keeps_its_explicit_240_minute_deadline_on_restart(mo
     assert str(position.position_id) in restored.accounts.accounts["baseline"].positions
     await restored._manage_position("baseline", position.symbol, position, state,
                                    clock()+timedelta(minutes=180), None)
-    assert not restored.accounts.accounts["baseline"].positions
-    assert restored.accounts.accounts["baseline"].trades[-1].exit_reason == "TIME"
+    assert restored.accounts.accounts["baseline"].positions
+    assert not restored.accounts.accounts["baseline"].trades

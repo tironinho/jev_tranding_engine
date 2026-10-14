@@ -85,6 +85,8 @@ def test_status_exposes_live_loss_circuit_and_intelligence_health():
     status = eng.status()
 
     assert status["risk"] == {
+        "live_daily_risk_reset_at": None,
+        "live_daily_risk_reset_equity": None,
         "live_loss_streak": 2,
         "live_loss_manual_reset_at": None,
         "max_consecutive_live_losses": 3,

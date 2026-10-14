@@ -207,6 +207,8 @@ class TradingEngine:
         self.evolution.bind_trades(self._all_trades)
         self._evaluating: set[str] = set()
         self.pending_entries: dict[str, dict] = {}
+        self.daily_risk_reset_at = None
+        self.daily_risk_reset_equity = None
         self._real_day = None
         self._real_day_start: float | None = None
         self._stop_checked: dict[str, float] = {}
@@ -350,7 +352,33 @@ class TradingEngine:
         self.risk_limits = self.risk.limits
         if self.postgres and self.postgres.healthy:
             payload = {key: getattr(self.risk.limits, key) for key in EDITABLE_RISK}
+            payload["daily_reset"] = self._daily_reset_payload()
             await self.postgres.save_risk_limits(payload)
+
+    def _daily_reset_payload(self):
+        return ({"reset_at": self.daily_risk_reset_at.isoformat(),
+                 "equity": self.daily_risk_reset_equity}
+                if self.daily_risk_reset_at is not None else None)
+
+    async def reset_daily_risk(self, actor):
+        if not self.postgres or not self.postgres.healthy:
+            raise RuntimeError("healthy database required for durable daily reset")
+        balance = self.mark_account(await self.balance.snapshot(fresh=True))
+        equity = balance.get("equity_usdt")
+        if balance.get("status") != "ok" or not isinstance(equity, (int, float)) or not math.isfinite(equity) or equity <= 0:
+            raise RuntimeError("fresh real equity required")
+        cutoff = utcnow()
+        payload = {key: getattr(self.risk.limits, key) for key in EDITABLE_RISK}
+        reset = {"reset_at": cutoff.isoformat(), "equity": float(equity)}
+        payload["daily_reset"] = reset
+        await self.postgres.save_risk_limits(payload)
+        if not self.postgres.healthy:
+            raise RuntimeError("daily reset persistence failed")
+        self.daily_risk_reset_at = cutoff
+        self.daily_risk_reset_equity = float(equity)
+        await self._audit(actor, "live_daily_risk_reset", {**reset, "history_preserved": True})
+        return {**reset, "max_daily_loss": self.risk.limits.max_daily_loss,
+                "max_daily_drawdown": self.risk.limits.max_daily_drawdown}
 
     async def on_ticker(self, symbol: str) -> None:
         await self.bus.publish(Event("market_update", self.ticker(symbol)))
@@ -849,7 +877,7 @@ class TradingEngine:
             context.day_start_equity, context.realized_pnl_today = _live_daily_risk_window(
                 [trade for account in self.accounts.accounts.values() for trade in account.trades],
                 self.balance_points, snapshot.timestamp, self._real_day_start,
-                self.settings.live_daily_risk_reset_at, self.settings.live_daily_risk_reset_equity)
+                self.daily_risk_reset_at, self.daily_risk_reset_equity)
             report = reconcile(balance, self.positions_payload(mode="live"), self._marks(), self.feed.rules)
             if report["blocks_entry"]:
                 await self._record_risk(self.risk._reject(decision, ["ACCOUNT_RECONCILIATION_REQUIRED"], details=report))
@@ -1630,6 +1658,12 @@ class TradingEngine:
             elif mode:
                 current.mode = OperatingMode(mode)
         risk = runtime.get("risk") or {}
+        reset = risk.get("daily_reset")
+        if reset:
+            from app.config import DailyRiskReset
+            validated = DailyRiskReset(**reset)
+            self.daily_risk_reset_at = validated.reset_at
+            self.daily_risk_reset_equity = validated.equity
         editable = {key: risk[key] for key in EDITABLE_RISK if key in risk}
         if editable:
             self.risk.update_limits(**_coerce_risk(editable))
@@ -2303,9 +2337,9 @@ class TradingEngine:
                 "healthy": not degraded_providers,
             },
             "risk": {
-                "live_daily_risk_reset_at": (self.settings.live_daily_risk_reset_at.isoformat()
-                    if self.settings.live_daily_risk_reset_at else None),
-                "live_daily_risk_reset_equity": self.settings.live_daily_risk_reset_equity,
+                "live_daily_risk_reset_at": (self.daily_risk_reset_at.isoformat()
+                    if self.daily_risk_reset_at else None),
+                "live_daily_risk_reset_equity": self.daily_risk_reset_equity,
                 "live_loss_streak": live_loss_streak,
                 "live_loss_manual_reset_at": (self.settings.live_loss_streak_reset_at.isoformat()
                     if self.settings.live_loss_streak_reset_at else None),
@@ -2333,10 +2367,10 @@ class TradingEngine:
         return {symbol: state.last_price for symbol, state in self.states.items() if state.last_price is not None}
 
     async def _record_live_loss_reset(self) -> None:
-        if self.settings.live_daily_risk_reset_at is not None:
+        if self.daily_risk_reset_at is not None:
             await self._audit("operator_env", "live_daily_risk_reset_loaded", {
-                "reset_at": self.settings.live_daily_risk_reset_at.isoformat(),
-                "reset_equity": self.settings.live_daily_risk_reset_equity,
+                "reset_at": self.daily_risk_reset_at.isoformat(),
+                "reset_equity": self.daily_risk_reset_equity,
                 "max_daily_loss": self.risk.limits.max_daily_loss,
                 "max_daily_drawdown": self.risk.limits.max_daily_drawdown,
                 "trade_history_preserved": True,

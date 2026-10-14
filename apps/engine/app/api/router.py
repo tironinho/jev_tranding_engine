@@ -444,6 +444,17 @@ async def patch_risk(body: RiskPatch, request: Request) -> dict:
     return await risk_limits(request)
 
 
+@router.post("/api/risk/reset-daily")
+async def reset_daily_risk(body: ConfirmBody, request: Request) -> dict:
+    actor = _actor(request)
+    if body.confirm != "RESET":
+        raise HTTPException(400, "confirm RESET")
+    try:
+        return await _engine(request).reset_daily_risk(actor)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
 @router.post("/api/engine/kill-switch")
 async def kill_switch(body: ConfirmBody, request: Request) -> dict:
     actor = _actor(request)

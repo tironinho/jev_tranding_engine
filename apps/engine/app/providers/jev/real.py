@@ -184,10 +184,7 @@ class RealJevProvider:
 
 
 def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
-    """A context below the quality floor stays on the desk and out of the question.
-
-    Incomplete external fields were pulling continuation under the veto line.
-    """
+    """Keep only usable evidence; omitted feeds do not add questions or votes."""
     state = _normalized_state(payload)
     intelligence = state.get("intelligence")
     if not isinstance(intelligence, dict):
@@ -205,6 +202,25 @@ def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
             state["intelligence"] = retained
             return state
         return {key: value for key, value in state.items() if key != "intelligence"}
+    intelligence = {key: value for key, value in intelligence.items() if value is not None}
+    onchain = intelligence.get("onchain")
+    if isinstance(onchain, dict):
+        quality = _finite(onchain.get("quality"))
+        evidence = _finite(onchain.get("evidence"))
+        if (onchain.get("class") == "UNKNOWN" or _finite(onchain.get("support")) is None
+                or evidence is None or evidence < .5 or (quality is not None and quality < min_quality)):
+            intelligence.pop("onchain", None)
+            # Removing the block but retaining its missing-field list still
+            # sends the same unknown observations indirectly to the model.
+            if isinstance(intelligence.get("data_quality"), dict):
+                quality_view = dict(intelligence['data_quality'])
+                quality_view['categories'] = {k:v for k,v in (quality_view.get('categories') or {}).items() if k != 'onchain'}
+                quality_view['missing'] = [name for name in quality_view.get('missing') or [] if not str(name).startswith('onchain.')]
+                intelligence['data_quality'] = quality_view
+    if any(key != 'data_quality' for key in intelligence):
+        state['intelligence'] = intelligence
+    else:
+        state.pop('intelligence', None)
     return state
 
 

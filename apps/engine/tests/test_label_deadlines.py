@@ -36,3 +36,25 @@ def test_ticks_before_next_deadline_do_not_scan_pending_signals():
     labeler.pending = NotIterable(labeler.pending)
     assert labeler.on_price("BTCUSDT", clock()+timedelta(seconds=29), 100) == []
     assert labeler.on_price("XRPUSDT", clock()+timedelta(seconds=900), 100) == []
+
+
+def test_live_labeler_invalidates_missed_deadlines_and_clears_expired_pending_items():
+    labeler = FutureReturnLabeler()
+    snapshot,_ = long_snapshot()
+    labeler.register(snapshot)
+    done = labeler.on_price(snapshot.symbol,clock()+timedelta(minutes=115),110)
+    assert len(done) == 1
+    assert all(value is None for value in done[0]['labels'].values())
+    assert all(t['status']=='OBSERVATION_GAP' for t in done[0]['label_timing'].values())
+    assert not labeler.pending and not labeler._next_due
+
+
+def test_live_labeler_preserves_timely_values_when_other_horizons_were_missed():
+    labeler = FutureReturnLabeler()
+    snapshot,_ = long_snapshot()
+    labeler.register(snapshot)
+    labeler.on_price(snapshot.symbol,clock()+timedelta(seconds=30),101)
+    done = labeler.on_price(snapshot.symbol,clock()+timedelta(seconds=900),105)[0]
+    assert abs(done['labels']['future_return_30s']-.01)<1e-12
+    assert done['labels']['future_return_1m'] is None
+    assert abs(done['labels']['future_return_15m']-.05)<1e-12

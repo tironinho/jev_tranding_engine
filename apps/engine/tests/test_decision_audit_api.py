@@ -51,3 +51,18 @@ def test_decision_audit_rejects_unknown_strategy():
     app.state.engine = eng
     response = TestClient(app).get("/api/decisions/audit?strategy=unknown")
     assert response.status_code == 400
+
+
+def test_audit_does_not_count_all_null_gap_returns_as_labelled():
+    class GapAudit(AuditPostgres):
+        async def recent_decision_audit(self,limit,strategy):
+            return [{'decision':{'decision_id':'gap'},'labels':{'future_return_15m':None,
+                'label_version':'future_returns_v2','timing':{'future_return_15m':{'status':'OBSERVATION_GAP'}}},
+                'labels_timing_status':'VERIFIED'}]
+    eng = engine()
+    eng.postgres = GapAudit()
+    app = create_app(eng.settings,eng)
+    app.state.engine,app.state.settings = eng,eng.settings
+    result = TestClient(app).get('/api/decisions/audit').json()
+    assert result['labelled']==0 and result['unlabelled']==1
+    assert result['labelled_timing_verified']==0

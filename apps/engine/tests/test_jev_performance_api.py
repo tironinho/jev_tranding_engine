@@ -68,3 +68,15 @@ def test_jev_performance_rejects_unknown_scope():
     app.state.engine = eng
     response = TestClient(app).get("/api/jev/performance?mode=unknown")
     assert response.status_code == 400
+
+
+def test_protection_failures_remain_in_pnl_but_do_not_count_as_completed_plan_predictions():
+    eng = engine()
+    account = eng.accounts.accounts['baseline_jev']
+    account.trades.extend([_live_trade(1),_live_trade(-.03).model_copy(update={'exit_reason':'PROTECTION_FAILED'})])
+    report = eng.jev_performance_report()
+    assert report['summary']['closed_trades'] == 2
+    assert report['summary']['losses'] == 1
+    assert report['summary']['realized_pnl_usdt'] == .97
+    assert report['execution_quality'] == {'protection_failure_trades':1,'protection_failure_pnl_usdt':-.03,
+        'completed_plan_trades':1,'completed_plan_win_rate':1,'completed_plan_pnl_usdt':1}

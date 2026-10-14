@@ -97,6 +97,33 @@ async def test_present_onchain_evidence_keeps_its_side_and_explanation():
     assert all("onchain.support" in q["instructions"] for q in body["questions"].values())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('onchain', [
+    {'support_long':None,'evidence':.2,'quality':.317},
+    {'support_long':.8,'evidence':.2,'quality':.9},
+    {'support_long':.8,'evidence':1,'quality':.3},
+    {'support_long':float('nan'),'evidence':1,'quality':.9},
+])
+async def test_unknown_or_thin_onchain_does_not_survive_a_healthy_aggregate_score(onchain):
+    body = await evaluate({'breakout':True},intelligence={'data_quality':{'overall':.9,
+        'categories':{'onchain':.317,'sentiment':1},'missing':['onchain.support','onchain.exchange_flow_pressure']},
+        'onchain':onchain,'sentiment':{'fear_greed_signed':.2,'quality':1}})
+    sent = body['state']['intelligence']
+    assert 'onchain' not in sent
+    assert 'onchain' not in sent['data_quality'].get('categories',{})
+    assert not sent['data_quality'].get('missing')
+    assert all('onchain' not in q['instructions'] for q in body['questions'].values())
+    assert sent['sentiment']['fear_greed_signed'] == .2
+
+
+@pytest.mark.asyncio
+async def test_evidence_backed_neutral_onchain_is_distinct_from_unknown():
+    body = await evaluate({'breakout':False,'breakdown':False},intelligence={
+        'data_quality':{'overall':.9},'onchain':{'support_long':0,'evidence':1,'quality':1}})
+    assert body['state']['intelligence']['onchain']['class'] == 'NEUTRAL'
+    assert body['state']['intelligence']['onchain']['support'] == 0
+
+
 @pytest.mark.parametrize("features,labels,event", [
     ({"breakout":False,"breakdown":True},["CLASS_ALIGNED","BREAKDOWN"],"BREAKDOWN"),
     ({"breakout":True,"breakdown":False},["CLASS_ALIGNED","BREAKOUT"],"BREAKOUT"),

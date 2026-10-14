@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.intelligence.models  # noqa: F401  registers intelligence tables on Base.metadata
+from app.analytics.labels import HORIZONS, MAX_LATENESS_SECONDS, VERSION as LABEL_VERSION, observed_return
 
 from app.db.models import (
     AccountSampleRow,
@@ -39,13 +40,7 @@ from app.db.models import (
 
 log = logging.getLogger(__name__)
 
-_AUDIT_HORIZONS = {
-    "future_return_30s": 30,
-    "future_return_1m": 60,
-    "future_return_3m": 180,
-    "future_return_5m": 300,
-    "future_return_15m": 900,
-}
+_AUDIT_HORIZONS = HORIZONS
 
 
 def _derive_audit_labels(snapshot: MarketSnapshotRow, series: list[MarketSnapshotRow]) -> dict | None:
@@ -53,15 +48,19 @@ def _derive_audit_labels(snapshot: MarketSnapshotRow, series: list[MarketSnapsho
     if not series or snapshot.price <= 0:
         return None
     timestamps = [row.timestamp for row in series]
-    labels: dict[str, float | str] = {"snapshot_id": str(snapshot.id)}
+    labels = {"snapshot_id": str(snapshot.id)}
+    timings = {}
     for name, seconds in _AUDIT_HORIZONS.items():
         index = bisect_left(timestamps, snapshot.timestamp + timedelta(seconds=seconds))
         if index >= len(series):
             continue
-        price = series[index].price
-        if price and price > 0:
-            labels[name] = price / snapshot.price - 1
-    return labels if len(labels) > 1 else None
+        observed = series[index]
+        value, timing = observed_return(snapshot.timestamp, snapshot.price, observed.timestamp, observed.price, seconds)
+        labels[name] = value
+        timings[name] = timing
+    if not timings:
+        return None
+    return {**labels, "label_version": LABEL_VERSION, "timing": timings}
 
 
 def to_async_url(url: str) -> str:
@@ -282,7 +281,7 @@ class PostgresMirror:
                 snapshot_rows = {row.id: row for row in snapshots}
                 symbols = sorted({row.symbol for row in snapshots})
                 first_at = min(row.timestamp for row in snapshots)
-                last_at = max(row.timestamp for row in snapshots) + timedelta(seconds=900)
+                last_at = max(row.timestamp for row in snapshots) + timedelta(seconds=max(HORIZONS.values())+MAX_LATENESS_SECONDS)
                 future_snapshots = list(
                     (
                         await session.execute(
@@ -320,6 +319,8 @@ class PostgresMirror:
                         "snapshot": snapshot_by_id.get(row.snapshot_id),
                         "labels": label,
                         "labels_source": source,
+                        "labels_timing_status": ("VERIFIED" if label and label.get('label_version') == LABEL_VERSION
+                                                 else "LEGACY_UNVERIFIED" if label else "UNAVAILABLE"),
                         "trades": trades_by_decision.get(str(row.id), []),
                     })
                 return audited

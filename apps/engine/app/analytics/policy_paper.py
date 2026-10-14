@@ -50,8 +50,11 @@ class PolicyPaperLab:
         self.sample_count = self.provider_calls = self.reused_calls = self.deferred = 0
         self.recent = []
         self.costs = {}
+        self.coverage = {}
+        self.trade_coverage = {}
         self.stats = {key: {"decisions": 0, "accepted": 0, "closed": 0, "wins": 0,
-                           "net_pnl": 0.0, "fees": 0.0, "interest": 0.0, "rejects": {}}
+                           "net_pnl": 0.0, "fees": 0.0, "interest": 0.0, "rejects": {},
+                           "verified_closed": 0, "verified_wins": 0}
                       for key in LABELS}
         self.dirty = False
         self.running = False
@@ -183,6 +186,8 @@ class PolicyPaperLab:
         self.costs[str(position.position_id)] = (max(plan.get("borrow_hourly_rate") or 0,plan.get("borrow_stress_rate") or 0)
                                                  if snapshot.market_type.value == "margin" else 0)
         self.stats[policy]["fees"] += fill.fee
+        self.coverage[str(position.position_id)] = {"last_observed_at":now.isoformat(),
+            "complete":True,"max_gap_seconds":0.0}
         return True, []
 
     def observe(self, symbol, quote):
@@ -195,6 +200,13 @@ class PolicyPaperLab:
             for identity, p in list(account.positions.items()):
                 if p.symbol != symbol:
                     continue
+                coverage = self.coverage.setdefault(identity, {"last_observed_at":p.opened_at.isoformat(),
+                    "complete":False,"max_gap_seconds":0.0})
+                gap = (now-datetime.fromisoformat(coverage["last_observed_at"])).total_seconds()
+                coverage["max_gap_seconds"] = max(coverage["max_gap_seconds"],gap)
+                if gap > 90 or gap < 0:
+                    coverage["complete"] = False
+                coverage["last_observed_at"] = now.isoformat()
                 hold = (now-p.opened_at).total_seconds()/60
                 reason = position_exit(p.side,quote["bid"],quote["ask"],p.stop,p.target,hold,p.max_hold_minutes or 60)
                 if reason is None:
@@ -213,13 +225,20 @@ class PolicyPaperLab:
                 s = self.stats[policy]
                 s["closed"] += 1
                 s["wins"] += trade.net_pnl > 0
+                self.trade_coverage[str(trade.trade_id)] = dict(coverage)
+                if coverage["complete"]:
+                    s['verified_closed'] += 1
+                    s['verified_wins'] += trade.net_pnl > 0
                 s["net_pnl"] += trade.net_pnl
                 s["fees"] += fee
                 s["interest"] += interest
                 if identity not in account.positions:
                     self.costs.pop(identity,None)
+                    self.coverage.pop(identity,None)
                 account.trades = account.trades[-200:]
                 account.equity_points = account.equity_points[-300:]
+                retained = {str(t.trade_id) for a in self.book.accounts.values() for t in a.trades}
+                self.trade_coverage = {key:value for key,value in self.trade_coverage.items() if key in retained}
                 self.dirty = True
 
     def export(self):
@@ -227,6 +246,7 @@ class PolicyPaperLab:
                 "costs": self.costs,"recent": self.recent,"sample_count": self.sample_count,
                 "provider_calls": self.provider_calls,"reused_calls": self.reused_calls,
                 "deferred": self.deferred,
+                "coverage":self.coverage,"trade_coverage":self.trade_coverage,
                 "last_sample_at": self.last_sample_at.isoformat() if self.last_sample_at else None}
 
     def restore(self, payload):
@@ -234,7 +254,12 @@ class PolicyPaperLab:
             return
         self.book.restore_state(payload.get("accounts") or {})
         self.stats = payload.get("stats") or self.stats
+        for stat in self.stats.values():
+            stat.setdefault('verified_closed',0)
+            stat.setdefault('verified_wins',0)
         self.costs = payload.get("costs") or {}
+        self.coverage = payload.get("coverage") or {}
+        self.trade_coverage = payload.get("trade_coverage") or {}
         self.recent = payload.get("recent") or []
         self.sample_count = payload.get("sample_count",0)
         self.provider_calls = payload.get("provider_calls",0)
@@ -251,10 +276,16 @@ class PolicyPaperLab:
             "running": self.running,"last_sample_at": self.last_sample_at.isoformat() if self.last_sample_at else None,
             "policies": [{"id": key,"label": LABELS[key],**self.stats[key],
                 "equity": account.equity(marks),"open_positions": len(account.positions),
+                "unverified_closed":self.stats[key]['closed']-self.stats[key]['verified_closed'],
+                "verified_win_rate":(self.stats[key]['verified_wins']/self.stats[key]['verified_closed']
+                                     if self.stats[key]['verified_closed'] else None),
                 "win_rate": self.stats[key]["wins"]/self.stats[key]["closed"] if self.stats[key]["closed"] else None}
                 for key,account in self.book.accounts.items()],"recent": list(reversed(self.recent)),
             "open_positions": [p.model_dump(mode="json") for a in self.book.accounts.values() for p in a.positions.values()],
-            "closed_records": [trade.model_dump(mode="json") for trade in closed],
+            "closed_records": [{**trade.model_dump(mode="json"),
+                "observation_coverage":self.trade_coverage.get(str(trade.trade_id),{"complete":False})} for trade in closed],
             "limitations": ["Forward simulation, not live realized PnL or a profitability guarantee.",
                 "Order book fills estimate fees and slippage; margin interest uses a conservative stress rate.",
-                "Partial closures count as separate records; paired coverage and rejections are reported."]}
+                "Partial closures count as separate records; paired coverage and rejections are reported.",
+                "A gap over 90 seconds invalidates observed win-rate coverage; its PnL remains in financial totals.",
+                "Legacy records without observation tracking are excluded from verified win rate."]}

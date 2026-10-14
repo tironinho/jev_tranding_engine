@@ -673,7 +673,7 @@ def _jev_request(
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
     return JevMarketRequest(
         prompt_version=(("jev_" + context.combination.jev_request_profile +
-                         ("_market_range_v4" if cost_plan and context.risk.market_range_plans else "_compact_market_v3" if cost_plan else
+                         ("_market_range_v5" if cost_plan and context.risk.market_range_plans else "_compact_market_v3" if cost_plan else
                           "_event_v2" if context.combination.jev_request_profile == "live_first_ten_2026_10_09" else ""))
                         if initial else getattr(context.jev, "prompt_version", "jev_plan_outcome_v3")),
         evaluation_profile=context.combination.jev_request_profile,

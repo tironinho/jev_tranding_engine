@@ -11,6 +11,7 @@ export type PolicyComparison = {
     id: string; label: string; decisions: number; accepted: number; closed: number;
     open_positions: number; win_rate: number | null; net_pnl: number;
     fees: number; interest: number; equity: number; rejects: Record<string, number>;
+    verified_closed?: number; unverified_closed?: number; verified_win_rate?: number | null;
   }>;
 };
 
@@ -21,18 +22,20 @@ export function PolicyPaperComparison({ data }: { data: PolicyComparison | null 
       Resultados simulados, separados do saldo real. Cada política começou com {num(data.initial_equity)} USDT.
       {" "}{data.sample_count} candidatos amostrados · {data.provider_calls} avaliações do JEV concluídas.
       {" "}Taxas, slippage do book e juros estimados entram no resultado.
+      {" "}O acerto observado considera operações acompanhadas sem lacunas. Fechamentos sem cobertura permanecem no resultado financeiro.
     </p>
     <div className="overflow-x-auto">
       <table className="w-full text-left font-mono text-xs">
         <thead className="text-mute"><tr>
-          {["POLÍTICA", "DECISÕES", "ENTRADAS", "ABERTAS", "FECHAMENTOS", "ACERTO", "LÍQUIDO USDT", "TAXAS USDT", "JUROS USDT", "PATRIMÔNIO USDT"].map(label =>
+          {["POLÍTICA", "DECISÕES", "ENTRADAS", "ABERTAS", "FECHAMENTOS", "SEM COBERTURA", "ACERTO OBSERVADO", "LÍQUIDO USDT", "TAXAS USDT", "JUROS USDT", "PATRIMÔNIO USDT"].map(label =>
             <th key={label} className="px-2 py-2 font-normal">{label}</th>)}
         </tr></thead>
         <tbody>{data.policies.map(row => <tr key={row.id} className="border-t border-line">
           <td className="px-2 py-2">{row.label}</td>
           <td className="px-2 py-2">{row.decisions}</td><td className="px-2 py-2">{row.accepted}</td>
           <td className="px-2 py-2">{row.open_positions}</td><td className="px-2 py-2">{row.closed}</td>
-          <td className="px-2 py-2">{pct(row.win_rate)}</td>
+          <td className="px-2 py-2">{row.unverified_closed ?? "—"}</td>
+          <td className="px-2 py-2">{pct(row.verified_win_rate)}</td>
           <td className="px-2 py-2">{row.closed ? num(row.net_pnl, 4) : "SEM FECHAMENTO"}</td>
           <td className="px-2 py-2">{num(row.fees, 4)}</td><td className="px-2 py-2">{num(row.interest, 4)}</td>
           <td className="px-2 py-2">{num(row.equity, 4)}</td>

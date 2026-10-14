@@ -156,3 +156,36 @@ def test_comparison_endpoint_is_authenticated_and_separate_from_real_accounts():
     assert len(data["policies"]) == 5
     assert all(p["equity"] == 20 and p["win_rate"] is None for p in data["policies"])
     assert list(eng.accounts.accounts) == ["baseline","baseline_jev"]
+
+
+@pytest.mark.asyncio
+async def test_gap_closure_remains_in_financial_pnl_but_is_excluded_from_observed_win_rate(monkeypatch):
+    eng,lab,_,s,_ = await sample(monkeypatch)
+    restored = PolicyPaperLab(eng.slippage,clock())
+    restored.restore(lab.export())
+    p = next(iter(restored.book.accounts['historical_break'].positions.values()))
+    later = clock()+timedelta(minutes=115)
+    monkeypatch.setattr('app.analytics.policy_paper.utcnow',lambda:later)
+    restored.observe(s.symbol,quote(None,later,bid=p.stop-.01,ask=p.stop+.01))
+    report = restored.report({s.symbol:p.stop})
+    stat = next(r for r in report['policies'] if r['id']=='historical_break')
+    assert stat['closed']==1 and stat['net_pnl']<0
+    assert stat['verified_closed']==0 and stat['unverified_closed']==1
+    assert stat['verified_win_rate'] is None
+    trade = next(r for r in report['closed_records'] if r['strategy']=='historical_break')
+    assert trade['observation_coverage']['complete'] is False
+    assert trade['observation_coverage']['max_gap_seconds']==115*60
+
+
+@pytest.mark.asyncio
+async def test_continuously_observed_paper_trade_counts_in_verified_sample(monkeypatch):
+    _,lab,_,s,_ = await sample(monkeypatch)
+    p = next(iter(lab.book.accounts['historical_break'].positions.values()))
+    for seconds in [60,120]:
+        later = clock()+timedelta(seconds=seconds)
+        monkeypatch.setattr('app.analytics.policy_paper.utcnow',lambda:later)
+        bid = p.entry_price if seconds==60 else p.stop-.01
+        lab.observe(s.symbol,quote(None,later,bid=bid,ask=bid+.02))
+    stat = next(r for r in lab.report({s.symbol:p.stop})['policies'] if r['id']=='historical_break')
+    assert stat['closed']==stat['verified_closed']==1
+    assert stat['unverified_closed']==0 and stat['verified_win_rate']==0

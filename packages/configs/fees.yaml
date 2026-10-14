@@ -1,7 +1,7 @@
-# Fallback quando a conta Binance não informa commissionRate.
-# A origem efetiva (config ou binance) é gravada em cada trade.
+# Fallback sem presumir desconto BNB que não apareceu nos fills de produção.
+# A origem efetiva (config, binance ou binance_gateway) é gravada no risco/trade.
 
-maker_fee_rate: 0.00075
-taker_fee_rate: 0.00075
+maker_fee_rate: 0.001
+taker_fee_rate: 0.001
 entry_liquidity: taker
 exit_liquidity: taker

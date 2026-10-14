@@ -248,6 +248,7 @@ async def decisions(request: Request, limit: int = 100, symbol: str | None = Non
 
 @router.get("/api/decisions/audit")
 async def decision_audit(request: Request, limit: int = 100, strategy: str = "baseline", before: datetime | None = None) -> dict:
+    from app.analytics.labels import has_valid_return
     _actor(request)
     engine = _engine(request)
     if strategy not in LABELS:
@@ -267,8 +268,10 @@ async def decision_audit(request: Request, limit: int = 100, strategy: str = "ba
     return {
         "strategy": strategy,
         "rows": rows,
-        "labelled": sum(row.get("labels") is not None for row in rows),
-        "unlabelled": sum(row.get("labels") is None for row in rows),
+        "labelled": sum(has_valid_return(row.get("labels")) for row in rows),
+        "unlabelled": sum(not has_valid_return(row.get("labels")) for row in rows),
+        "labelled_timing_verified": sum(has_valid_return(row.get('labels')) and
+                                       row.get('labels_timing_status') == 'VERIFIED' for row in rows),
         "next_before": rows[-1]["decision"].get("timestamp") if len(rows) == min(max(limit, 1), 500) else None,
     }
 
@@ -465,6 +468,19 @@ def _balance_actor(request: Request) -> str:
 async def binance_balance(request: Request, fresh: bool = False) -> dict:
     _balance_actor(request)
     return await _engine(request).balance.snapshot(fresh=fresh)
+
+
+@router.get("/api/binance/fees")
+async def binance_fees(request: Request, symbol: str) -> dict:
+    _balance_actor(request)
+    engine = _engine(request)
+    if engine.settings.balance_upstream_url or engine.settings.service_role != "account":
+        raise HTTPException(409, "this host does not read the account")
+    symbol = symbol.upper()
+    if symbol not in engine.settings.symbol_list:
+        raise HTTPException(400, "symbol")
+    quote = await engine.fee_provider.get_fees(symbol)
+    return {"symbol": symbol, "maker": quote.maker, "taker": quote.taker, "source": quote.source}
 
 
 _ORDER_METHODS = {"POST", "DELETE", "GET"}

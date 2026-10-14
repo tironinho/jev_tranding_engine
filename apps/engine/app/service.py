@@ -11,6 +11,7 @@ from uuid import uuid4
 from app.accounts import AccountBook, unrealized
 from app.analytics.comparison import compare_strategies
 from app.analytics.performance import max_drawdown, slice_performance, summarize_trades
+from app.analytics.labels import HORIZONS, VERSION as LABEL_VERSION, observed_return
 from app.analytics.policy_paper import PolicyPaperLab
 from app.config import (
     Settings,
@@ -80,13 +81,7 @@ EDITABLE_RISK = (
 
 
 class FutureReturnLabeler:
-    HORIZONS = {
-        "future_return_30s": 30,
-        "future_return_1m": 60,
-        "future_return_3m": 180,
-        "future_return_5m": 300,
-        "future_return_15m": 900,
-    }
+    HORIZONS = HORIZONS
 
     def __init__(self) -> None:
         self.pending: list[dict] = []
@@ -103,6 +98,7 @@ class FutureReturnLabeler:
                 "timestamp": snapshot.timestamp,
                 "price": snapshot.price,
                 "labels": {},
+                "label_timing": {},
             }
         )
 
@@ -122,7 +118,9 @@ class FutureReturnLabeler:
                 if name in item["labels"]:
                     continue
                 if timestamp >= item["timestamp"] + timedelta(seconds=seconds):
-                    item["labels"][name] = price / item["price"] - 1
+                    value, timing = observed_return(item["timestamp"], item["price"], timestamp, price, seconds)
+                    item["labels"][name] = value
+                    item["label_timing"][name] = timing
             if len(item["labels"]) < len(self.HORIZONS):
                 still.append(item)
             else:
@@ -184,7 +182,9 @@ class TradingEngine:
             shadow_interval_s=settings.jev_shadow_interval_s,
         )
         self.build_commit = os.environ.get("RENDER_GIT_COMMIT", "local")
-        self.fee_provider = BinanceFeeProvider(settings, self.fee_config) if settings.binance_api_key else ConfigFeeProvider(self.fee_config)
+        self.fee_provider = (BinanceFeeProvider(settings, self.fee_config)
+                             if settings.binance_api_key or settings.balance_upstream_url
+                             else ConfigFeeProvider(self.fee_config))
         self.balance = BinanceBalanceProvider(settings)
         self.intelligence = IntelligenceRunner(settings)
         self._locks = {key: asyncio.Lock() for key in STRATEGY_KEYS}
@@ -383,7 +383,8 @@ class TradingEngine:
             for point in batch:
                 finished = self.labeler.on_price(symbol, point["timestamp"], point["price"])
                 for item in finished:
-                    labels = {"snapshot_id": str(item["snapshot_id"]), **item["labels"]}
+                    labels = {"snapshot_id": str(item["snapshot_id"]), **item["labels"],
+                              "label_version": LABEL_VERSION, "timing": item["label_timing"]}
                     self.store.add_label(item["snapshot_id"], labels)
                     if self.postgres and self.postgres.healthy:
                         await self.postgres.save_label(str(item["snapshot_id"]), labels)
@@ -1010,16 +1011,10 @@ class TradingEngine:
         # pending-entry recovery uses the same deterministic stop client ID.
         tick = self.feed.rules.get(snapshot.symbol, {}).get("tick_size")
         intent = self._intent(decision, snapshot, risk, "BUY" if decision.action is Action.LONG else "SELL", "live")
+        # A confirmed fill, net of its base-asset commission and lot rounding,
+        # is the quantity owned by this entry. The account snapshot can lag
+        # that fill: do not turn a transient zero into a local protection veto.
         intent.quantity = held
-        if decision.action is Action.LONG and self.settings.market_type == "margin":
-            intent.quantity = sellable_quantity(held, await self._free_base(snapshot.symbol, fresh=True), step)
-        if intent.quantity <= 0:
-            position.protection_error = "NO_PROTECTABLE_QUANTITY"
-            self._log("live_stop", f"{snapshot.symbol} decision={decision.decision_id} NO_PROTECTABLE_QUANTITY", level=logging.ERROR)
-            await self._checkpoint(decision.strategy, positions=[position], orders=[order_payload], fills=[fill_payload])
-            await self._resolve_entry(str(decision.decision_id))
-            await self._exit_live(decision.strategy, snapshot.symbol, position, "PROTECTION_FAILED", utcnow(), self.states[snapshot.symbol])
-            return
         position.stop_client_order_id = decision.decision_id.hex[:31] + "S"
         position.protection_attempted_at = utcnow()
         stop = None
@@ -1050,7 +1045,7 @@ class TradingEngine:
                 )
         if stop is None and position.protection_error is None:
             try:
-                stop = await self.live.submit_stop(intent, position.stop, tick=tick)
+                stop = await self._submit_protective_stop(intent, position.stop, tick=tick)
             except Exception as exc:
                 position.protection_error = str(exc)
                 self._log("live_stop", f"{snapshot.symbol} decision={decision.decision_id} {exc}", level=logging.ERROR)
@@ -1073,11 +1068,12 @@ class TradingEngine:
                 )
         await self._checkpoint(decision.strategy, positions=[position], orders=orders, fills=[fill_payload])
         # The fill and its protection outcome are now represented durably.
-        await self._resolve_entry(str(decision.decision_id))
         if position.protection_status != "PROTECTED":
             position.protection_status = "UNPROTECTED"
-            await self._checkpoint(decision.strategy, positions=[position], orders=[], fills=[])
             await self._exit_live(decision.strategy, snapshot.symbol, position, "PROTECTION_FAILED", utcnow(), self.states[snapshot.symbol])
+        # Keep the already-durable entry intent until protection or emergency
+        # handling finishes; resolving it must not delay an unprotected exit.
+        await self._resolve_entry(str(decision.decision_id))
         await self.bus.publish(Event("position", {"strategy": decision.strategy, "symbol": snapshot.symbol, "status": "OPEN"}))
 
     async def manage_positions(self, symbol: str, as_of: datetime | None = None, extreme: dict | None = None) -> None:
@@ -1305,7 +1301,7 @@ class TradingEngine:
                 return
             asset = next((r for r in balance.get("assets", []) if r.get("asset") == base_asset(symbol)), {})
             if position.side is Action.LONG:
-                quantity = sellable_quantity(quantity, float(asset.get("free") or 0), self.feed.rules.get(symbol, {}).get("step_size"))
+                quantity = sellable_quantity(quantity, _free_asset(balance, base_asset(symbol)), self.feed.rules.get(symbol, {}).get("step_size"))
             else:
                 # Never buy the original short again after an external/stop close.
                 debt_exposure = max(0, -float(asset.get("total") or 0))
@@ -1418,12 +1414,8 @@ class TradingEngine:
                 side="BUY" if position.side is Action.LONG else "SELL", order_type=OrderType.MARKET,
                 quantity=position.quantity, limit_price=None, mode="live", created_at=utcnow(),
                 best_bid=state.best_bid, best_ask=state.best_ask, book=state.book, fee_rate=position.exit_fee_rate)
-            if position.side is Action.LONG and self.settings.market_type == "margin":
-                intent.quantity = sellable_quantity(position.quantity, await self._free_base(symbol, fresh=True), self.feed.rules.get(symbol, {}).get("step_size"))
             try:
-                if intent.quantity <= 0:
-                    raise LiveExecutionBlocked("NO_FREE_BASE")
-                stop = await self.live.submit_stop(intent, updated, tick=self.feed.rules.get(symbol, {}).get("tick_size"), suffix=suffix)
+                stop = await self._submit_protective_stop(intent, updated, tick=self.feed.rules.get(symbol, {}).get("tick_size"), suffix=suffix)
                 if stop.status is not OrderStatus.NEW:
                     raise LiveExecutionBlocked("STOP_NOT_RESTING")
                 position.stop_client_order_id = stop.client_order_id
@@ -2037,6 +2029,8 @@ class TradingEngine:
             and (mode == "all" or row["mode"] == mode)
         ]
         summary = summarize_trades(trades, self.settings.initial_paper_equity)
+        protection_failures = [t for t in trades if t.exit_reason == "PROTECTION_FAILED"]
+        completed_plans = [t for t in trades if t.exit_reason in {"TARGET", "STOP", "TIME"}]
         closed = [
             {
                 "trade_id": str(trade.trade_id),
@@ -2098,6 +2092,16 @@ class TradingEngine:
                 "fees_usdt": summary["fees_total"],
                 "profit_factor": summary["profit_factor"],
                 "average_trade_pnl_usdt": summary["net_pnl"] / summary["trades"] if summary["trades"] else None,
+            },
+            # Keep every loss in account/risk totals. This additional view
+            # separates execution failures from plans that reached an exit.
+            "execution_quality": {
+                "protection_failure_trades": len(protection_failures),
+                "protection_failure_pnl_usdt": sum(t.net_pnl for t in protection_failures),
+                "completed_plan_trades": len(completed_plans),
+                "completed_plan_win_rate": (sum(t.net_pnl > 0 for t in completed_plans)/len(completed_plans)
+                                            if completed_plans else None),
+                "completed_plan_pnl_usdt": sum(t.net_pnl for t in completed_plans),
             },
             "open": opened,
             "closed": closed,
@@ -2359,29 +2363,84 @@ class TradingEngine:
             return
         position.stop_client_order_id = stop.client_order_id
 
+    async def _submit_protective_stop(self, intent, stop_price, *, tick=None, suffix="S"):
+        """Protect owned quantity first; retry only a definitive balance rejection.
+
+        An HTTP timeout/unknown outcome must be reconciled by its deterministic
+        client ID in the existing exit/recovery path, never blindly resubmitted.
+        """
+        if not math.isfinite(intent.quantity) or intent.quantity <= 0:
+            raise LiveExecutionBlocked("NO_PROTECTABLE_QUANTITY")
+        tag = f"{intent.symbol} decision={intent.decision_id} quantity={intent.quantity}"
+        self._log("live_stop_submit", f"{tag} source=OWNED_NET_QUANTITY suffix={suffix}")
+        try:
+            return await self.live.submit_stop(intent, stop_price, tick=tick, suffix=suffix)
+        except LiveExecutionBlocked as exc:
+            message = str(exc).lower()
+            balance_rejected = ("-3041" in message or
+                                ("-2010" in message and "insufficient balance" in message))
+            if self.settings.market_type != "margin" or intent.side != "BUY" or not balance_rejected:
+                raise
+            self._log("live_stop_balance", f"{tag} exchange_balance_rejected=True")
+            step = self.feed.rules.get(intent.symbol, {}).get("step_size")
+            deadline = time.monotonic() + 2.0
+            for attempt in range(1, 4):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    balance = await asyncio.wait_for(self.balance.snapshot(fresh=True), timeout=remaining)
+                except Exception as read_error:
+                    balance = {"status": "ERROR", "detail": type(read_error).__name__}
+                if not isinstance(balance, dict):
+                    balance = {"status": "ERROR", "detail": "INVALID_ACCOUNT"}
+                free = _free_asset(balance, base_asset(intent.symbol))
+                quantity = sellable_quantity(intent.quantity, free, step)
+                self._log("live_stop_balance", f"{tag} attempt={attempt} status={balance.get('status')} "
+                    f"detail={str(balance.get('detail') or '')[:100]} free={free} "
+                    f"observed_at={balance.get('observed_at')} protectable={quantity}")
+                # A small stale residual must not count as protection for the
+                # entire newly filled position. Wait for the full owned lot.
+                if quantity >= intent.quantity - max(1e-12, intent.quantity*1e-10):
+                    return await self.live.submit_stop(intent, stop_price, tick=tick, suffix=suffix)
+                if attempt < 3:
+                    await asyncio.sleep(min(.1*attempt, max(0, deadline-time.monotonic())))
+            raise LiveExecutionBlocked("NO_PROTECTABLE_QUANTITY_AFTER_BALANCE_CONFIRMATION") from exc
+
     async def _free_base(self, symbol: str, *, fresh: bool = False) -> float | None:
         """Free base on the margin account. None when the snapshot cannot be read."""
         try:
             balance = await self.balance.snapshot(fresh=fresh)
         except Exception:
             return None
-        if balance.get("status") != "ok":
-            return None
-        name = base_asset(symbol)
-        for asset in balance.get("assets") or []:
-            if str(asset.get("asset") or "") != name:
-                continue
-            free = asset.get("free")
-            if isinstance(free, (int, float)):
-                return float(free)
-            return 0.0
-        return 0.0
+        return _free_asset(balance, base_asset(symbol))
 
     def _log(self, kind: str, message: str, *, level: int = logging.INFO) -> None:
         item = {"kind": kind, "message": message, "timestamp": utcnow().isoformat()}
         self.logs.add(item)
         self.store.add_event(kind, message)
         log.log(level, "%s %s", kind, message)
+
+
+def _free_asset(balance: dict, asset_name: str) -> float | None:
+    """Missing/unreadable is distinct from a verified zero; accept numeric JSON strings."""
+    if not isinstance(balance, dict) or balance.get("status") != "ok":
+        return None
+    assets = balance.get("assets")
+    if not isinstance(assets, list):
+        return None
+    for asset in assets:
+        if not isinstance(asset, dict) or asset.get("asset") != asset_name:
+            continue
+        value = asset.get("free")
+        if isinstance(value, bool):
+            return None
+        try:
+            free = float(value)
+        except (TypeError, ValueError):
+            return None
+        return free if math.isfinite(free) and free >= 0 else None
+    return 0.0
 
 
 def _consecutive_live_losses(trades: list, as_of: datetime) -> int:

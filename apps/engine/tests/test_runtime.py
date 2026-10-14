@@ -472,3 +472,31 @@ async def test_reduce_only_close_does_not_require_the_arm_flags():
     assert order.status is OrderStatus.FILLED
     assert order.order_type is OrderType.MARKET
     assert _posts(exchange, "MARKET", reduce_only=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved_deadline", [None, 60])
+@pytest.mark.parametrize("exit_price,reason", [(100, None), (121, "TARGET"), (89, "STOP")])
+async def test_disabled_time_exit_ignores_saved_deadline_and_preserves_price_exits(saved_deadline, exit_price, reason):
+    eng = engine()
+    eng.risk.update_limits(time_exit_enabled=False, step_stop_to_breakeven=False)
+    position = _open(eng)
+    position.max_hold_minutes = saved_deadline
+    state = eng.states["BTCUSDT"]
+    state.last_price = exit_price
+    state.best_bid = exit_price
+    state.best_ask = exit_price + .1
+    await eng.on_price("BTCUSDT", exit_price, clock() + timedelta(hours=24))
+    await asyncio.gather(*list(eng._background))
+    account = eng.accounts.accounts["baseline"]
+    if reason is None:
+        assert account.positions
+        assert not account.trades
+    else:
+        assert not account.positions
+        assert account.trades[-1].exit_reason == reason
+
+
+def test_production_disables_time_exit():
+    from app.service import TradingEngine
+    assert not TradingEngine(settings()).risk.limits.time_exit_enabled

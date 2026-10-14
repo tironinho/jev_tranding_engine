@@ -20,7 +20,7 @@ def initial_engine():
     # Preserve regression coverage of the earlier first-entry profile while
     # the repository default now selects the explicitly requested tenth trade.
     eng = TradingEngine(settings())
-    eng.risk.update_limits(min_net_rr=1.5, max_trade_notional_fraction=0,
+    eng.risk.update_limits(time_exit_enabled=True, min_net_rr=1.5, max_trade_notional_fraction=0,
                           max_portfolio_notional_fraction=0, min_net_target_return=0)
     eng.weights = BaselineWeightConfig(version="baseline_weights_v1", min_abs_score=.45)
     eng.combination = replace(eng.combination, jev_request_profile="initial_live_2026_10_08",

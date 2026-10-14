@@ -1160,7 +1160,8 @@ class TradingEngine:
             stop=position.stop,
             target=position.target,
             hold_minutes=hold_minutes,
-            max_hold_minutes=(position.max_hold_minutes if position.max_hold_minutes is not None else self.risk.limits.max_hold_minutes
+            max_hold_minutes=((position.max_hold_minutes if position.max_hold_minutes is not None
+                               else self.risk.limits.max_hold_minutes)
                               if self.risk.limits.time_exit_enabled else 0),
             # Initial live policy keeps a winner until target/stop. The later
             # plan policy additionally requires protected net breakeven.

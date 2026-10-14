@@ -6,7 +6,8 @@ target_mode: structure
 # Referência a15bc12: alvo = amplitude de 60m; economia validada após o JEV.
 target_rule_version: live_first_ten_2026_10_09
 min_net_rr: 2.0
-cost_aware_target_floor: false
+# Ajusta o alvo liquido antes de enviar o plano ao JEV.
+cost_aware_target_floor: true
 market_range_plans: false
 jev_expectancy_gate: false
 target_fallback: rr
@@ -45,10 +46,9 @@ stop_cooldown_minutes: 15
 min_order_notional: 5
 # A Binance liquida a margem cruzada perto de 1,1. Abaixo de 2 não abre entrada nova. A saída segue.
 min_margin_level: 2
-# Após 60m fecha perdedora/empatada; vencedora segue para alvo ou stop.
-# Posições antigas conservam os prazos explícitos gravados na sua entrada.
+# Saidas por tempo desativadas, inclusive para posicoes com prazo salvo.
 max_hold_minutes: 60
-time_exit_enabled: true
+time_exit_enabled: false
 # Novos sinais podem abrir posições adicionais no mesmo ativo e sentido.
 # Cada posição conserva seu próprio fill, stop e fechamento.
 allow_pyramiding: true

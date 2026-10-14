@@ -4,7 +4,7 @@ from dataclasses import replace
 import httpx
 import pytest
 
-from app.domain.enums import Action, MarketType
+from app.domain.enums import Action, MarketType, OperatingMode
 from app.providers.jev.real import RealJevProvider
 from app.risk.economics import compute_trade_economics, target_for_net_rr
 from app.risk.engine import FeeQuote
@@ -204,3 +204,24 @@ async def test_missing_geometry_does_not_become_a_direction_only_confirmation():
     assert decision.action is Action.NO_TRADE
     assert "TRADE_PLAN_UNAVAILABLE" in decision.reason_codes
     assert not provider.requests
+
+
+@pytest.mark.parametrize("side", [Action.LONG, Action.SHORT])
+@pytest.mark.asyncio
+async def test_current_policy_extends_target_before_jev_and_executes_exact_plan(side):
+    from app.service import TradingEngine
+    from tests.conftest import settings
+    eng = TradingEngine(settings(initial_paper_equity=20))
+    eng.strategy_settings["baseline_jev"].mode = OperatingMode.PAPER
+    snapshot, book = narrow_snapshot(side)
+    attach_book(eng, book)
+    provider = AssessmentProvider(.80)
+    eng.jev = provider
+    await eng.evaluate_snapshot(snapshot)
+    plan = provider.requests[0].trade_plan
+    assert plan["target_extended_for_costs"]
+    assert plan["net_rr"] == pytest.approx(2.0)
+    position = next(iter(eng.accounts.accounts["baseline_jev"].positions.values()))
+    assert position.target == plan["target"]
+    assert position.stop == plan["stop"]
+    assert not eng.risk.limits.time_exit_enabled

@@ -66,3 +66,8 @@ max_trade_notional_fraction: 0.30
 max_portfolio_notional_fraction: 0.80
 # Minimum net target return after costs, not expected profit.
 min_net_target_return: 0.005
+
+# Prospective comparison before enabling a new live selection policy.
+entry_selection_mode: shadow
+repeat_entry_interval_minutes: 5
+repeat_entry_atr_distance: 0.5

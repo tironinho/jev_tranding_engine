@@ -71,7 +71,8 @@ def test_active_baseline_keeps_seven_components_and_weak_volume_never_inverts_fl
 @pytest.mark.parametrize("side", [Action.LONG, Action.SHORT])
 async def test_actual_http_body_has_seven_groups_and_raw_answers_survive(side):
     eng = TradingEngine(settings())
-    snapshot, _ = candidate(side)
+    snapshot, _ = candidate(side, context_15m_slope=.002, return_5m=.003,
+                            return_15m=.004, return_60m=.005)
     bodies = []
     def handler(request):
         body = json.loads(request.content)
@@ -81,6 +82,9 @@ async def test_actual_http_body_has_seven_groups_and_raw_answers_survive(side):
         assert state["candidate_side"] == side.value
         assert set(state["evidence"]) == {"trend", "momentum", "volume", "flow", "structure", "volatility", "liquidity"}
         assert state["evidence"]["flow"]["taker_5m"] == snapshot.features["taker_flow_5m"]
+        assert state["evidence"]["trend"]["context_15m_slope_pct"] == pytest.approx(snapshot.features["context_15m_slope"]*100)
+        assert state["evidence"]["trend"]["distance_to_vwap_pct"] == pytest.approx(snapshot.features["distance_to_vwap"]*100)
+        assert state["evidence"]["momentum"]["return_15m_pct"] == pytest.approx(snapshot.features["return_15m"]*100)
         assert state["evidence"]["volatility"]["atr_14_pct"] == pytest.approx(.4)
         assert state["evidence"]["liquidity"]["spread_bps"] == 2
         assert state["evidence"]["structure"]["event"] == ("BREAKOUT" if side is Action.LONG else "BREAKDOWN")

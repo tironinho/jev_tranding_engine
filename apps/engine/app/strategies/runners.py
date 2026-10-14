@@ -39,6 +39,7 @@ from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
 from app.risk.plans import candidate_plans, score_probability
 from app.analytics.setup_review import classify_setup
+from app.strategies.context_policy import classify_entry
 
 
 @dataclass
@@ -76,7 +77,9 @@ def _decision(
     status: SignalStatus = SignalStatus.VALID,
 ) -> StrategyDecision:
     if strategy == "baseline_jev":
-        metadata = {**metadata, "setup_research": classify_setup(
+        metadata = {**metadata, "entry_selection": classify_entry(
+            Action(metadata.get("baseline_action", action.value)), snapshot.features),
+            "setup_research": classify_setup(
             {"metadata": metadata}, snapshot.model_dump(mode="json"))}
     return StrategyDecision(
         correlation_id=context.correlation_id,

@@ -145,12 +145,19 @@ def state_for_model(payload):
     return {"symbol": payload.get("symbol"), "market_type": payload.get("market_type"),
         "candidate_side": side, "candle_minutes": 1,
         "evidence": {
-            "trend": _present(ema_alignment=alignment, ema20_slope_5m_pct=pct(_finite(features.get("ema_20_slope")))),
-            "momentum": _present(rsi_14=rsi, roc_10m_pct=pct(_finite(features.get("roc")))),
+            "trend": _present(ema_alignment=alignment, ema20_slope_5m_pct=pct(_finite(features.get("ema_20_slope"))),
+                              context_15m_slope_pct=pct(_finite(features.get("context_15m_slope"))),
+                              distance_to_vwap_pct=pct(_finite(features.get("distance_to_vwap")))),
+            "momentum": _present(rsi_14=rsi, roc_10m_pct=pct(_finite(features.get("roc"))),
+                                 return_5m_pct=pct(_finite(features.get("return_5m"))),
+                                 return_15m_pct=pct(_finite(features.get("return_15m"))),
+                                 return_60m_pct=pct(_finite(features.get("return_60m")))),
             "volume": _present(relative_to_previous_20m=volume if volume is not None and volume >= 0 else None),
             "flow": _present(taker_1m=_bounded(features.get("taker_flow_1m"), -1, 1),
                              taker_5m=_bounded(features.get("taker_flow_5m"), -1, 1)),
-            "structure": _present(event=event, extension_from_break_level_atr=_finite(extension)),
+            "structure": _present(event=event, extension_from_break_level_atr=_finite(extension),
+                                  reclaim_in_candidate_direction=(features.get("bullish_reclaim" if side == "LONG" else "bearish_reclaim")
+                                      if isinstance(features.get("bullish_reclaim" if side == "LONG" else "bearish_reclaim"), bool) else None)),
             "volatility": _present(atr_14_pct=pct(atr_fraction), range_60m_pct=pct(span)),
             "liquidity": _present(spread_bps=spread if spread is not None and spread >= 0 else None),
         }, "trade": trade}

@@ -131,6 +131,9 @@ class RiskLimits:
     # Fractions of equity, never multiplied by leverage. Zero disables each cap.
     max_trade_notional_fraction: float = 0.0
     max_portfolio_notional_fraction: float = 0.0
+    entry_selection_mode: str = "shadow"
+    repeat_entry_interval_minutes: int = 5
+    repeat_entry_atr_distance: float = 0.5
     min_net_target_return: float = 0.0
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
@@ -152,6 +155,13 @@ class RiskLimits:
     max_consecutive_live_losses: int = 10
     max_protection_recovery_attempts: int = 5
     protection_retry_base_seconds: float = 2.0
+
+
+    def __post_init__(self):
+        if self.entry_selection_mode not in {"shadow", "enforce"}:
+            raise ValueError("entry_selection_mode must be shadow or enforce")
+        if self.repeat_entry_interval_minutes < 0 or self.repeat_entry_atr_distance < 0:
+            raise ValueError("repeat entry limits must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -296,6 +306,9 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_open_positions=settings.max_open_positions,
         max_trade_notional_fraction=float(payload.get("max_trade_notional_fraction", 0)),
         max_portfolio_notional_fraction=float(payload.get("max_portfolio_notional_fraction", 0)),
+        entry_selection_mode=str(payload.get("entry_selection_mode", "shadow")),
+        repeat_entry_interval_minutes=int(payload.get("repeat_entry_interval_minutes", 5)),
+        repeat_entry_atr_distance=float(payload.get("repeat_entry_atr_distance", 0.5)),
         min_net_target_return=float(payload.get("min_net_target_return", 0)),
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),

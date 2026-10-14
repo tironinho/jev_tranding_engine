@@ -74,6 +74,7 @@ class RiskContext:
     quote_free: float | None = None
     consecutive_live_losses: int = 0
     position_sides_on_symbol: tuple[Action, ...] = ()
+    same_side_entry_prices: tuple[float, ...] = ()
 
 
 @dataclass
@@ -169,6 +170,28 @@ class RiskEngine:
                 reasons.append("FUTURES_CLOSE_ALL_POSITION")
             elif any(side is not decision.action for side in context.position_sides_on_symbol):
                 reasons.append("OPPOSITE_POSITION_NETTING")
+        from app.strategies.context_policy import classify_entry
+        selection = classify_entry(decision.action, snapshot.features)
+        repeat_reasons = []
+        if context.has_position_on_symbol:
+            direction = 1 if decision.action is Action.LONG else -1
+            atr = snapshot.features.get("atr")
+            elapsed = ((context.now - context.last_entry_at).total_seconds() / 60
+                       if context.last_entry_at else 0)
+            event = (snapshot.features.get("breakout" if direction == 1 else "breakdown") is True
+                     or snapshot.features.get("bullish_reclaim" if direction == 1 else "bearish_reclaim") is True)
+            progressed = (isinstance(atr, (float, int)) and math.isfinite(atr) and atr > 0
+                          and bool(context.same_side_entry_prices)
+                          and all(direction * (snapshot.price - price) >= atr * self.limits.repeat_entry_atr_distance
+                                  for price in context.same_side_entry_prices))
+            if not event or not progressed or elapsed < self.limits.repeat_entry_interval_minutes:
+                repeat_reasons.append("REPEATED_ENTRY_WITHOUT_NEW_SETUP")
+        selection.update(mode=self.limits.entry_selection_mode, repeat_reasons=repeat_reasons,
+                         would_accept=selection["eligible"] and not repeat_reasons)
+        decision.metadata["entry_selection"] = selection
+        if self.limits.entry_selection_mode == "enforce":
+            reasons.extend(selection["reasons"])
+            reasons.extend(repeat_reasons)
         if context.last_entry_at is not None:
             elapsed = (context.now - context.last_entry_at).total_seconds()
             if elapsed < self.limits.min_entry_interval_seconds:
@@ -385,6 +408,7 @@ class RiskEngine:
             economics=economics,
             side=decision.action,
             details={
+                "entry_selection": selection,
                 "geometry_reasons": list(geometry.reasons),
                 "extra_open_slot": bool(self.limits.max_open_positions > 0 and extra_slot
                     and context.open_positions >= self.limits.max_open_positions),
@@ -554,7 +578,7 @@ class RiskEngine:
         economics: TradeEconomics | None = None,
         details: dict | None = None,
     ) -> RiskDecision:
-        payload = {"risk_rejected": True}
+        payload = {"risk_rejected": True, "entry_selection": decision.metadata.get("entry_selection")}
         if details:
             payload.update(details)
         return RiskDecision(

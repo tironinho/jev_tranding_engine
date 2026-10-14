@@ -1662,6 +1662,7 @@ class TradingEngine:
             total_exposure_notional=account.exposure(marks),
             has_position_on_symbol=any(position.symbol == snapshot.symbol for position in managed),
             position_sides_on_symbol=tuple(position.side for position in managed if position.symbol == snapshot.symbol),
+            same_side_entry_prices=tuple(position.entry_price for position in managed if position.symbol == snapshot.symbol),
             last_entry_at=account.last_entry_by_symbol.get(snapshot.symbol),
             last_stop_at=account.last_stop_at.get(snapshot.symbol),
             now=snapshot.timestamp,

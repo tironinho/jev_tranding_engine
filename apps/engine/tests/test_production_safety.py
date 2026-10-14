@@ -87,10 +87,29 @@ def test_status_exposes_live_loss_circuit_and_intelligence_health():
         "live_loss_streak": 2,
         "max_consecutive_live_losses": 3,
         "live_loss_circuit_open": False,
+        "live_loss_reset_at": None,
     }
     assert status["intelligence"]["providers"]["cryptoquant"] == "DEGRADED"
     assert status["intelligence"]["degraded_providers"] == ["cryptoquant"]
     assert not status["intelligence"]["healthy"]
+
+
+def test_daily_pause_reports_reset_and_does_not_expire_after_idle_hours(monkeypatch):
+    eng = engine()
+    account = eng.accounts.accounts["baseline_jev"]
+    account.trades.extend(SimpleNamespace(mode="live", net_pnl=-.01,
+        closed_at=datetime(2026, 10, 14, 3, minute, tzinfo=timezone.utc)) for minute in (31, 34, 36))
+    for hour in (6, 14, 23):
+        moment = datetime(2026, 10, 14, hour, 59, tzinfo=timezone.utc)
+        monkeypatch.setattr("app.service.utcnow", lambda: moment)
+        risk = eng.status()["risk"]
+        assert risk["live_loss_streak"] == 3 and risk["live_loss_circuit_open"]
+        assert risk["live_loss_reset_at"] == "2026-10-15T00:00:00+00:00"
+    moment = datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc)
+    risk = eng.status()["risk"]
+    assert risk["live_loss_streak"] == 0 and not risk["live_loss_circuit_open"]
+    assert risk["live_loss_reset_at"] is None
+    assert len(account.trades) == 3
 
 
 def test_partial_exit_preserves_remaining_position_margin_and_fee():

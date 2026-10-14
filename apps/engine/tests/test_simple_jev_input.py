@@ -279,3 +279,17 @@ async def test_veto_and_below_threshold_are_not_replaced_by_the_new_payload():
     decision, provider = await evaluate(eng, snapshot, probability=.99)
     assert not provider.requests
     assert decision.metadata["jev_effect"] == "idle"
+
+
+def test_review_exposes_baseline_strength_without_adding_it_to_the_provider_state():
+    eng = TradingEngine(settings())
+    sent_state = {"candidate_side": "SHORT", "evidence": {"trend": {"ema_alignment": -1}}}
+    call = {"decision_id": "test-review", "response": {"sent_request": {"state": sent_state}}}
+    decision = {"action": "SHORT", "confidence": .54,
+                "metadata": {"composite": -.62, "baseline_action": "SHORT"}}
+    review = eng._format_jev_reviews([(call, decision)], 1)[0]
+    assert review["baseline_score"] == .62
+    assert review["confidence"] == .54
+    assert review["state"]["evidence"] == sent_state["evidence"]
+    assert "baseline_action" not in sent_state
+    assert "baseline_score" not in review["state"]

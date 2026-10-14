@@ -10,7 +10,7 @@ type Status = {
   openai?: { status?: string };
   jev?: { status?: string; is_mock?: boolean };
   intelligence?: { enabled?: boolean; providers?: Record<string, string>; degraded_providers?: string[]; healthy?: boolean };
-  risk?: { live_loss_streak?: number; max_consecutive_live_losses?: number; live_loss_circuit_open?: boolean };
+  risk?: LossCircuitStatus;
   database?: { mode?: string; healthy?: boolean };
 };
 
@@ -39,7 +39,7 @@ export function EngineStatus({ status }: { status: Status | null }) {
     : `${streak}/${streakLimit}${status.risk?.live_loss_circuit_open ? " BLOCKED" : ""}`;
   const items = [
     ["ENGINE", status.engine === "online" ? "ONLINE" : "OFFLINE"],
-    ["ENTRIES", status.trading_enabled ? "OPEN" : "STOPPED"],
+    ["ENTRIES", !status.trading_enabled ? "STOPPED" : status.risk?.live_loss_circuit_open ? "LIVE PAUSED" : "OPEN"],
     ["BINANCE", (status.binance?.status ?? "NO DATA").toUpperCase()],
     ["OPENAI", (status.openai?.status ?? "NO DATA").toUpperCase()],
     ["JEV", status.jev?.is_mock ? "MOCK" : (status.jev?.status ?? "NO DATA").toUpperCase()],
@@ -59,6 +59,29 @@ export function EngineStatus({ status }: { status: Status | null }) {
       {status.live_armed ? <Badge tone="live">LIVE ARMED</Badge> : <Badge tone="off">LIVE LOCKED</Badge>}
     </div>
   );
+}
+
+export type LossCircuitStatus = {
+  live_loss_streak?: number;
+  max_consecutive_live_losses?: number;
+  live_loss_circuit_open?: boolean;
+  live_loss_reset_at?: string | null;
+};
+
+export function LossCircuitNotice({ risk }: { risk?: LossCircuitStatus }) {
+  if (!risk?.live_loss_circuit_open) return null;
+  const date = risk.live_loss_reset_at ? new Date(risk.live_loss_reset_at) : null;
+  const reset = date && Number.isFinite(date.getTime()) ? date.toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }) : null;
+  return <Panel title="NOVAS ENTRADAS LIVE PAUSADAS">
+    <p className="text-sm text-[#f3c969]">Limite diário de perdas consecutivas: {risk.live_loss_streak ?? "—"}/{risk.max_consecutive_live_losses ?? "—"}.</p>
+    <p className="mt-2 text-xs text-mute">{reset
+      ? `A pausa termina em ${reset}, Brasília, na virada do dia UTC.`
+      : "A pausa termina na próxima virada do dia UTC."} Horas sem operar não reiniciam esse limite.</p>
+    <p className="mt-2 text-xs text-mute">O JEV continua avaliando. Após a pausa, cada entrada ainda depende da aprovação dos demais limites de risco.</p>
+  </Panel>;
 }
 
 export function Shell({ children }: { children: React.ReactNode }) {

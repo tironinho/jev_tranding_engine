@@ -12,6 +12,7 @@ export type JevReview = {
   action?: string;
   jev_action?: string;
   confidence?: number;
+  baseline_score?: number | null;
   effect?: string;
   required_continuation?: number | null;
   size_scale?: number | null;
@@ -19,6 +20,7 @@ export type JevReview = {
   state?: {
     symbol?: string;
     baseline_action?: string;
+    candidate_side?: string;
     candidate_action?: string;
     baseline_confidence?: number;
     baseline_scores?: Record<string, number | null>;
@@ -28,6 +30,8 @@ export type JevReview = {
     breakout?: boolean | null;
     breakdown?: boolean | null;
     intelligence?: Record<string, unknown> | null;
+    evidence?: SimpleEvidence;
+    trade?: ObservationTrade;
   };
   response?: {
     trend_continuation_probability?: number | null;
@@ -38,6 +42,22 @@ export type JevReview = {
     is_mock?: boolean | null;
     error?: string | null;
   };
+};
+
+type SimpleEvidence = {
+  trend?: { ema_alignment?: number; ema20_slope_5m_pct?: number };
+  momentum?: { rsi_14?: number; roc_10m_pct?: number };
+  volume?: { relative_to_previous_20m?: number };
+  flow?: { taker_1m?: number; taker_5m?: number };
+  structure?: { event?: string; extension_from_break_level_atr?: number };
+  volatility?: { atr_14_pct?: number; range_60m_pct?: number };
+  liquidity?: { spread_bps?: number };
+};
+
+type ObservationTrade = {
+  target_distance_pct?: number;
+  stop_distance_pct?: number;
+  time_exit?: { rule?: string; after_minutes?: number; estimated_breakeven_distance_pct?: number };
 };
 
 export type JevExecution = {
@@ -104,7 +124,7 @@ export function JevDesk({
                     <span className="font-mono text-mute">{shortTime(row.timestamp)}</span>
                   </div>
                   <div className="mt-1 flex items-center justify-between text-[11px]">
-                    <span className="text-mute">{row.state?.baseline_action ?? "—"}</span>
+                    <span className="text-mute">{row.state?.baseline_action ?? row.state?.candidate_side ?? "—"}</span>
                     <span className={effectClass(row.effect, row.response?.error)}>{effectText(row.effect, row.response?.error)}</span>
                   </div>
                 </Link>
@@ -122,6 +142,10 @@ function Reading({ review, execution }: { review: JevReview; execution?: JevExec
   const state = review.state ?? {};
   const answer = review.response ?? {};
   const required = review.required_continuation;
+  const simple = state.evidence != null;
+  const event = state.evidence?.structure?.event;
+  const hasBreak = simple ? event === "BREAKOUT" || event === "BREAKDOWN" : state.breakout || state.breakdown;
+  const score = review.baseline_score ?? state.baseline_confidence;
   return (
     <div className="grid gap-4">
       <Panel
@@ -131,9 +155,10 @@ function Reading({ review, execution }: { review: JevReview; execution?: JevExec
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="text-[11px] text-mute">BASELINE PEDIU</div>
-            <div className="font-mono text-2xl">{state.baseline_action ?? "NO DATA"}</div>
+            <div className="font-mono text-2xl">{state.baseline_action ?? state.candidate_side ?? "NO DATA"}</div>
             <div className="font-mono text-[11px] text-mute">
-              score {pct(state.baseline_confidence ?? null)} · não é probabilidade
+              {score == null ? "Score não registrado" : `score ${pct(score)} · não é probabilidade`}
+              {simple ? " · não enviado ao JEV" : ""}
               {state.candidate_action ? ` · candidato sombra ${state.candidate_action}` : ""}
             </div>
           </div>
@@ -148,10 +173,13 @@ function Reading({ review, execution }: { review: JevReview; execution?: JevExec
         </div>
       </Panel>
       <ExecutionStatus review={review} execution={execution} />
-      <Panel title="PLANOS E EXPECTATIVA LÍQUIDA"><CandidatePlans plans={review.candidate_plans} selected={review.selected_plan_id} /><Link className="mt-3 block text-xs underline" href={`/decisions/${review.decision_id}`}>Ver decisão, custos, ordens e resultado observado</Link></Panel>
+      <Panel title={simple ? "OPERAÇÃO AVALIADA" : "PLANOS E EXPECTATIVA LÍQUIDA"}>
+        {simple ? <ObservationPlan trade={state.trade} /> : <CandidatePlans plans={review.candidate_plans} selected={review.selected_plan_id} />}
+        <Link className="mt-3 block text-xs underline" href={`/decisions/${review.decision_id}`}>Ver decisão, custos, ordens e resultado observado</Link>
+      </Panel>
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel title="O QUE ENTROU">
-          <div className="grid gap-3">
+          {simple ? <ExchangeEvidence evidence={state.evidence!} /> : <div className="grid gap-3">
             {SCORES.map(([key, label]) => (
               <SignedRow key={key} label={label} value={state.baseline_scores?.[key] ?? null} />
             ))}
@@ -162,7 +190,7 @@ function Reading({ review, execution }: { review: JevReview; execution?: JevExec
               <span>PERDA {flag(state.breakdown)}</span>
               <span>FAIXA 60M {state.range_60m == null ? "sem dado" : pct(state.range_60m)}</span>
             </div>
-          </div>
+          </div>}
         </Panel>
         <Panel title="O QUE VOLTOU">
           <div className="grid gap-4">
@@ -172,15 +200,15 @@ function Reading({ review, execution }: { review: JevReview; execution?: JevExec
             <p className="text-[11px] text-mute">
               {required == null
                 ? "O corte de continuação não foi gravado nesta leitura."
-                : state.breakout || state.breakdown
-                  ? `Rompimentos respeitam o piso de ${pct(required)}. O risco também verifica a expectativa líquida.`
+                : hasBreak
+                  ? `Rompimento identificado. Piso de referência: ${pct(required)}.${review.size_scale != null && review.size_scale < 1 ? ` Tamanho reduzido para ${pct(review.size_scale)}.` : ""} A entrada ainda depende do risco.`
                   : `Sem rompimento, confirmar exige continuação de pelo menos ${pct(required)}.`}
             </p>
             {answer.error ? <p className="font-mono text-[11px] text-[#ff6b6b]">{answer.error}</p> : null}
           </div>
         </Panel>
       </div>
-      <IntelligenceBlock intelligence={state.intelligence ?? null} />
+      {!simple ? <IntelligenceBlock intelligence={state.intelligence ?? null} /> : null}
     </div>
   );
 }
@@ -199,6 +227,9 @@ function ExecutionStatus({ review, execution }: { review: JevReview; execution?:
   if (risk?.accepted === false) {
     status = "BLOQUEADO PELO RISCO";
     detail = risk.reject_reasons?.join(" · ") || "Motivo não registrado";
+    if (risk.reject_reasons?.includes("MAX_CONSECUTIVE_LIVE_LOSSES")) {
+      detail = "Limite diário de perdas consecutivas atingido. O JEV confirmou, mas a pausa de risco impediu o envio da ordem.";
+    }
     color = "text-[#ff6b6b]";
   } else if (fills.length) {
     status = execution.trade ? "TRADE REGISTRADA" : "ORDEM EXECUTADA";
@@ -214,6 +245,57 @@ function ExecutionStatus({ review, execution }: { review: JevReview; execution?:
     color = "text-[#f3c969]";
   }
   return <Panel title="EXECUÇÃO" aside={<span className={`font-mono text-[11px] ${color}`}>{status}</span>}><p className="font-mono text-[11px] text-mute">{detail}</p></Panel>;
+}
+
+function observationNumber(value: number | undefined, digits = 4, unit = "") {
+  return value != null && Number.isFinite(value) ? `${value.toFixed(digits)}${unit}` : "sem dado";
+}
+
+function ExchangeEvidence({ evidence: e }: { evidence: SimpleEvidence }) {
+  const event = e.structure?.event;
+  const eventLabel = event === "BREAKOUT" ? "Rompimento de resistência"
+    : event === "BREAKDOWN" ? "Perda de suporte"
+      : event === "NONE" ? "Sem rompimento" : "Evento não identificado";
+  const groups = [
+    ["TENDÊNCIA", `Médias ${observationNumber(e.trend?.ema_alignment, 2)} · EMA20 em 5m ${observationNumber(e.trend?.ema20_slope_5m_pct, 4, "%")}`],
+    ["MOMENTO", `RSI ${observationNumber(e.momentum?.rsi_14, 2)} · ROC 10m ${observationNumber(e.momentum?.roc_10m_pct, 4, "%")}`],
+    ["VOLUME", `${observationNumber(e.volume?.relative_to_previous_20m, 2, "x")} a média anterior de 20m`],
+    ["FLUXO", `Taker 1m ${observationNumber(e.flow?.taker_1m)} · 5m ${observationNumber(e.flow?.taker_5m)}`],
+    ["ESTRUTURA", `${eventLabel}${event === "BREAKOUT" || event === "BREAKDOWN" ? ` · distância do nível ${observationNumber(e.structure?.extension_from_break_level_atr, 2, " ATR")}` : ""}`],
+    ["VOLATILIDADE", `ATR ${observationNumber(e.volatility?.atr_14_pct, 4, "%")} · Faixa 60m ${observationNumber(e.volatility?.range_60m_pct, 4, "%")}`],
+    ["LIQUIDEZ", `Spread ${observationNumber(e.liquidity?.spread_bps, 4, " bps")}`],
+  ];
+  return <div className="grid gap-3">
+    {groups.map(([label, value]) => <div key={label} className="border-b border-line pb-2 text-[11px]">
+      <div className="mb-1 text-mute">{label}</div>
+      <div className="font-mono">{value}</div>
+    </div>)}
+    <p className="text-[11px] text-mute">Fluxo positivo indica compras agressoras; negativo indica vendas.</p>
+  </div>;
+}
+
+function ObservationPlan({ trade }: { trade?: ObservationTrade }) {
+  if (!trade) return <p className="text-xs text-mute">Descrição da operação não registrada.</p>;
+  const time = trade.time_exit;
+  const minutes = observationNumber(time?.after_minutes, 0);
+  const rule = time?.rule === "EXIT_IF_NET_PNL_NON_POSITIVE"
+    ? `Após ${minutes} min, fecha posições sem lucro líquido; vencedoras seguem para alvo ou stop.`
+    : time?.rule === "EXIT_AT_DEADLINE"
+      ? `Fecha após ${minutes} min, inclusive posições lucrativas.`
+      : time?.rule === "TARGET_OR_STOP"
+        ? "Saída por alvo ou stop, sem prazo temporal."
+        : time?.rule === "EXIT_UNLESS_NET_POSITIVE_WITH_BREAKEVEN_STOP"
+          ? `Após ${minutes} min, continua apenas com lucro líquido e stop no ponto de equilíbrio.`
+          : "Regra temporal não registrada.";
+  return <div className="space-y-2 text-xs">
+    <div className="flex flex-wrap gap-x-5 gap-y-2 font-mono">
+      <span>ALVO {observationNumber(trade.target_distance_pct, 4, "%")}</span>
+      <span>STOP {observationNumber(trade.stop_distance_pct, 4, "%")}</span>
+      {time?.estimated_breakeven_distance_pct != null ? <span>EQUILÍBRIO EST. {observationNumber(time.estimated_breakeven_distance_pct, 4, "%")}</span> : null}
+    </div>
+    <p className="text-mute">{rule}</p>
+    <p className="text-[11px] text-mute">Distâncias estimadas a partir da cotação desta leitura.</p>
+  </div>;
 }
 
 function IntelligenceBlock({ intelligence }: { intelligence: Record<string, unknown> | null }) {

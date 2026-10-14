@@ -2171,6 +2171,7 @@ class TradingEngine:
                     "action": decision.get("action"),
                     "jev_action": meta.get("jev_shadow_action") or decision.get("action"),
                     "confidence": decision.get("confidence"),
+                    "baseline_score": abs(meta["composite"]) if isinstance(meta.get("composite"), (int, float)) else None,
                     "effect": meta.get("jev_effect"),
                     "required_continuation": meta.get("jev_required_continuation"),
                     "size_scale": meta.get("size_scale"),
@@ -2237,7 +2238,8 @@ class TradingEngine:
             openai_status = "open_circuit" if self.openai.breaker.state == "open" else "configured"
         openai_status = f"{openai_status}|calls_off"
         live_account = self.accounts.accounts["baseline_jev"]
-        live_loss_streak = _consecutive_live_losses(live_account.trades, utcnow())
+        now = utcnow()
+        live_loss_streak = _consecutive_live_losses(live_account.trades, now)
         live_loss_limit = self.risk.limits.max_consecutive_live_losses
         provider_health = dict(sorted(self.intelligence.cache.health.items()))
         degraded_providers = sorted(
@@ -2291,6 +2293,9 @@ class TradingEngine:
                 "live_loss_streak": live_loss_streak,
                 "max_consecutive_live_losses": live_loss_limit,
                 "live_loss_circuit_open": live_loss_streak >= live_loss_limit,
+                "live_loss_reset_at": ((now.astimezone(timezone.utc) + timedelta(days=1))
+                    .replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                    if live_loss_streak >= live_loss_limit else None),
             },
             "database": {"mode": self.persistence_mode, "healthy": self.db_healthy if self.persistence_mode != "memory" else True, "error": self.db_error},
             "strategies": {

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.enums import MarketType, OperatingMode, SlippageModelName, TargetMode
@@ -357,6 +358,9 @@ class Settings(BaseSettings):
     default_risk_per_trade: float = 0.005
     max_risk_per_trade: float = 0.01
     max_daily_loss: float = 0.03
+    # Operator-authorized cutoff for baseline_jev's loss streak only. A fixed
+    # timestamp survives restarts without forgiving any subsequent losses.
+    live_loss_streak_reset_at: AwareDatetime | None = None
     max_daily_drawdown: float = 0.03
     max_total_exposure: float = 1.0
     max_symbol_exposure: float = 0.40
@@ -402,6 +406,20 @@ class Settings(BaseSettings):
     jev_feature_set_version: str = "jev_feature_set_v1"
     min_jev_data_quality: float = 0.70
     jev_intelligence_gate: str = "FALLBACK_TO_BASELINE"
+
+    @field_validator("live_loss_streak_reset_at", mode="before")
+    @classmethod
+    def empty_loss_reset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("live_loss_streak_reset_at")
+    @classmethod
+    def validate_loss_reset(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            if value > datetime.now(timezone.utc):
+                raise ValueError("live loss reset must not be in the future")
+            return value.astimezone(timezone.utc)
+        return None
 
     @field_validator("service_role", mode="before")
     @classmethod

@@ -254,6 +254,7 @@ class TradingEngine:
                     if self.balance_points:
                         self._last_wallet = self.balance_points[-1]["wallet"]
                     self._log("restore", "book restored from postgres")
+        await self._record_live_loss_reset()
         await self.feed.start()
         self.evolution.bind_research_client(self._http)
         if self.postgres is not None and self.postgres.factory is not None and self.db_healthy:
@@ -1660,7 +1661,8 @@ class TradingEngine:
             step_size=step,
             min_notional=min_notional,
             rules_required=live,
-            consecutive_live_losses=_consecutive_live_losses(account.trades, snapshot.timestamp) if live else 0,
+            consecutive_live_losses=_consecutive_live_losses(account.trades, snapshot.timestamp,
+                reset_at=self.settings.live_loss_streak_reset_at if strategy == "baseline_jev" else None) if live else 0,
         )
 
     def _error_decision(self, strategy: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, reason: str) -> StrategyDecision:
@@ -2239,7 +2241,8 @@ class TradingEngine:
         openai_status = f"{openai_status}|calls_off"
         live_account = self.accounts.accounts["baseline_jev"]
         now = utcnow()
-        live_loss_streak = _consecutive_live_losses(live_account.trades, now)
+        live_loss_streak = _consecutive_live_losses(live_account.trades, now,
+            reset_at=self.settings.live_loss_streak_reset_at)
         live_loss_limit = self.risk.limits.max_consecutive_live_losses
         provider_health = dict(sorted(self.intelligence.cache.health.items()))
         degraded_providers = sorted(
@@ -2291,6 +2294,8 @@ class TradingEngine:
             },
             "risk": {
                 "live_loss_streak": live_loss_streak,
+                "live_loss_manual_reset_at": (self.settings.live_loss_streak_reset_at.isoformat()
+                    if self.settings.live_loss_streak_reset_at else None),
                 "max_consecutive_live_losses": live_loss_limit,
                 "live_loss_circuit_open": live_loss_streak >= live_loss_limit,
                 "live_loss_reset_at": ((now.astimezone(timezone.utc) + timedelta(days=1))
@@ -2313,6 +2318,26 @@ class TradingEngine:
 
     def _marks(self) -> dict[str, float]:
         return {symbol: state.last_price for symbol, state in self.states.items() if state.last_price is not None}
+
+    async def _record_live_loss_reset(self) -> None:
+        cutoff = self.settings.live_loss_streak_reset_at
+        if cutoff is None:
+            return
+        now = utcnow()
+        trades = self.accounts.accounts["baseline_jev"].trades
+        payload = {
+            "strategy": "baseline_jev",
+            "reset_at": cutoff.isoformat(),
+            "streak_without_reset": _consecutive_live_losses(trades, now),
+            "streak_after_reset": _consecutive_live_losses(trades, now, reset_at=cutoff),
+            "max_consecutive_live_losses": self.risk.limits.max_consecutive_live_losses,
+            "trade_history_preserved": True,
+        }
+        # Re-loading this same fixed cutoff never resets later losses. Record
+        # every boot for traceability, before market processing can open trades.
+        await self._audit("operator_env", "live_loss_streak_reset_loaded", payload)
+        self._log("live_loss_reset", f"baseline_jev cutoff={cutoff.isoformat()} "
+            f"streak={payload['streak_after_reset']} history_preserved=true")
 
     async def _audit(self, actor: str, action: str, payload: dict) -> None:
         record = AuditRecord(timestamp=utcnow(), actor=actor, action=action, payload=payload)
@@ -2471,14 +2496,15 @@ def _free_asset(balance: dict, asset_name: str) -> float | None:
     return 0.0
 
 
-def _consecutive_live_losses(trades: list, as_of: datetime) -> int:
-    """Count the current UTC day's trailing live losses for a strategy book."""
+def _consecutive_live_losses(trades: list, as_of: datetime, *, reset_at: datetime | None = None) -> int:
+    """Count today's trailing live losses after an optional fixed operator cutoff."""
     day = as_of.astimezone(timezone.utc).date()
     closed = sorted(
         (
             trade
             for trade in trades
             if trade.mode == "live" and trade.closed_at.astimezone(timezone.utc).date() == day
+            and (reset_at is None or trade.closed_at > reset_at)
         ),
         key=lambda trade: trade.closed_at,
         reverse=True,

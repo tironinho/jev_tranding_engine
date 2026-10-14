@@ -85,6 +85,7 @@ def test_status_exposes_live_loss_circuit_and_intelligence_health():
 
     assert status["risk"] == {
         "live_loss_streak": 2,
+        "live_loss_manual_reset_at": None,
         "max_consecutive_live_losses": 3,
         "live_loss_circuit_open": False,
         "live_loss_reset_at": None,
@@ -110,6 +111,68 @@ def test_daily_pause_reports_reset_and_does_not_expire_after_idle_hours(monkeypa
     assert risk["live_loss_streak"] == 0 and not risk["live_loss_circuit_open"]
     assert risk["live_loss_reset_at"] is None
     assert len(account.trades) == 3
+
+
+def test_manual_loss_reset_preserves_history_and_reblocks_on_three_new_losses(monkeypatch):
+    cutoff = clock()
+    eng = engine(live_loss_streak_reset_at=cutoff)
+    account = eng.accounts.accounts["baseline_jev"]
+    original = [SimpleNamespace(mode="live", closed_at=cutoff - timedelta(minutes=i), net_pnl=-.01)
+        for i in (2, 1, 0)]
+    account.trades.extend(original)
+    moment = cutoff + timedelta(minutes=1)
+    monkeypatch.setattr("app.service.utcnow", lambda: moment)
+    assert eng.status()["risk"]["live_loss_streak"] == 0
+    assert eng.status()["risk"]["live_loss_manual_reset_at"] == cutoff.isoformat()
+    assert not eng.status()["risk"]["live_loss_circuit_open"]
+    assert account.trades == original and sum(t.net_pnl for t in original) == -.03
+
+    snapshot, _ = long_snapshot()
+    snapshot = snapshot.model_copy(update={"timestamp": moment})
+    assert eng._risk_context("baseline_jev", snapshot, live=True).consecutive_live_losses == 0
+    # The operator reset is scoped to baseline_jev and leaves the paper book alone.
+    eng.accounts.accounts["baseline"].trades.extend(original)
+    assert eng._risk_context("baseline", snapshot, live=True).consecutive_live_losses == 3
+    assert eng._risk_context("baseline_jev", snapshot, live=False).consecutive_live_losses == 0
+
+    for count in range(1, 4):
+        moment = cutoff + timedelta(minutes=count)
+        account.trades.append(SimpleNamespace(mode="live", closed_at=moment, net_pnl=-.01))
+        snapshot = snapshot.model_copy(update={"timestamp": moment})
+        risk = eng.status()["risk"]
+        assert risk["live_loss_streak"] == count
+        assert risk["live_loss_circuit_open"] == (count == 3)
+        assert eng._risk_context("baseline_jev", snapshot, live=True).consecutive_live_losses == count
+    # Recreating the process with the same configured timestamp keeps new losses.
+    restarted = engine(live_loss_streak_reset_at=cutoff)
+    restarted.accounts.accounts["baseline_jev"].trades.extend(account.trades)
+    assert restarted.status()["risk"]["live_loss_circuit_open"]
+    assert restarted.risk.limits.max_consecutive_live_losses == 3
+    assert len(account.trades) == 6 and all(t.net_pnl == -.01 for t in account.trades)
+
+
+@pytest.mark.parametrize("value", ["2026-01-01T12:00:00", "2999-01-01T12:00:00+00:00"])
+def test_manual_loss_reset_rejects_naive_or_future_timestamps(value):
+    with pytest.raises(ValueError):
+        settings(live_loss_streak_reset_at=value)
+
+
+def test_manual_loss_reset_accepts_empty_and_normalizes_timezone():
+    assert settings(live_loss_streak_reset_at=" ").live_loss_streak_reset_at is None
+    assert settings(live_loss_streak_reset_at="2026-01-01T09:00:00-03:00").live_loss_streak_reset_at == clock()
+
+
+@pytest.mark.asyncio
+async def test_manual_loss_reset_records_fixed_cutoff_in_audit(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(live_loss_streak_reset_at=clock())
+    eng.postgres = SimpleNamespace(healthy=True, save_audit=AsyncMock())
+    await eng._record_live_loss_reset()
+    payload = eng.postgres.save_audit.call_args.args[0]
+    assert payload["action"] == "live_loss_streak_reset_loaded"
+    assert payload["actor"] == "operator_env"
+    assert payload["payload"]["reset_at"] == clock().isoformat()
+    assert payload["payload"]["trade_history_preserved"]
 
 
 def test_partial_exit_preserves_remaining_position_margin_and_fee():

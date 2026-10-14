@@ -62,6 +62,7 @@ from app.providers.binance_account import BinanceBalanceProvider
 from app.providers.fees import BinanceFeeProvider, ConfigFeeProvider
 from app.providers.jev.factory import build_jev_provider
 from app.providers.jev.scheduler import JevScheduler
+from app.providers.jev.schemas import SIMPLE_MARKET_INPUT
 from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
 from app.risk.engine import RiskContext, RiskEngine, margin_borrow_room
@@ -264,6 +265,7 @@ class TradingEngine:
             f"shadow_interval_s={self.settings.jev_shadow_interval_s} "
             f"active_slots=3 shadow_slots=1 commit={self.build_commit} "
             f"request_profile={self.combination.jev_request_profile} "
+            f"input_profile={self.combination.jev_input_profile} "
             f"prompt_version={jev_prompt_version(self.combination, self.risk.limits, self.jev)} "
             f"jev_rule={self.combination.jev_rule_version} "
             f"baseline_version={self.weights.version} baseline_floor={self.weights.min_abs_score} "
@@ -577,7 +579,7 @@ class TradingEngine:
             decision.metadata.update(pipeline_latency=timings, build_commit=self.build_commit)
             return decision, context, budget_ms
         context_started = time.perf_counter()
-        if key != "baseline":
+        if key != "baseline" and not (key == "baseline_jev" and self.combination.jev_input_profile == SIMPLE_MARKET_INPUT):
             self.intelligence.note_marks(self._marks(), snapshot.timestamp)
             context.intelligence = self.intelligence.context_for(snapshot.symbol, snapshot.features, snapshot.timestamp)
         timings["context_ms"] = (time.perf_counter() - context_started) * 1000
@@ -2268,6 +2270,7 @@ class TradingEngine:
                 "baseline_threshold": self.weights.min_abs_score,
                 "jev_rule_version": self.combination.jev_rule_version,
                 "request_profile": self.combination.jev_request_profile,
+                "input_profile": self.combination.jev_input_profile,
                 "prompt_version": jev_prompt_version(self.combination, self.risk.limits, self.jev),
                 "target_rule_version": self.risk.limits.target_rule_version,
                 "min_net_rr": self.risk.limits.min_net_rr,

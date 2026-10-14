@@ -6,6 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 FIRST_TEN_HISTORICAL_PROMPT = "jev_live_first_ten_2026_10_09_a15bc12_v1"
+SIMPLE_MARKET_INPUT = "simple_market_v1"
+SIMPLE_MARKET_PROMPT = "jev_simple_market_v1"
 
 
 class JevMarketRequest(BaseModel):
@@ -26,6 +28,8 @@ class JevMarketRequest(BaseModel):
     market_state: dict[str, Any] | None = None
     intelligence: dict[str, Any] | None = None
     trade_plan: dict[str, Any] | None = None
+    # Observation only: never interpreted by the risk engine as an execution plan.
+    observation_plan: dict[str, Any] | None = None
     evaluation_timeout_s: float | None = Field(default=None, exclude=True, gt=0, le=30)
     questions: list[str] = Field(
         default_factory=lambda: [

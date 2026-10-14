@@ -24,7 +24,7 @@ def first_ten_engine():
     eng = TradingEngine(settings())
     # Reconstruct the exact tenth-trade policy, before the cost-target correction.
     eng.weights = replace(eng.weights, version="baseline_first_ten_v1")
-    eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v1")
+    eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v1", jev_input_profile="legacy")
     eng.risk.update_limits(cost_aware_target_floor=False, market_range_plans=False, max_hold_minutes=60)
     eng.risk_limits = eng.risk.limits
     return eng

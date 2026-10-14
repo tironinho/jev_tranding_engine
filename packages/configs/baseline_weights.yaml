@@ -1,8 +1,8 @@
-# Scoring histórico da referência a15bc12, período dos dez primeiros trades live.
+# Sete componentes simples; v2 impede volume baixo de inverter o fluxo.
 # Constantes de escala só comprimem grandezas típicas de cripto para [-1, 1].
 # Não são parâmetros otimizados. Não usar live sem calibração por backtest.
 
-version: baseline_first_ten_v1
+version: baseline_first_ten_v2
 weights:
   trend: 0.25
   momentum: 0.20

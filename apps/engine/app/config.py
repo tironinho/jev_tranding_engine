@@ -57,6 +57,8 @@ class CombinationConfig:
     openai_rule_version: str = "openai_jev_break_size_v1"
     failure_policy: str = "NO_TRADE"
     jev_request_profile: str = "plan_outcome_v3"
+    # Input representation is independent from veto, sizing and exit policy.
+    jev_input_profile: str = "legacy"
     min_trend_continuation: float = 0.55
     min_short_continuation: float = 0.55
     candidate_min_abs_score: float = 0.15
@@ -212,6 +214,7 @@ def combination_from_file(payload: dict) -> CombinationConfig:
         openai_rule_version=payload.get("openai_rule_version", "openai_jev_break_size_v1"),
         failure_policy=payload.get("failure_policy", "NO_TRADE"),
         jev_request_profile=payload.get("jev_request_profile", "plan_outcome_v3"),
+        jev_input_profile=payload.get("jev_input_profile", "legacy"),
         min_trend_continuation=float(payload.get("min_trend_continuation", 0.55)),
         min_short_continuation=float(payload.get("min_short_continuation", 0.55)),
         candidate_min_abs_score=float(payload.get("candidate_min_abs_score", 0.15)),

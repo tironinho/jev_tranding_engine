@@ -32,7 +32,8 @@ from app.domain.enums import (
     SignalStatus,
 )
 from app.domain.schemas import MarketSnapshot, StrategyDecision
-from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
+from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, SIMPLE_MARKET_INPUT, SIMPLE_MARKET_PROMPT, JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
+from app.providers.jev.simple import observation_plan, state_for_model as simple_state
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
@@ -130,7 +131,11 @@ class BaselineJevStrategy:
             "baseline_action": result.action.value,
             "combination_rule_version": context.combination.jev_rule_version,
         }
-        _stamp_binance_agent(metadata, context.intelligence)
+        simple_input = context.combination.jev_input_profile == SIMPLE_MARKET_INPUT
+        if simple_input:
+            metadata["jev_input_profile"] = SIMPLE_MARKET_INPUT
+        else:
+            _stamp_binance_agent(metadata, context.intelligence)
         context_candidate = False
         live_context_shadow = False
         baseline_result = result
@@ -164,6 +169,10 @@ class BaselineJevStrategy:
             result = replace(result, action=candidate_action)
         request = _jev_request(context, snapshot, result)
         metadata["jev_trade_plan"] = request.trade_plan
+        if simple_input:
+            metadata.update(jev_input_profile=SIMPLE_MARKET_INPUT,
+                            jev_observation_plan=request.observation_plan,
+                            probability_status="UNCALIBRATED")
         if request.trade_plan and not request.trade_plan.get("eligible", True):
             return _decision(context=context, snapshot=snapshot, strategy=self.key,
                 action=Action.NO_TRADE, confidence=result.confidence,
@@ -177,7 +186,18 @@ class BaselineJevStrategy:
                 action=Action.NO_TRADE, confidence=0, reasons=["TRADE_PLAN_UNAVAILABLE"],
                 metadata={**metadata, "jev_effect": "idle"}, model_version=result.version,
                 prompt_version=request.prompt_version, started=started)
-        blocked = _quality_gate(context, snapshot, metadata, started, self.key)
+        if simple_input:
+            try:
+                simple_state(request.model_dump(mode="json"))
+            except JevProviderError as exc:
+                return _decision(context=context, snapshot=snapshot, strategy=self.key,
+                    action=Action.NO_TRADE, confidence=result.confidence,
+                    reasons=["JEV_INPUT_UNAVAILABLE"],
+                    metadata={**metadata, "jev_effect": "not_called", "input_error": str(exc)},
+                    model_version=result.version, prompt_version=request.prompt_version, started=started)
+        # This input profile uses exchange observations only; missing external
+        # feeds cannot veto evidence which is not sent to the provider.
+        blocked = None if simple_input else _quality_gate(context, snapshot, metadata, started, self.key)
         if blocked is not None:
             return _force_live_context_shadow(blocked, baseline_result) if live_context_shadow else blocked
         if (context.risk and context.risk.dynamic_rr_enabled
@@ -341,7 +361,11 @@ async def _dynamic_decision(context, snapshot, result, metadata, started):
     deferred: list[str] = []
 
     async def assess(plan):
-        request = _jev_request(context, snapshot, result).model_copy(update={"trade_plan": dict(plan)})
+        updates = {"trade_plan": dict(plan)}
+        if context.combination.jev_input_profile == SIMPLE_MARKET_INPUT:
+            updates["observation_plan"] = observation_plan(snapshot, result.action, context.risk,
+                                                            context.round_trip_fee, plan)
+        request = _jev_request(context, snapshot, result).model_copy(update=updates)
         try:
             assessment = await _evaluate_jev(context, request, metadata)
         except JevShadowDeferred as exc:
@@ -649,6 +673,8 @@ def _stamp_binance_agent(metadata: dict, intelligence: dict | None) -> None:
 
 
 def jev_prompt_version(combination: CombinationConfig, risk, provider) -> str:
+    if combination.jev_input_profile == SIMPLE_MARKET_INPUT:
+        return SIMPLE_MARKET_PROMPT
     profile = combination.jev_request_profile
     if profile == "plan_outcome_v3":
         return getattr(provider, "prompt_version", "jev_plan_outcome_v3")
@@ -683,6 +709,7 @@ def _jev_request(
                     "horizon_minutes": context.risk.max_hold_minutes,
                     "round_trip_fee_rate": context.round_trip_fee}
     is_context_candidate = "BELOW_THRESHOLD" in result.reason_codes
+    simple_input = context.combination.jev_input_profile == SIMPLE_MARKET_INPUT
     return JevMarketRequest(
         prompt_version=jev_prompt_version(context.combination, context.risk, context.jev),
         evaluation_profile=context.combination.jev_request_profile,
@@ -699,8 +726,10 @@ def _jev_request(
         baseline_threshold=context.weights.min_abs_score if is_context_candidate else None,
         candidate_threshold=context.combination.candidate_min_abs_score if is_context_candidate else None,
         market_state=market_state,
-        intelligence=context.intelligence,
+        intelligence=None if simple_input else context.intelligence,
         trade_plan=plan,
+        observation_plan=(observation_plan(snapshot, result.action, context.risk,
+                            context.round_trip_fee, plan) if simple_input else None),
     )
 
 

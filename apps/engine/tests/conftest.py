@@ -59,6 +59,7 @@ def market_range_engine(**overrides) -> TradingEngine:
     eng = TradingEngine(settings(**overrides))
     eng.weights = replace(eng.weights, version="baseline_first_ten_v2")
     eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v2",
+        jev_input_profile="legacy",
         jev_rule_version="jev_market_range_v5", review_below_threshold=True,
         paper_policy_comparison=True)
     eng.risk.update_limits(cost_aware_target_floor=True, market_range_plans=True,

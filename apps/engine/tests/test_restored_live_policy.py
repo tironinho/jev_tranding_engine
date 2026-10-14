@@ -1,4 +1,4 @@
-"""Repository defaults must select a15bc12 without restoring execution defects."""
+"""The historical policy remains explicit and retains execution fixes."""
 import json
 from dataclasses import replace
 from datetime import timedelta
@@ -17,14 +17,16 @@ from tests.conftest import clock, long_snapshot, settings
 from tests.test_initial_live_profile import AssessmentProvider, context
 from tests.test_risk_limits import _context
 from tests.test_runtime import _open
+from tests.test_first_ten_live_profile import first_ten_engine
 
 
-def test_repository_defaults_and_status_select_the_historical_policy():
-    eng = TradingEngine(settings())
+def test_historical_policy_remains_available_with_execution_fixes():
+    eng = first_ten_engine()
     assert eng.status()["decision_policy"] == {
         "baseline_version": "baseline_first_ten_v1", "baseline_threshold": .45,
         "jev_rule_version": "jev_break_size_v1",
         "request_profile": "live_first_ten_2026_10_09",
+        "input_profile": "legacy",
         "prompt_version": FIRST_TEN_HISTORICAL_PROMPT,
         "target_rule_version": "live_first_ten_2026_10_09", "min_net_rr": 1.5,
         "cost_aware_target_floor": False, "market_range_plans": False,
@@ -39,7 +41,7 @@ def test_repository_defaults_and_status_select_the_historical_policy():
 
 @pytest.mark.asyncio
 async def test_small_hour_range_reaches_jev_once_but_still_fails_execution_economics():
-    eng = TradingEngine(settings())
+    eng = first_ten_engine()
     snapshot, book = long_snapshot(atr=.01, range_60m=.1, range_60m_frac=.001)
     assert score_baseline(snapshot, eng.weights).action is Action.LONG
     provider = AssessmentProvider(.9)
@@ -70,7 +72,7 @@ async def test_default_does_not_send_rejected_baseline_for_shadow_research():
 
 @pytest.mark.asyncio
 async def test_restored_wire_contract_is_compact_and_preserves_raw_answers():
-    eng = TradingEngine(settings())
+    eng = first_ten_engine()
     snapshot, _ = long_snapshot(taker_flow_1m=.3, return_60m=.01, range_60m_frac=.3)
     capture = AssessmentProvider(.43)
     await BaselineJevStrategy().evaluate(snapshot, snapshot.features, context(eng, snapshot, capture))

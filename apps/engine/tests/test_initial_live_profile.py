@@ -22,7 +22,7 @@ def initial_engine():
     eng = TradingEngine(settings())
     eng.weights = BaselineWeightConfig(version="baseline_weights_v1", min_abs_score=.45)
     eng.combination = replace(eng.combination, jev_request_profile="initial_live_2026_10_08",
-        min_short_continuation=.55)
+        jev_input_profile="legacy", min_short_continuation=.55)
     eng.risk.update_limits(target_rule_version="initial_live_2026_10_08", cost_aware_target_floor=False,
                           market_range_plans=False, max_hold_minutes=60)
     eng.risk_limits = eng.risk.limits

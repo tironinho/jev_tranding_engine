@@ -34,7 +34,7 @@ from app.domain.enums import (
     MarketType,
 )
 from app.domain.mathutil import round_down_to_step, round_up_to_step
-from app.risk.executable import minimum_executable_quantity
+from app.risk.executable import minimum_executable_quantity, minimum_trade_room
 from app.domain.schemas import MarketSnapshot, RiskDecision, StrategyDecision, TradeEconomics
 from app.execution.slippage import SlippageConfig, simulate_fill
 from app.market.state import OrderBook
@@ -376,6 +376,17 @@ class RiskEngine:
                     return self._reject(decision, ["EXIT_BELOW_MIN_NOTIONAL"], details={
                         "exit_notional": exit_notional, "required_exit_notional": floor * 1.01,
                     })
+        # A larger minimum order can fill at a different book level. Recheck
+        # budgets at that price and use its final notional in all economics.
+        notional = entry * qty
+        required_qty = self._needed_quantity(entry, geometry, decision.action, floor, entry_rate, context)
+        minimum_notional = entry * required_qty if required_qty is not None else 0.0
+        room, limiting_reason = self._capital_room(context, entry_rate, minimum_notional)
+        if notional > room + 1e-6:
+            return self._reject(decision, [limiting_reason], details={
+                "order_notional": notional, "available_notional": room,
+                "required_notional": minimum_notional,
+            })
         periods = funding_periods(self.limits)
         funding_rate = snapshot.features.get("funding_rate")
         funding_rate_f = float(funding_rate) if isinstance(funding_rate, (int, float)) else None
@@ -443,6 +454,12 @@ class RiskEngine:
                     and context.open_positions >= self.limits.max_open_positions),
                 "quantity_capped": qty + 1e-12 < ideal,
                 "notional_fraction": notional / context.equity,
+                "minimum_allocation_used": (
+                    self.limits.max_trade_notional_fraction > 0
+                    and notional > context.equity * self.limits.max_trade_notional_fraction + 1e-6
+                ),
+                "minimum_executable_notional": minimum_notional,
+                "max_minimum_trade_notional_fraction": self.limits.max_minimum_trade_notional_fraction,
                 "net_target_return": net_target_return,
                 "capital_limiting_reason": self._capital_reason(context, entry_rate),
                 "slippage_model": preview.model,
@@ -594,12 +611,11 @@ class RiskEngine:
         symbol_room = self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) - context.symbol_exposure_notional
         total_room = self._notional_ceiling(context.equity, self.limits.max_total_exposure) - context.total_exposure_notional
         cash_room = context.cash * self._leverage() / (1 + max(entry_fee_rate, 0.0))
-        trade_room = (context.equity * self.limits.max_trade_notional_fraction
-                      - context.symbol_exposure_notional
-                      if self.limits.max_trade_notional_fraction > 0 else float("inf"))
-        # Only the per-trade fraction yields, and only up to the exchange minimum.
-        if minimum_trade_notional > trade_room:
-            trade_room = minimum_trade_notional
+        trade_room = minimum_trade_room(
+            context.equity, self.limits.max_trade_notional_fraction,
+            self.limits.max_minimum_trade_notional_fraction,
+            context.symbol_exposure_notional, minimum_trade_notional,
+        )
         portfolio_room = (context.equity * self.limits.max_portfolio_notional_fraction
                           - context.total_exposure_notional
                           if self.limits.max_portfolio_notional_fraction > 0 else float("inf"))

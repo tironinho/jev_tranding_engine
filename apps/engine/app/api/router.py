@@ -58,6 +58,7 @@ class RiskPatch(BaseModel):
     max_open_positions: int | None = Field(default=None, ge=0)
     max_symbol_exposure: float | None = None
     max_total_exposure: float | None = None
+    max_minimum_trade_notional_fraction: float | None = Field(default=None, ge=0, le=1)
     confirm: str = ""
 
 
@@ -408,6 +409,7 @@ async def risk_limits(request: Request) -> dict:
         "target_mode": limits.target_mode.value,
         "max_leverage": limits.max_leverage,
         "max_trade_notional_fraction": limits.max_trade_notional_fraction,
+        "max_minimum_trade_notional_fraction": limits.max_minimum_trade_notional_fraction,
         "max_portfolio_notional_fraction": limits.max_portfolio_notional_fraction,
         "min_net_target_return": limits.min_net_target_return,
         "entry_selection_mode": limits.entry_selection_mode,

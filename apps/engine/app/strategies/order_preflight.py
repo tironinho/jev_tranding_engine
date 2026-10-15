@@ -2,7 +2,7 @@
 import math
 from app.domain.enums import Action
 from app.domain.mathutil import round_down_to_step
-from app.risk.executable import minimum_executable_quantity
+from app.risk.executable import minimum_executable_quantity, minimum_trade_room
 
 
 def _number(value):
@@ -29,10 +29,11 @@ def order_preflight(plan, side, limits, rules, equity, fee_rate):
     required=minimum_executable_quantity(entry,stop,target,side,minimum,fee_rate,step)
     if required is None:
         return {**unknown,"reason":"PLAN_UNAVAILABLE"}
-    trade=equity*limits.max_trade_notional_fraction if limits.max_trade_notional_fraction>0 else math.inf
+    trade=minimum_trade_room(equity, limits.max_trade_notional_fraction,
+                             limits.max_minimum_trade_notional_fraction, 0, required*entry)
     # The per-trade fraction may rise to the entry and exit minimum. Stop risk
     # and the other ceilings stay hard, so this does not enlarge a normal order.
-    budget=min(min(hard), max(trade, required*entry))
+    budget=min(min(hard), trade)
     ceiling=budget*1.01
     qty=round_down_to_step(ceiling/entry,step)
     exit_qty=round_down_to_step(qty*(1-fee_rate if side is Action.LONG else 1),step)

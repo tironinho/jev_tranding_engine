@@ -7,6 +7,16 @@ from app.domain.enums import Action
 from app.domain.mathutil import round_down_to_step, round_up_to_step
 
 
+def minimum_trade_room(equity, fraction, minimum_fraction, exposure, required):
+    """Keep the ordinary symbol budget; extend only a first entry to its minimum."""
+    if fraction <= 0:
+        return math.inf
+    normal = equity * fraction - exposure
+    if exposure > 1e-9 or minimum_fraction <= 0:
+        return normal
+    return max(normal, min(required, equity * minimum_fraction))
+
+
 def _positive(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 

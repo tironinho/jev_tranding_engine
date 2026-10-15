@@ -130,6 +130,8 @@ class RiskLimits:
     max_open_positions: int = 0
     # Fractions of equity, never multiplied by leverage. Zero disables each cap.
     max_trade_notional_fraction: float = 0.0
+    # Ceiling for the exchange-minimum exception; zero disables the exception.
+    max_minimum_trade_notional_fraction: float = 0.40
     max_portfolio_notional_fraction: float = 0.0
     entry_selection_mode: str = "shadow"
     repeat_entry_interval_minutes: int = 5
@@ -305,6 +307,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         max_symbol_exposure=settings.max_symbol_exposure,
         max_open_positions=settings.max_open_positions,
         max_trade_notional_fraction=float(payload.get("max_trade_notional_fraction", 0)),
+        max_minimum_trade_notional_fraction=float(payload.get("max_minimum_trade_notional_fraction", 0.40)),
         max_portfolio_notional_fraction=float(payload.get("max_portfolio_notional_fraction", 0)),
         entry_selection_mode=str(payload.get("entry_selection_mode", "shadow")),
         repeat_entry_interval_minutes=int(payload.get("repeat_entry_interval_minutes", 5)),

@@ -79,6 +79,7 @@ EDITABLE_RISK = (
     "max_open_positions",
     "max_symbol_exposure",
     "max_total_exposure",
+    "max_minimum_trade_notional_fraction",
 )
 
 

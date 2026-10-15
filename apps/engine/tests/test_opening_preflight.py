@@ -100,3 +100,13 @@ def test_preflight_never_rewrites_limits_or_proposed_plan():
     order_preflight(plan,Action.SHORT,limits,dict(step_size=.001,min_notional=5),20,.001)
     assert plan==before
     assert limits.max_trade_notional_fraction==.3 and limits.min_net_rr==2
+
+
+@pytest.mark.parametrize("equity,possible", [(16, True), (12, False)])
+def test_preflight_respects_the_bounded_minimum_allocation(equity, possible):
+    limits = RiskLimits(max_trade_notional_fraction=.3, max_portfolio_notional_fraction=.8)
+    result = order_preflight(dict(entry=100, stop=100.5, target=98), Action.SHORT, limits,
+                             dict(step_size=.001, min_notional=5), equity, .001)
+    assert (result["status"] == "NOTIONAL_POSSIBLE") is possible
+    assert result["optimistic_notional_ceiling"] <= equity * .40 * 1.01 + 1e-9
+    assert not result["can_authorize"]

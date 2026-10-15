@@ -53,6 +53,8 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
         "breakout_5m": None, "breakdown_5m": None,
         "bullish_reclaim_5m": None, "bearish_reclaim_5m": None,
         "retest_long_5m": None, "retest_short_5m": None,
+        "retest_long_level_5m": None, "retest_short_level_5m": None,
+        "reclaim_sustained_long_5m": None, "reclaim_sustained_short_5m": None,
         "extension_above_resistance_5m_atr": None,
         "extension_below_support_5m_atr": None,
     }
@@ -68,6 +70,7 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
     breakout = last > prior_high
     breakdown = last < prior_low
     bullish = bearish = False
+    sustained_long = sustained_short = False
     if len(candles) >= 22:
         window = min(5, len(candles) - 20)
         reference_high = max(highs[-(20 + window):-window])
@@ -80,21 +83,37 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
             max(highs[-window:]) > reference_high and last < opens[-1]
             and last < reference_high and last < closes[-2]
         )
+        sustained_long = bullish and closes[-2] > reference_low
+        sustained_short = bearish and closes[-2] < reference_high
     atr_ok = isinstance(atr_value, (int, float)) and not isinstance(atr_value, bool) and atr_value > 0
     extension_up = extension_down = None
     retest_long = retest_short = None
+    retest_long_level = retest_short_level = None
     if atr_ok:
+        retest_long = retest_short = False
         extension_up = (last - prior_high) / atr_value
         extension_down = (prior_low - last) / atr_value
-        earlier = closes[-_RETEST_LOOKBACK:-1]
-        retest_long = bool(breakout and any(close > prior_high for close in earlier)
-                           and extension_up <= _RETEST_PROXIMITY_ATR)
-        retest_short = bool(breakdown and any(close < prior_low for close in earlier)
-                            and extension_down <= _RETEST_PROXIMITY_ATR)
+        # Freeze the level that existed before the break. The latest rolling
+        # high includes that break and can never be below an earlier close.
+        for i in range(max(20, len(candles) - _RETEST_LOOKBACK), len(candles) - 1):
+            level_up = max(highs[i-20:i])
+            level_down = min(lows[i-20:i])
+            if (closes[i] > level_up and all(c >= level_up for c in closes[i:-1])
+                    and lows[-1] <= level_up + _RETEST_PROXIMITY_ATR * atr_value
+                    and last > level_up and (last-level_up)/atr_value <= _RETEST_PROXIMITY_ATR):
+                retest_long = True
+                retest_long_level = level_up
+            if (closes[i] < level_down and all(c <= level_down for c in closes[i:-1])
+                    and highs[-1] >= level_down - _RETEST_PROXIMITY_ATR * atr_value
+                    and last < level_down and (level_down-last)/atr_value <= _RETEST_PROXIMITY_ATR):
+                retest_short = True
+                retest_short_level = level_down
     return {
         "resistance_5m": prior_high, "support_5m": prior_low,
         "breakout_5m": breakout, "breakdown_5m": breakdown,
         "bullish_reclaim_5m": bullish, "bearish_reclaim_5m": bearish,
+        "retest_long_level_5m": retest_long_level, "retest_short_level_5m": retest_short_level,
+        "reclaim_sustained_long_5m": sustained_long, "reclaim_sustained_short_5m": sustained_short,
         "retest_long_5m": retest_long, "retest_short_5m": retest_short,
         "extension_above_resistance_5m_atr": extension_up,
         "extension_below_support_5m_atr": extension_down,

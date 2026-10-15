@@ -6,11 +6,16 @@ import math
 def selection_review(details):
     groups = defaultdict(list)
     excluded = Counter()
+    variants = defaultdict(list)
     for d in details:
         if not d or not d.get("trade"):
             excluded["DETAIL_OR_TRADE_MISSING"] += 1
             continue
         trade=d["trade"]; md=d["decision"].get("metadata") or {}
+        roles = md.get("role_baseline") or {}
+        for name, variant in (roles.get("entry_variants") or {}).items():
+            key = (md.get("build_commit"), trade["side"], roles.get("version"), roles.get("setup"), name, variant.get("eligible"))
+            variants[key].append(trade)
         selection=(d.get("risk") or {}).get("details",{}).get("entry_selection") or md.get("entry_selection")
         if not selection or "would_accept" not in selection:
             excluded["SELECTION_NOT_RECORDED"] += 1
@@ -39,4 +44,7 @@ def selection_review(details):
             dict(n=len(rows),net=sum(d["trade"]["net_pnl"] for d in rows),fees=sum(d["trade"]["fees"] for d in rows),
                  calibration_n=len(probabilities),calibration_excluded=dict(calibration_excluded),
                  brier=sum((p-y)**2 for p,y in probabilities)/len(probabilities) if probabilities else None,reliability=buckets))
-    return dict(cohorts=result,excluded=dict(excluded),interpretation="OBSERVATIONAL_UNCALIBRATED_NOT_COUNTERFACTUAL")
+    variant_rows = [dict(zip(("build_commit", "side", "version", "setup", "variant", "eligible"), key)) |
+                    dict(n=len(rows), net=sum(t["net_pnl"] for t in rows), fees=sum(t["fees"] for t in rows))
+                    for key, rows in variants.items()]
+    return dict(cohorts=result,entry_variants=variant_rows,excluded=dict(excluded),interpretation="OBSERVATIONAL_UNCALIBRATED_NOT_COUNTERFACTUAL")

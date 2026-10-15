@@ -186,6 +186,8 @@ class PositionRecord(BaseModel):
     stop_client_order_id: str | None = None
     close_sequence: int = 0
     exit_processed: dict[str, float] = Field(default_factory=dict)
+    exit_observations: dict[str, dict] = Field(default_factory=dict)
+    exit_timing: dict = Field(default_factory=dict)
     protection_status: str = "UNKNOWN"
     protection_revision: int = 0
     protection_attempted_at: datetime | None = None
@@ -225,6 +227,7 @@ class TradeRecord(BaseModel):
     quantitative_regime: str | None = None
     market_regime: str | None = None
     mode: Literal["paper", "live"] = "paper"
+    exit_timing: dict = Field(default_factory=dict)
 
 
 class ConsensusResult(BaseModel):

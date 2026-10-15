@@ -390,6 +390,19 @@ class TradingEngine:
             # Check every fresh touch before slower label persistence can batch
             # quotes, so the paper comparison cannot miss a brief stop crossing.
             self.policy_paper.observe(symbol,self._policy_quote(symbol))
+        if state is not None:
+            received = utcnow().isoformat()
+            for account in self.accounts.accounts.values():
+                for position in account.positions.values():
+                    if position.symbol != symbol or position.mode != "live" or timestamp < position.opened_at:
+                        continue
+                    quote = state.best_bid if position.side is Action.LONG else state.best_ask
+                    if quote is None:
+                        continue
+                    for reason, touched in (("TARGET", quote >= position.target if position.side is Action.LONG else quote <= position.target),
+                                            ("STOP", quote <= position.stop if position.side is Action.LONG else quote >= position.stop)):
+                        if touched and reason not in position.exit_observations:
+                            position.exit_observations[reason] = {"event_at": timestamp.isoformat(), "received_at": received, "quote": quote}
         bucket = self._quotes.setdefault(symbol, [])
         bucket.append(
             {
@@ -416,6 +429,8 @@ class TradingEngine:
             batch = self._quotes.pop(symbol, [])
             if not batch:
                 continue
+            last = batch[-1]
+            await self.manage_positions(symbol, as_of=last["timestamp"], extreme=_extreme(batch))
             for point in batch:
                 finished = self.labeler.on_price(symbol, point["timestamp"], point["price"])
                 for item in finished:
@@ -424,8 +439,6 @@ class TradingEngine:
                     self.store.add_label(item["snapshot_id"], labels)
                     if self.postgres and self.postgres.healthy:
                         await self.postgres.save_label(str(item["snapshot_id"]), labels)
-            last = batch[-1]
-            await self.manage_positions(symbol, as_of=last["timestamp"], extreme=_extreme(batch))
 
     async def on_snapshot_trigger(self, symbol: str, as_of: datetime, trigger: str) -> None:
         if symbol in self._evaluating:
@@ -489,9 +502,11 @@ class TradingEngine:
             self.persistence_mode = "postgres" if recovered else "postgres_error"
         self.store.add_snapshot(snapshot)
         self.labeler.register(snapshot)
-        if self.postgres and self.postgres.healthy:
-            await self.postgres.save_snapshot(self.store.snapshots[str(snapshot.snapshot_id)])
-        pipeline_timings["snapshot_persist_ms"] = (time.perf_counter() - snapshot_started) * 1000
+        async def persist_snapshot():
+            if self.postgres and self.postgres.healthy:
+                await self.postgres.save_snapshot(self.store.snapshots[str(snapshot.snapshot_id)])
+            pipeline_timings["snapshot_persist_ms"] = (time.perf_counter() - snapshot_started) * 1000
+        snapshot_ready = asyncio.create_task(persist_snapshot())
         await self.bus.publish(Event("snapshot_created", {"snapshot_id": str(snapshot.snapshot_id), "symbol": snapshot.symbol}))
         opportunity_id = uuid4()
         correlation_id = uuid4()
@@ -503,8 +518,9 @@ class TradingEngine:
                 self.health[key]["status"] = "off"
                 continue
             active.append(key)
-            tasks.append(asyncio.create_task(self._run_strategy(key, snapshot, opportunity_id, correlation_id, pipeline_timings)))
+            tasks.append(asyncio.create_task(self._run_strategy(key, snapshot, opportunity_id, correlation_id, pipeline_timings, snapshot_ready)))
         raw = await asyncio.gather(*tasks, return_exceptions=True)
+        await snapshot_ready
         decisions: list[StrategyDecision] = []
         for key, result in zip(active, raw, strict=True):
             if isinstance(result, Exception):
@@ -566,7 +582,7 @@ class TradingEngine:
             self.policy_paper.running = False
             await self._save_policy_paper()
 
-    async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, pipeline_timings=None) -> StrategyDecision:
+    async def _run_strategy(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, pipeline_timings=None, snapshot_ready=None) -> StrategyDecision:
         started = time.perf_counter()
         decision, context, _budget_ms = await self._decide(key, snapshot, opportunity_id, correlation_id, started, waited_ms=0,
             pipeline_timings=pipeline_timings)
@@ -574,6 +590,9 @@ class TradingEngine:
         # account lock here serialized history writes for all five symbols and
         # delayed both entries and position management. Account mutations keep
         # their own lock in the execution/management paths.
+        if snapshot_ready is not None:
+            await snapshot_ready
+            decision.metadata.setdefault("pipeline_latency", {})["snapshot_persist_ms"] = pipeline_timings.get("snapshot_persist_ms")
         return await self._persist_strategy(key, snapshot, decision, context, started)
 
     async def _decide(self, key: str, snapshot: MarketSnapshot, opportunity_id, correlation_id, started: float, waited_ms: float,
@@ -1260,6 +1279,9 @@ class TradingEngine:
         )
 
     async def _exit_live(self, key: str, symbol: str, position, reason: str, as_of: datetime, state) -> None:
+        observed = position.exit_observations.get(reason)
+        position.exit_timing = {"reason": reason, "observed_touch": observed,
+                                "management_started_at": utcnow().isoformat()}
         tag = f"{symbol} decision={position.decision_id} position={position.position_id}"
         if reason == "PROTECTION_FAILED":
             now = utcnow()
@@ -1385,8 +1407,15 @@ class TradingEngine:
             book=state.book, fee_rate=position.exit_fee_rate, close_sequence=position.close_sequence)
         # The sequence is checkpointed with the position; ambiguous retries retain the ID.
         await self._checkpoint(key, positions=[position], orders=[], fills=[])
+        position.exit_timing["submitted_at"] = utcnow().isoformat()
+        position.exit_timing["management_to_submit_ms"] = max(0, (datetime.fromisoformat(position.exit_timing["submitted_at"]) - datetime.fromisoformat(position.exit_timing["management_started_at"])).total_seconds()*1000)
+        if observed:
+            position.exit_timing["touch_to_submit_ms"] = max(0, (utcnow() - datetime.fromisoformat(observed["received_at"])).total_seconds() * 1000)
         try:
             order = await self.live.submit_close(intent)
+            position.exit_timing["response_at"] = utcnow().isoformat()
+            position.exit_timing["submit_to_response_ms"] = max(0, (datetime.fromisoformat(position.exit_timing["response_at"]) - datetime.fromisoformat(position.exit_timing["submitted_at"])).total_seconds()*1000)
+            position.exit_timing["exchange_at"] = order.exchange_at.isoformat() if order.exchange_at else None
         except Exception as exc:
             position.protection_error = str(exc)
             self._log(
@@ -1467,6 +1496,7 @@ class TradingEngine:
                 if position.initial_stop is None:
                     position.initial_stop = position.stop
                 updated = stop.price if stop.price is not None else updated
+                position.exit_observations.pop("STOP", None)
                 position.stop = updated
                 stored = self.store.add_order(stop)
                 orders = [stored]
@@ -1481,6 +1511,7 @@ class TradingEngine:
                 return
         if position.initial_stop is None:
             position.initial_stop = position.stop
+        position.exit_observations.pop("STOP", None)
         position.stop = updated
         await self._checkpoint(key, positions=[position], orders=[], fills=[])
         self._log("stop", f"{key} {symbol} {updated:.8f}")
@@ -1523,6 +1554,7 @@ class TradingEngine:
             minimum = float(self.feed.rules.get(symbol, {}).get("min_notional") or self.risk.limits.min_order_notional)
             if remaining.quantity * exit_price < minimum:
                 remaining.protection_status = "RESIDUAL"
+        trade.exit_timing = dict(position.exit_timing)
         trade_payload = self.store.add_trade(trade)
         orders = []
         fills = []

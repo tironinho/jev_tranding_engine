@@ -15,7 +15,7 @@ import math
 
 from app.domain.enums import Action
 
-VERSION = "role_baseline_v1"
+VERSION = "role_baseline_v2"
 # The spread gate already published by the active baseline. Not a new cutoff.
 DEFAULT_SPREAD_LIMIT_BPS = 8.0
 # One ATR of travel past the 5m level. A unit conversion, not a fitted edge.
@@ -56,6 +56,11 @@ def assess_roles(side, features, *, stale: bool = False, spread_limit_bps: float
         "version": VERSION, "mode": "SHADOW", "can_authorize": False,
         "setup": setup, "context": context, "context_votes": context_votes,
         "structure_event": event, "eligible": eligible,
+        "entry_variants": {
+            "immediate": {"eligible": eligible},
+            "confirmed_retest": {"eligible": not filters and context == "ALIGNED" and event == "RETEST" and flow["persistent"] and not fading},
+            "sustained_reversal": {"eligible": not filters and reversal and features.get("reclaim_sustained_long_5m" if direction > 0 else "reclaim_sustained_short_5m") is True},
+        },
         "rank": _rank(event, flow, features, extension, fading),
         "extended": extended, "fading": fading,
         "participation": _participation(features),

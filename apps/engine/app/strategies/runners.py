@@ -456,7 +456,7 @@ async def _evaluate_jev(context, request, metadata):
         if context.jev_scheduler is not None:
             return await context.jev_scheduler.evaluate(context.jev, request,
                 shadow=metadata.get("jev_evaluation_mode") == "READ_ONLY_SHADOW",
-                deadline=context.evaluation_deadline)
+                deadline=context.evaluation_deadline, telemetry=metadata.setdefault("jev_timing", {}))
         return await asyncio.wait_for(context.jev.evaluate_market_state(request), timeout=8)
     finally:
         metadata["jev_elapsed_ms"] = (time.perf_counter() - started) * 1000

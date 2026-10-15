@@ -529,7 +529,7 @@ _ORDER_FIELDS = {
 }
 _ORDER_SIDES = {"BUY", "SELL"}
 _ORDER_TYPES = {"MARKET", "LIMIT", "STOP_LOSS_LIMIT"}
-_ORDER_EFFECTS = {"AUTO_BORROW_REPAY", "AUTO_REPAY"}
+_ORDER_EFFECTS = {"MARGIN_BUY", "AUTO_BORROW_REPAY", "AUTO_REPAY"}
 
 
 class MarginOrderBody(BaseModel):
@@ -577,6 +577,8 @@ async def binance_order(request: Request, body: MarginOrderBody) -> dict:
             raise HTTPException(400, "order")
         if params.get("sideEffectType") not in _ORDER_EFFECTS or params.get("isIsolated") != "FALSE":
             raise HTTPException(400, "margin")
+        if params.get("type") == "STOP_LOSS_LIMIT" and params.get("sideEffectType") != "AUTO_REPAY":
+            raise HTTPException(400, "protective orders must not borrow")
         if "quantity" not in params:
             raise HTTPException(400, "quantity")
     from app.execution.binance_live import LiveExecutionBlocked

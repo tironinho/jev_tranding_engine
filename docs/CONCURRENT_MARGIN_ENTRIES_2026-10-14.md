@@ -20,7 +20,7 @@ As travas de execução por conta continuam coordenando reserva de saldo, grava�
 
 ## Propriedade das posições e saídas
 
-O contexto de risco passa a identificar os sentidos das posições gerenciadas do símbolo. Na margem atual, entradas adicionais no mesmo sentido são permitidas. Uma entrada oposta usando `AUTO_BORROW_REPAY` compensaria a exposição existente em vez de criar uma posição independente com saldo para seu próprio stop; essa operação continua recusada como `OPPOSITE_POSITION_NETTING`. Isso não implementa hedge independente.
+O contexto de risco passa a identificar os sentidos das posições gerenciadas do símbolo. Na margem atual, entradas adicionais no mesmo sentido são permitidas. Entradas opostas a posições gerenciadas continuam recusadas como `OPPOSITE_POSITION_NETTING`; isso não implementa hedge independente. A correção de 15/10 usa `MARGIN_BUY` nas entradas para impedir que a quitação automática de dívidas anteriores consuma o saldo destinado ao stop. Fechamentos e stops mantêm `AUTO_REPAY`. Veja [o diagnóstico e a correção](MARGIN_ENTRY_PROTECTION_2026-10-15.md).
 
 O adaptador legado de futuros usa stop `closePosition=true`, que pode encerrar toda a exposição do símbolo. Ele não recebe autorização para empilhar entradas live como se cada stop fosse independente; a recusa explícita é `FUTURES_CLOSE_ALL_POSITION`. A produção de margem, que usa stops com quantidade própria, recebe a mudança solicitada.
 

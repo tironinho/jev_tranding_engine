@@ -106,7 +106,7 @@ async def test_margin_order_borrows_on_entry_and_never_withdraws():
     async with httpx.AsyncClient(transport=transport) as client:
         order = await BinanceExecutionProvider(cfg, client=client).submit(_intent())
     assert seen["path"] == "/sapi/v1/margin/order"
-    assert seen["effect"] == "AUTO_BORROW_REPAY"
+    assert seen["effect"] == "MARGIN_BUY"
     assert seen["isolated"] == "FALSE"
     assert order.filled_quantity == 0.01
 
@@ -119,7 +119,7 @@ async def test_oregon_relays_the_margin_order_to_singapore():
         seen["host"] = request.url.host
         seen["path"] = request.url.path
         body = json.loads(request.content)
-        assert body["params"]["sideEffectType"] == "AUTO_BORROW_REPAY"
+        assert body["params"]["sideEffectType"] == "MARGIN_BUY"
         assert "signature" not in body["params"]
         assert request.headers["authorization"] == "Bearer share"
         return httpx.Response(200, json={"status": "FILLED", "executedQty": "0.01", "cummulativeQuoteQty": "1"})

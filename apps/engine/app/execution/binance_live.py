@@ -66,7 +66,11 @@ class BinanceExecutionProvider:
             "newOrderRespType": "FULL",
         }
         if self._margin():
-            params["sideEffectType"] = "AUTO_BORROW_REPAY"
+            # Keep the received asset available for this entry's protection.
+            # AUTO_BORROW_REPAY can consume it to repay an older account debt,
+            # leaving less than the confirmed fill for the protective order.
+            # Repayment belongs to submit_close / the protective stop.
+            params["sideEffectType"] = "MARGIN_BUY"
             params["isIsolated"] = "FALSE"
         if intent.order_type is OrderType.LIMIT:
             params["timeInForce"] = "GTC"

@@ -2027,29 +2027,65 @@ class TradingEngine:
     async def _reconcile_external_flat(self, balance: dict) -> None:
         """Archive stale exposure after two independent debt-free margin readings.
 
-        Account balances establish flatness, not execution price or realized PnL.
-        The archived position remains durable with an explicit audit pending tag.
+        A fully flat account clears every live position. One principal-flat asset
+        clears only that symbol, so a manual close does not wait for the rest of
+        the book. Balances establish flatness, not execution price or realized PnL.
         """
-        flat = (self.settings.market_type == "margin" and balance.get("status") == "ok"
-                and (self.postgres is None or self.postgres.healthy)
-                and balance.get("total_liability_btc") == 0 and not self.pending_entries
-                and all(r.get("asset") == "USDT" or all(abs(float(r.get(k) or 0)) <= 1e-12
-                    for k in ("total", "free", "locked", "borrowed", "interest"))
-                    for r in balance.get("assets", [])))
         observed = balance.get("observed_at")
         now = utcnow()
-        if not flat or not isinstance(observed, (int, float)) or not 0 <= now.timestamp() - observed <= 15:
+        fresh = (self.settings.market_type == "margin" and balance.get("status") == "ok"
+                 and (self.postgres is None or self.postgres.healthy) and not self.pending_entries
+                 and isinstance(observed, (int, float)) and 0 <= now.timestamp() - observed <= 15)
+        if not fresh:
             self._flat_margin_observed = None
+            self._flat_asset_observed = {}
             return
-        previous = getattr(self, "_flat_margin_observed", None)
-        self._flat_margin_observed = observed
-        if previous is None or observed - previous < 5:
+        assets = balance.get("assets") if isinstance(balance.get("assets"), list) else []
+        whole = (balance.get("total_liability_btc") == 0 and all(
+            row.get("asset") == "USDT" or all(abs(float(row.get(k) or 0)) <= 1e-12
+            for k in ("total", "free", "locked", "borrowed", "interest")) for row in assets))
+        if whole:
+            previous = getattr(self, "_flat_margin_observed", None)
+            self._flat_margin_observed = observed
+            if previous is not None and observed - previous >= 5:
+                await self._archive_flat_positions(now, observed, symbols=None)
             return
+        self._flat_margin_observed = None
+        if not any(row.get("asset") == "USDT" for row in assets):
+            self._flat_asset_observed = {}
+            return
+        present = {row.get("asset"): row for row in assets if row.get("asset") and row.get("asset") != "USDT"}
+        seen = getattr(self, "_flat_asset_observed", None)
+        if not isinstance(seen, dict):
+            seen = {}
+        confirmed: set[str] = set()
+        retained: dict[str, float] = {}
+        for account in self.accounts.accounts.values():
+            for position in account.positions.values():
+                if position.mode != "live":
+                    continue
+                asset = base_asset(position.symbol)
+                row = present.get(asset)
+                principal_flat = row is None or all(abs(float(row.get(k) or 0)) <= 1e-12
+                                                    for k in ("total", "free", "locked", "borrowed"))
+                if not principal_flat:
+                    continue
+                previous = seen.get(asset)
+                retained[asset] = observed
+                if isinstance(previous, (int, float)) and observed - previous >= 5:
+                    confirmed.add(position.symbol)
+        self._flat_asset_observed = retained
+        if confirmed:
+            await self._archive_flat_positions(now, observed, symbols=confirmed)
+
+    async def _archive_flat_positions(self, now, observed: float, symbols: set[str] | None) -> None:
         for key, account in self.accounts.accounts.items():
             async with self._locks[key]:
                 if self.pending_entries:
                     return
                 for identity, position in list(account.positions.items()):
+                    if symbols is not None and position.symbol not in symbols:
+                        continue
                     if position.mode != "live" or (now - position.opened_at).total_seconds() < 120:
                         continue
                     if position.stop_client_order_id:

@@ -626,6 +626,31 @@ async def test_external_reconciliation_never_archives_unverified_balance(change,
 
 
 @pytest.mark.asyncio
+async def test_one_flat_asset_is_archived_while_another_position_stays(monkeypatch):
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(market_type="margin")
+    xrp = _open(eng, symbol="XRPUSDT", quantity=4.1, mode="live", stop_client_order_id=None,
+                opened_at=clock()-timedelta(days=1))
+    xrp.protection_status = "RECOVERY_EXHAUSTED"
+    sol = _open(eng, symbol="SOLUSDT", quantity=0.052, mode="live", stop_client_order_id=None,
+                opened_at=clock()-timedelta(days=1))
+    eng.live.submit_close = AsyncMock()
+    balance = {"status": "ok", "total_liability_btc": 0.01, "observed_at": clock().timestamp()-10,
+               "assets": [{"asset": "USDT", "total": 20, "free": 20},
+                          {"asset": "SOL", "total": 0.05269, "free": 0.00069, "locked": 0.052, "borrowed": 0},
+                          {"asset": "XRP", "total": 0, "free": 0, "locked": 0, "borrowed": 0, "interest": 0.3}]}
+    await eng._reconcile_external_flat(balance)
+    assert str(xrp.position_id) in eng.accounts.accounts["baseline"].positions
+    await eng._reconcile_external_flat({**balance, "observed_at": clock().timestamp()})
+    positions = eng.accounts.accounts["baseline"].positions
+    assert str(xrp.position_id) not in positions
+    assert str(sol.position_id) in positions
+    assert xrp.protection_status == "EXTERNAL_CLOSED_PENDING_AUDIT"
+    assert not eng.accounts.accounts["baseline"].trades
+    eng.live.submit_close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_external_reconciliation_checkpoint_failure_keeps_position_blocking(monkeypatch):
     monkeypatch.setattr("app.service.utcnow", clock)
     eng = engine(market_type="margin")

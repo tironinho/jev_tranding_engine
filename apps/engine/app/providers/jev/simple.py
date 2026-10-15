@@ -50,6 +50,39 @@ def _present(**values):
     return {key: value for key, value in values.items() if value is not None}
 
 
+def evidence_from_features(features):
+    """Same observations the baseline already computed, without calling JEV."""
+    features = features or {}
+    alignment = _bounded(features.get("ema_alignment"), -1, 1)
+    atr_fraction = _positive(features.get("atr_normalized"))
+    price = _positive(features.get("close")) or _positive(features.get("price"))
+    span = _positive(features.get("range_60m_frac"))
+    if span is None and price and _positive(features.get("range_60m")):
+        span = features["range_60m"] / price
+    pct = lambda value: _finite(value * 100) if value is not None else None
+    up, down = features.get("breakout"), features.get("breakdown")
+    event = ("UNKNOWN" if up is True and down is True else "BREAKOUT" if up is True
+             else "BREAKDOWN" if down is True else "NONE" if up is False and down is False else "UNKNOWN")
+    volume = _finite(features.get("volume_ratio"))
+    spread = _finite(features.get("spread_bps"))
+    return {
+        "trend": _present(ema_alignment=alignment, ema20_slope_5m_pct=pct(_finite(features.get("ema_20_slope"))),
+                          price_vs_ema20_15m_pct=pct(_finite(features.get("price_vs_ema20_15m"))),
+                          context_15m_slope_pct=pct(_finite(features.get("context_15m_slope"))),
+                          distance_to_vwap_pct=pct(_finite(features.get("distance_to_vwap")))),
+        "momentum": _present(rsi_14=_bounded(features.get("rsi"), 0, 100), roc_10m_pct=pct(_finite(features.get("roc"))),
+                             return_5m_pct=pct(_finite(features.get("return_5m"))),
+                             return_15m_pct=pct(_finite(features.get("return_15m"))),
+                             return_60m_pct=pct(_finite(features.get("return_60m")))),
+        "volume": _present(relative_to_previous_20m=volume if volume is not None and volume >= 0 else None),
+        "flow": _present(taker_1m=_bounded(features.get("taker_flow_1m"), -1, 1),
+                         taker_5m=_bounded(features.get("taker_flow_5m"), -1, 1)),
+        "structure": _present(event=event),
+        "volatility": _present(atr_14_pct=pct(atr_fraction), range_60m_pct=pct(span)),
+        "liquidity": _present(spread_bps=spread if spread is not None and spread >= 0 else None),
+    }
+
+
 def observation_plan(snapshot, side, limits, round_trip_fee, execution_plan=None):
     """Describe existing geometry; never fit a target, size or authorize an order."""
     if limits is None:

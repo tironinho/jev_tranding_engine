@@ -222,6 +222,16 @@ class PostgresMirror:
                 for call in calls:
                     if call.decision_id is not None:
                         by_decision[call.decision_id].append(call)
+                snapshot_ids = list({row.snapshot_id for row in decisions})
+                snapshots = list((await session.execute(
+                    select(MarketSnapshotRow).where(MarketSnapshotRow.id.in_(snapshot_ids))
+                )).scalars().all())
+                features_by_id = {}
+                for snap in snapshots:
+                    payload = snap.payload or {}
+                    features = payload.get("features") if isinstance(payload, dict) else None
+                    if isinstance(features, dict):
+                        features_by_id[snap.id] = features
                 rows = []
                 for decision in decisions:
                     decision_calls = by_decision.get(decision.id) or [None]
@@ -232,6 +242,7 @@ class PostgresMirror:
                             "decision_id": str(decision.id),
                             "snapshot_id": str(decision.snapshot_id),
                             **payload,
+                            "snapshot_features": features_by_id.get(decision.snapshot_id),
                         },
                         "decision": decision.payload or {},
                         })

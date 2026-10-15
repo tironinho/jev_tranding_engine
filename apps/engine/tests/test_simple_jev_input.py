@@ -286,6 +286,33 @@ async def test_veto_and_below_threshold_are_not_replaced_by_the_new_payload():
     assert decision.metadata["jev_effect"] == "idle"
 
 
+def test_snapshot_features_fill_evidence_the_jev_request_left_out():
+    eng = TradingEngine(settings())
+    call = {"decision_id": "partial", "snapshot_features": {
+        "taker_flow_1m": -.42, "context_15m_slope": -.002, "return_60m": .015, "ema_alignment": 1}}
+    decision = {"action": "NO_TRADE", "metadata": {}, }
+    sent = {"evidence": {"trend": {"ema_alignment": -1}}}
+    call["response"] = {"sent_request": {"state": sent}}
+    review = eng._format_jev_reviews([(call, decision)], 1)[0]
+    assert review["state"]["evidence"]["trend"]["ema_alignment"] == -1
+    assert review["state"]["evidence"]["flow"]["taker_1m"] == -.42
+    assert review["state"]["evidence"]["trend"]["context_15m_slope_pct"] == pytest.approx(-.2)
+    assert review["state"]["evidence"]["momentum"]["return_60m_pct"] == pytest.approx(1.5)
+
+
+def test_review_without_a_jev_call_still_shows_the_snapshot_observations():
+    eng = TradingEngine(settings())
+    decision = {"action": "NO_TRADE", "confidence": .2, "symbol": "ETHUSDT",
+                "metadata": {"baseline_action": "NO_TRADE", "jev_effect": "idle",
+                             "exchange_evidence": {"flow": {"taker_1m": -.2, "taker_5m": -.1},
+                                                   "trend": {"context_15m_slope_pct": -.3},
+                                                   "momentum": {"return_60m_pct": 1.2}}}}
+    review = eng._format_jev_reviews([({"decision_id": "idle"}, decision)], 1)[0]
+    assert review["state"]["evidence"]["flow"]["taker_1m"] == -.2
+    assert review["state"]["evidence"]["trend"]["context_15m_slope_pct"] == -.3
+    assert review["state"]["evidence"]["momentum"]["return_60m_pct"] == 1.2
+
+
 def test_review_exposes_baseline_strength_without_adding_it_to_the_provider_state():
     eng = TradingEngine(settings())
     sent_state = {"candidate_side": "SHORT", "evidence": {"trend": {"ema_alignment": -1}}}

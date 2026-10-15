@@ -34,6 +34,7 @@ from app.domain.enums import (
     MarketType,
 )
 from app.domain.mathutil import round_down_to_step, round_up_to_step
+from app.risk.executable import minimum_executable_quantity
 from app.domain.schemas import MarketSnapshot, RiskDecision, StrategyDecision, TradeEconomics
 from app.execution.slippage import SlippageConfig, simulate_fill
 from app.market.state import OrderBook
@@ -297,23 +298,22 @@ class RiskEngine:
             entry = preview.estimated_fill_price
         qty = preview.filled_quantity
         floor = self._min_notional(context)
-        if entry * abs(qty) + 1e-9 < floor:
-            # Never lift a margin short back above the quantity whose stop can
-            # be funded. A minimum-sized entry without a fundable stop is not
-            # an executable trade.
-            if protection_cap is not None and protection_cap * entry + 1e-9 < floor:
-                return self._reject(
-                    decision,
-                    [INSUFFICIENT_PROTECTION_BALANCE],
-                    details=self._protection_details(
-                        context, entry, geometry.stop, exit_rate, protection_cap
-                    ),
-                )
-            lifted = self._lift_to_notional(floor, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book)
+        needed = self._needed_quantity(entry, geometry, decision.action, floor, entry_rate, context)
+        if needed is not None and qty + 1e-12 < needed:
+            # The per-trade fraction may rise to this exchange minimum. The
+            # stop-risk limit, portfolio budget, symbol cap and cash do not.
+            blocked = self._reject_unfunded_minimum(
+                decision, context, needed, qty, entry, geometry.stop, floor, entry_rate, exit_rate, protection_cap
+            )
+            if blocked is not None:
+                return blocked
+            lifted = self._lift_to_notional(needed, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book)
             if lifted is None:
-                room, limiting_reason = self._capital_room(context, entry_rate)
+                room, limiting_reason = self._capital_room(
+                    context, entry_rate, minimum_trade_notional=entry * needed
+                )
                 return self._reject(decision, [ORDER_BELOW_MIN_NOTIONAL], details={
-                    "order_notional": entry * abs(qty), "required_notional": floor,
+                    "order_notional": entry * abs(qty), "required_notional": entry * needed,
                     "available_notional": room, "capital_limiting_reason": limiting_reason,
                 })
             preview, entry = lifted
@@ -345,9 +345,37 @@ class RiskEngine:
             lowest_price = min(entry, geometry.target, geometry.stop * 0.998)
             exit_notional = exit_quantity * lowest_price
             if exit_notional + 1e-9 < floor * 1.01:
-                return self._reject(decision, ["EXIT_BELOW_MIN_NOTIONAL"], details={
-                    "exit_notional": exit_notional, "required_exit_notional": floor * 1.01,
-                })
+                needed = minimum_executable_quantity(
+                    entry, geometry.stop, geometry.target, decision.action, floor, entry_rate, context.step_size
+                )
+                if needed is not None and qty + 1e-12 < needed:
+                    blocked = self._reject_unfunded_minimum(
+                        decision, context, needed, qty, entry, geometry.stop, floor, entry_rate, exit_rate, protection_cap
+                    )
+                    if blocked is not None:
+                        return blocked
+                    lifted = self._lift_to_notional(
+                        needed, entry, geometry.stop, context, entry_rate, exit_rate, side_book, snapshot, book
+                    )
+                    if lifted is not None:
+                        preview, candidate_entry = lifted
+                        plan = decision.metadata.get("jev_trade_plan")
+                        if plan and abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
+                            return self._reject(decision, ["JEV_PLAN_CHANGED"], details={
+                                "assessed_entry": plan["entry"], "estimated_entry": candidate_entry,
+                                "price_drift": abs(candidate_entry / float(plan["entry"]) - 1),
+                                "max_price_drift": 0.001, "stop": geometry.stop, "target": geometry.target,
+                            })
+                        entry, qty = candidate_entry, preview.filled_quantity
+                        exit_quantity = qty * (1 - entry_rate if decision.action is Action.LONG else 1)
+                        if context.step_size:
+                            exit_quantity = round_down_to_step(exit_quantity, context.step_size)
+                        lowest_price = min(entry, geometry.target, geometry.stop * 0.998)
+                        exit_notional = exit_quantity * lowest_price
+                if exit_notional + 1e-9 < floor * 1.01:
+                    return self._reject(decision, ["EXIT_BELOW_MIN_NOTIONAL"], details={
+                        "exit_notional": exit_notional, "required_exit_notional": floor * 1.01,
+                    })
         periods = funding_periods(self.limits)
         funding_rate = snapshot.features.get("funding_rate")
         funding_rate_f = float(funding_rate) if isinstance(funding_rate, (int, float)) else None
@@ -504,21 +532,53 @@ class RiskEngine:
             floor = context.min_notional
         return floor
 
-    def _lift_to_notional(self, floor, entry, stop, context, entry_rate, exit_rate, side, snapshot, book):
+    def _needed_quantity(self, entry, geometry, side, floor, entry_rate, context):
         if entry <= 0:
             return None
+        executable = None
+        if context.live_requested and context.market_type in {MarketType.MARGIN.value, "spot"}:
+            executable = minimum_executable_quantity(
+                entry, geometry.stop, geometry.target, side, floor, entry_rate, context.step_size
+            )
+        if executable is not None:
+            return executable
         needed = floor / entry
         if context.step_size:
             needed = round_up_to_step(needed, context.step_size)
-        lifted = self._fit_to_capital(needed, entry, context, entry_rate)
-        if lifted <= 0 or entry * lifted + 1e-9 < floor:
+        return needed
+
+    def _planned_stop_cash(self, qty, entry, stop, entry_rate, exit_rate) -> float:
+        return abs(entry - stop) * qty + entry * qty * entry_rate + abs(stop) * qty * exit_rate
+
+    def _reject_unfunded_minimum(self, decision, context, needed, qty, entry, stop, floor, entry_rate, exit_rate, protection_cap):
+        # A minimum-sized entry without a fundable stop is not an executable trade.
+        if protection_cap is not None and protection_cap + 1e-12 < needed:
+            return self._reject(
+                decision,
+                [INSUFFICIENT_PROTECTION_BALANCE],
+                details=self._protection_details(context, entry, stop, exit_rate, protection_cap),
+            )
+        stop_cash = self._planned_stop_cash(needed, entry, stop, entry_rate, exit_rate)
+        limit = context.equity * self.limits.max_risk_per_trade
+        if stop_cash > limit + 1e-6:
+            return self._reject(decision, [MAX_RISK_PER_TRADE], details={
+                "order_notional": entry * abs(qty), "required_notional": entry * needed,
+                "stop_risk": stop_cash, "max_stop_risk": limit,
+            })
+        return None
+
+    def _lift_to_notional(self, needed, entry, stop, context, entry_rate, exit_rate, side, snapshot, book):
+        if entry <= 0 or needed <= 0:
             return None
-        price_risk = abs(entry - stop) * lifted
-        fee_risk = entry * lifted * entry_rate + abs(stop) * lifted * exit_rate
-        if price_risk + fee_risk > context.equity * self.limits.max_risk_per_trade + 1e-6:
+        lifted = self._fit_to_capital(
+            needed, entry, context, entry_rate, minimum_trade_notional=entry * needed
+        )
+        if lifted + 1e-12 < needed:
+            return None
+        if self._planned_stop_cash(lifted, entry, stop, entry_rate, exit_rate) > context.equity * self.limits.max_risk_per_trade + 1e-6:
             return None
         preview = self._fill(side, lifted, snapshot, book)
-        if preview is None or entry * preview.filled_quantity + 1e-9 < floor:
+        if preview is None or preview.filled_quantity + 1e-12 < needed:
             return None
         return preview, preview.estimated_fill_price
 
@@ -528,7 +588,7 @@ class RiskEngine:
     def _notional_ceiling(self, equity: float, fraction: float) -> float:
         return equity * fraction * self._leverage()
 
-    def _capital_room(self, context: RiskContext, entry_fee_rate: float) -> tuple[float, str]:
+    def _capital_room(self, context: RiskContext, entry_fee_rate: float, minimum_trade_notional: float = 0.0) -> tuple[float, str]:
         if context.equity <= 0 or context.cash <= 0 or self._leverage() <= 0:
             return 0.0, INSUFFICIENT_MARGIN
         symbol_room = self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) - context.symbol_exposure_notional
@@ -537,6 +597,9 @@ class RiskEngine:
         trade_room = (context.equity * self.limits.max_trade_notional_fraction
                       - context.symbol_exposure_notional
                       if self.limits.max_trade_notional_fraction > 0 else float("inf"))
+        # Only the per-trade fraction yields, and only up to the exchange minimum.
+        if minimum_trade_notional > trade_room:
+            trade_room = minimum_trade_notional
         portfolio_room = (context.equity * self.limits.max_portfolio_notional_fraction
                           - context.total_exposure_notional
                           if self.limits.max_portfolio_notional_fraction > 0 else float("inf"))
@@ -557,8 +620,8 @@ class RiskEngine:
     def _capital_reason(self, context: RiskContext, entry_fee_rate: float) -> str:
         return self._capital_room(context, entry_fee_rate)[1]
 
-    def _fit_to_capital(self, qty: float, entry: float, context: RiskContext, entry_fee_rate: float) -> float:
-        room, _reason = self._capital_room(context, entry_fee_rate)
+    def _fit_to_capital(self, qty: float, entry: float, context: RiskContext, entry_fee_rate: float, minimum_trade_notional: float = 0.0) -> float:
+        room, _reason = self._capital_room(context, entry_fee_rate, minimum_trade_notional)
         if entry <= 0 or room <= 0:
             return 0.0
         fitted = min(qty, room / entry)

@@ -45,8 +45,11 @@ export type JevReview = {
 };
 
 type SimpleEvidence = {
-  trend?: { ema_alignment?: number; ema20_slope_5m_pct?: number };
-  momentum?: { rsi_14?: number; roc_10m_pct?: number };
+  trend?: {
+    ema_alignment?: number; ema20_slope_5m_pct?: number;
+    price_vs_ema20_15m_pct?: number; context_15m_slope_pct?: number; distance_to_vwap_pct?: number;
+  };
+  momentum?: { rsi_14?: number; roc_10m_pct?: number; return_60m_pct?: number };
   volume?: { relative_to_previous_20m?: number };
   flow?: { taker_1m?: number; taker_5m?: number };
   structure?: { event?: string; extension_from_break_level_atr?: number };
@@ -261,6 +264,8 @@ function ExchangeEvidence({ evidence: e }: { evidence: SimpleEvidence }) {
     ["MOMENTO", `RSI ${observationNumber(e.momentum?.rsi_14, 2)} · ROC 10m ${observationNumber(e.momentum?.roc_10m_pct, 4, "%")}`],
     ["VOLUME", `${observationNumber(e.volume?.relative_to_previous_20m, 2, "x")} a média anterior de 20m`],
     ["FLUXO", `Taker 1m ${observationNumber(e.flow?.taker_1m)} · 5m ${observationNumber(e.flow?.taker_5m)}`],
+    ["CONTEXTO 15M", `Inclinação ${observationNumber(e.trend?.context_15m_slope_pct, 4, "%")} · Preço vs EMA20 ${observationNumber(e.trend?.price_vs_ema20_15m_pct, 4, "%")} · VWAP ${observationNumber(e.trend?.distance_to_vwap_pct, 4, "%")}`],
+    ["RETORNO 60M", observationNumber(e.momentum?.return_60m_pct, 4, "%")],
     ["ESTRUTURA", `${eventLabel}${event === "BREAKOUT" || event === "BREAKDOWN" ? ` · distância do nível ${observationNumber(e.structure?.extension_from_break_level_atr, 2, " ATR")}` : ""}`],
     ["VOLATILIDADE", `ATR ${observationNumber(e.volatility?.atr_14_pct, 4, "%")} · Faixa 60m ${observationNumber(e.volatility?.range_60m_pct, 4, "%")}`],
     ["LIQUIDEZ", `Spread ${observationNumber(e.liquidity?.spread_bps, 4, " bps")}`],

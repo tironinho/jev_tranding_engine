@@ -63,6 +63,7 @@ from app.providers.fees import BinanceFeeProvider, ConfigFeeProvider
 from app.providers.jev.factory import build_jev_provider
 from app.providers.jev.scheduler import JevScheduler
 from app.providers.jev.schemas import SIMPLE_MARKET_INPUT
+from app.providers.jev.simple import evidence_from_features
 from app.providers.openai.provider import OpenAIProvider
 from app.risk.economics import funding_cashflow, rate_for
 from app.risk.engine import RiskContext, RiskEngine, margin_borrow_room
@@ -168,6 +169,7 @@ class TradingEngine:
         }
         self.started_monotonic = time.monotonic()
         self.started_at = now
+        self.price_move_blocks = {"freshness": 0, "plan": 0, "latest": None}
         self.persistence_mode = "memory"
         self.db_healthy = settings.database_url == ""
         self.db_error: str | None = None
@@ -833,7 +835,25 @@ class TradingEngine:
         valid = (0 <= age <= max_age
                  and 0 <= book_age <= self.settings.stale_after_ms
                  and drift is not None and drift <= details["max_price_drift"])
+        failed = []
+        if not 0 <= age <= max_age:
+            failed.append("signal_age")
+        if not 0 <= book_age <= self.settings.stale_after_ms:
+            failed.append("book_age")
+        if drift is None or drift > details["max_price_drift"]:
+            failed.append("price_drift")
+        details["failed_checks"] = failed
         return valid, details
+
+    def _note_price_move(self, source: str, symbol: str, drift, limit) -> None:
+        """Count a block caused by price movement. The tolerance itself stays put."""
+        if source not in self.price_move_blocks:
+            return
+        self.price_move_blocks[source] += 1
+        self.price_move_blocks["latest"] = {
+            "source": source, "symbol": symbol, "price_drift": drift,
+            "max_price_drift": limit, "at": utcnow().isoformat(),
+        }
 
     def _live_signal_fresh(self, decision, snapshot) -> bool:
         return self._live_signal_freshness(decision, snapshot)[0]
@@ -923,6 +943,9 @@ class TradingEngine:
                      if econ is not None else "")
             self._log("live_risk_reject", f"{decision.symbol} {reasons} decision_id={decision.decision_id} "
                       f"snapshot_id={snapshot.snapshot_id} min_net_rr={self.risk.limits.min_net_rr}{audit}")
+            if "JEV_PLAN_CHANGED" in risk.reject_reasons:
+                self._note_price_move("plan", decision.symbol, (risk.details or {}).get("price_drift"),
+                                      (risk.details or {}).get("max_price_drift"))
             return
         if risk.economics is None:
             return
@@ -938,6 +961,8 @@ class TradingEngine:
         if not fresh:
             await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL], details={"freshness": freshness}))
             self._log("live_blocked", f"{EXPIRED_SIGNAL} {decision.symbol} {freshness}")
+            if "price_drift" in freshness.get("failed_checks", []):
+                self._note_price_move("freshness", decision.symbol, freshness.get("price_drift"), freshness.get("max_price_drift"))
             return
         intent = self._intent(decision, snapshot, risk, side, "live")
         pending = {"decision": decision.model_dump(mode="json"), "snapshot": snapshot.model_dump(mode="json"),
@@ -954,6 +979,8 @@ class TradingEngine:
             await self._resolve_entry(str(decision.decision_id))
             await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL], details={"freshness": freshness}))
             self._log("live_blocked", f"{EXPIRED_SIGNAL} {decision.symbol} {freshness}")
+            if "price_drift" in freshness.get("failed_checks", []):
+                self._note_price_move("freshness", decision.symbol, freshness.get("price_drift"), freshness.get("max_price_drift"))
             return
         try:
             self._log(
@@ -2246,6 +2273,15 @@ class TradingEngine:
             state["baseline_action"] = meta.get("baseline_action") or state.get("baseline_action")
             if meta.get("candidate_action"):
                 state["candidate_action"] = meta["candidate_action"]
+            # A decision that never called JEV still has the snapshot observations
+            # the baseline used. Values already sent to JEV are left as they were.
+            observed = self._observed_evidence(call, decision, meta)
+            if observed:
+                current = state.get("evidence") if isinstance(state.get("evidence"), dict) else {}
+                state["evidence"] = {
+                    group: {**observed.get(group, {}), **values} if isinstance(values, dict) else values
+                    for group, values in {**observed, **current}.items()
+                }
             rows.append(
                 {
                     "decision_id": str(call.get("decision_id")),
@@ -2277,6 +2313,22 @@ class TradingEngine:
             if len(rows) >= limit:
                 break
         return rows
+
+    def _observed_evidence(self, call: dict, decision: dict, meta: dict) -> dict | None:
+        stamped = meta.get("exchange_evidence") if isinstance(meta.get("exchange_evidence"), dict) else None
+        features = call.get("snapshot_features")
+        if not isinstance(features, dict):
+            snapshot = self.store.snapshots.get(str(call.get("snapshot_id") or decision.get("snapshot_id") or ""))
+            features = snapshot.get("features") if isinstance(snapshot, dict) else None
+        observed = evidence_from_features(features) if isinstance(features, dict) else None
+        if stamped is None:
+            return observed
+        if observed is None:
+            return stamped
+        return {
+            group: {**observed.get(group, {}), **values} if isinstance(values, dict) else values
+            for group, values in {**observed, **stamped}.items()
+        }
 
     def jev_reviews(self, limit: int = 40) -> list[dict]:
         records = self._memory_jev_activity(limit * 3)
@@ -2373,6 +2425,7 @@ class TradingEngine:
                 "degraded_providers": degraded_providers,
                 "healthy": not degraded_providers,
             },
+            "price_move_blocks": self.price_move_blocks,
             "risk": {
                 "live_daily_risk_reset_at": (self.daily_risk_reset_at.isoformat()
                     if self.daily_risk_reset_at else None),

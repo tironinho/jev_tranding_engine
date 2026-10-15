@@ -33,7 +33,7 @@ from app.domain.enums import (
 )
 from app.domain.schemas import MarketSnapshot, StrategyDecision
 from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, SIMPLE_MARKET_INPUT, SIMPLE_MARKET_PROMPT, JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
-from app.providers.jev.simple import observation_plan, state_for_model as simple_state
+from app.providers.jev.simple import evidence_from_features, observation_plan, state_for_model as simple_state
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
@@ -83,7 +83,8 @@ def _decision(
         _research_side(metadata, action), snapshot.features, stale=snapshot.data_quality.stale,
         spread_limit_bps=context.weights.max_spread_bps)}
     if strategy == "baseline_jev":
-        metadata = {**metadata, "entry_selection": classify_entry(
+        metadata = {**metadata, "exchange_evidence": evidence_from_features(snapshot.features),
+            "entry_selection": classify_entry(
             Action(metadata.get("baseline_action", action.value)), snapshot.features),
             "setup_research": classify_setup(
             {"metadata": metadata}, snapshot.model_dump(mode="json"))}

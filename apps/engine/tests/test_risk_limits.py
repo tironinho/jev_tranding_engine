@@ -9,6 +9,7 @@ from app.domain.enums import (
     MAX_DAILY_LOSS,
     MAX_CONSECUTIVE_LIVE_LOSSES,
     MAX_OPEN_POSITIONS,
+    MAX_RISK_PER_TRADE,
     MAX_TOTAL_EXPOSURE,
     SPOT_SHORT_NOT_SUPPORTED,
     Action,
@@ -96,7 +97,7 @@ def test_small_account_clears_the_exchange_minimum_and_not_the_old_fifty():
     eng = engine()
     snapshot, book = long_snapshot()
     from app.domain.schemas import StrategyDecision
-    from app.domain.enums import OperatingMode, ORDER_BELOW_MIN_NOTIONAL
+    from app.domain.enums import OperatingMode
 
     decision = StrategyDecision(
         correlation_id=snapshot.snapshot_id,
@@ -118,7 +119,8 @@ def test_small_account_clears_the_exchange_minimum_and_not_the_old_fifty():
         FeeQuote(0.0002, 0.0005, "config"),
         book,
     )
-    assert ORDER_BELOW_MIN_NOTIONAL in blocked.reject_reasons
+    assert not blocked.accepted
+    assert MAX_RISK_PER_TRADE in blocked.reject_reasons
     eng.risk.update_limits(min_order_notional=5)
     opened = eng.risk.evaluate(
         decision,
@@ -130,7 +132,7 @@ def test_small_account_clears_the_exchange_minimum_and_not_the_old_fifty():
     assert opened.accepted
 
 
-def test_live_entry_at_minimum_is_rejected_when_exit_is_below_minimum():
+def test_live_entry_at_minimum_is_raised_until_the_exit_clears():
     from app.domain.schemas import StrategyDecision
     from app.domain.enums import OperatingMode
     eng = engine()
@@ -141,12 +143,14 @@ def test_live_entry_at_minimum_is_rejected_when_exit_is_below_minimum():
         opportunity_id=snapshot.snapshot_id, snapshot_id=snapshot.snapshot_id,
         strategy="baseline", symbol=snapshot.symbol, timestamp=snapshot.timestamp,
         action=Action.LONG, confidence=0.8, reason_codes=["TREND_UP"], mode=OperatingMode.LIVE)
-    result = eng.risk.evaluate(decision, snapshot,
-        _context(market_type="margin", live_requested=True, live_armed=True,
-                 step_size=0.001, min_notional=5, margin_level=999),
-        FeeQuote(0.0002, 0.0005, "config"), book)
-    assert "EXIT_BELOW_MIN_NOTIONAL" in result.reject_reasons
-    assert result.details["exit_notional"] < result.details["required_exit_notional"]
+    context = _context(market_type="margin", live_requested=True, live_armed=True,
+                       step_size=0.001, min_notional=5, margin_level=999)
+    result = eng.risk.evaluate(decision, snapshot, context, FeeQuote(0.0002, 0.0005, "config"), book)
+    assert result.accepted
+    assert result.economics.entry * result.economics.quantity >= 5
+    eng.risk.update_limits(max_risk_per_trade=0.0000001)
+    blocked = eng.risk.evaluate(decision, snapshot, context, FeeQuote(0.0002, 0.0005, "config"), book)
+    assert "MAX_RISK_PER_TRADE" in blocked.reject_reasons
 
 
 def test_drawdown_and_daily_loss_reject():

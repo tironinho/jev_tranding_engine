@@ -38,14 +38,29 @@ def test_other_positions_leave_only_remaining_portfolio_budget():
     assert reason == "MAX_PORTFOLIO_NOTIONAL"
 
 
-def test_minimum_order_cannot_bypass_allocation_cap():
+def test_trade_budget_rises_only_to_the_exchange_minimum():
     eng = allocated_engine()
     snapshot, book = long_snapshot()
-    result = eng.risk.evaluate(_order(snapshot, Action.LONG), snapshot,
-        _context(equity=10, cash=10, day_start_equity=10, step_size=.001, min_notional=5),
+    equity = 4.87 / .30
+    opened = eng.risk.evaluate(_order(snapshot, Action.LONG), snapshot,
+        _context(equity=equity, cash=equity, day_start_equity=equity, step_size=.001, min_notional=5),
         FeeQuote(.0002, .0005, "test"), book)
-    assert "ORDER_BELOW_MIN_NOTIONAL" in result.reject_reasons
-    assert result.details["available_notional"] == pytest.approx(3)
+    assert opened.accepted
+    assert opened.economics.entry * opened.economics.quantity >= 5
+
+    eng.risk.update_limits(max_risk_per_trade=1)
+    capped = eng.risk.evaluate(_order(snapshot, Action.LONG), snapshot,
+        _context(equity=6, cash=6, day_start_equity=6, step_size=.001, min_notional=5),
+        FeeQuote(.0002, .0005, "test"), book)
+    assert "ORDER_BELOW_MIN_NOTIONAL" in capped.reject_reasons
+    assert capped.details["capital_limiting_reason"] == "MAX_PORTFOLIO_NOTIONAL"
+
+    eng.risk.update_limits(max_risk_per_trade=.0001)
+    risky = eng.risk.evaluate(_order(snapshot, Action.LONG), snapshot,
+        _context(equity=equity, cash=equity, day_start_equity=equity, step_size=.001, min_notional=5),
+        FeeQuote(.0002, .0005, "test"), book)
+    assert "MAX_RISK_PER_TRADE" in risky.reject_reasons
+    assert risky.details["stop_risk"] > risky.details["max_stop_risk"]
 
 
 def test_tiny_net_target_is_rejected_without_moving_target():

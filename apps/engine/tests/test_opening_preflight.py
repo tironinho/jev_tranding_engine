@@ -47,7 +47,7 @@ def test_preflight_unknown_data_is_not_a_refusal_and_cache_does_not_fetch():
     provider._fetch.assert_not_called()
 
 
-@pytest.mark.parametrize("equity,reason",[(10,"PREFLIGHT_ENTRY_BELOW_MIN_NOTIONAL"),(20,"PREFLIGHT_EXIT_BELOW_MIN_NOTIONAL"),(100,None)])
+@pytest.mark.parametrize("equity,reason",[(10,"PREFLIGHT_ENTRY_BELOW_MIN_NOTIONAL"),(20,None),(100,None)])
 def test_rounding_and_exit_floor_are_checked_under_same_budget(equity,reason):
     plan=dict(entry=100,stop=101,target=80)
     limits=RiskLimits(max_trade_notional_fraction=.30,max_portfolio_notional_fraction=.80)
@@ -63,11 +63,12 @@ async def test_infeasible_live_candidate_never_calls_jev_but_paper_keeps_researc
     from app.config import BaselineWeightConfig
     eng=TradingEngine(settings());snapshot,book=candidate()
     eng.weights=replace(eng.weights,version="baseline_first_ten_v2")
+    eng.risk.update_limits(max_risk_per_trade=1e-6)
     provider=AssessmentProvider(.9);ctx=context(eng,snapshot,provider)
     ctx.mode=OperatingMode.LIVE;ctx.preflight_equity=10;ctx.exchange_rules=dict(step_size=.001,min_notional=5)
     decision=await BaselineJevStrategy().evaluate(snapshot,snapshot.features,ctx)
     assert decision.action is Action.NO_TRADE
-    assert decision.reason_codes==["PREFLIGHT_ENTRY_BELOW_MIN_NOTIONAL"]
+    assert decision.reason_codes==["PREFLIGHT_MINIMUM_EXCEEDS_STOP_RISK"]
     assert not provider.requests
     ctx.mode=OperatingMode.PAPER
     await BaselineJevStrategy().evaluate(snapshot,snapshot.features,ctx)
@@ -81,6 +82,15 @@ def test_missing_flow_cannot_qualify_a_pullback_and_warning_preserves_conflict()
     assert result["setup"]=="CONTINUATION_WITH_CONFLICT"
     assert result["context_slope_against"]
     assert "CONTEXT_SLOPE_AGAINST" in result["context_warnings"]
+
+
+def test_stop_risk_still_refuses_a_minimum_the_trade_budget_could_reach():
+    limits=RiskLimits(max_trade_notional_fraction=.3, max_portfolio_notional_fraction=.8,
+                      max_symbol_exposure=1, max_leverage=5, max_risk_per_trade=.0005)
+    result=order_preflight(dict(entry=100, stop=110, target=80), Action.SHORT, limits,
+                           dict(step_size=.01, min_notional=5), 100, .001)
+    assert result["reason"]=="PREFLIGHT_MINIMUM_EXCEEDS_STOP_RISK"
+    assert not result["can_authorize"]
 
 
 def test_preflight_never_rewrites_limits_or_proposed_plan():

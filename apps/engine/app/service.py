@@ -614,6 +614,11 @@ class TradingEngine:
             round_trip_fee=rate_for("taker", fee_quote.maker, fee_quote.taker) * 2,
             jev_scheduler=self.jev_scheduler,
         )
+        if cfg.mode is OperatingMode.LIVE and self.settings.market_type in {"spot", "margin"}:
+            cached = self.balance.cached_snapshot()
+            if cached and cached.get("status") == "ok":
+                context.preflight_equity = self.mark_account(cached).get("equity_usdt")
+            context.exchange_rules = self.feed.rules.get(snapshot.symbol)
         timings = dict(pipeline_timings or {})
         budget_ms = cfg.max_signal_age_ms
         if cfg.mode is OperatingMode.LIVE:

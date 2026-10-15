@@ -61,6 +61,8 @@ class StrategyContext:
     intelligence: dict | None = None
     jev_scheduler: Any = None
     evaluation_deadline: float | None = None
+    preflight_equity: float | None = None
+    exchange_rules: dict | None = None
 
 
 def _decision(
@@ -193,6 +195,17 @@ class BaselineJevStrategy:
                 action=Action.NO_TRADE, confidence=0, reasons=["TRADE_PLAN_UNAVAILABLE"],
                 metadata={**metadata, "jev_effect": "idle"}, model_version=result.version,
                 prompt_version=request.prompt_version, started=started)
+        if (context.mode is OperatingMode.LIVE and not live_context_shadow and context.risk and request.trade_plan
+                and not (context.risk.dynamic_rr_enabled and context.combination.jev_request_profile == "plan_outcome_v3")):
+            from app.strategies.order_preflight import order_preflight
+            preflight = order_preflight(request.trade_plan, result.action, context.risk,
+                                        context.exchange_rules, context.preflight_equity, context.round_trip_fee/2)
+            metadata["order_preflight"] = preflight
+            if preflight["status"] == "INFEASIBLE":
+                return _decision(context=context, snapshot=snapshot, strategy=self.key,
+                    action=Action.NO_TRADE, confidence=result.confidence,
+                    reasons=[preflight["reason"]], metadata={**metadata, "jev_effect":"not_called"},
+                    model_version=result.version, prompt_version=request.prompt_version, started=started)
         if simple_input:
             try:
                 simple_state(request.model_dump(mode="json"))

@@ -15,7 +15,7 @@ import math
 
 from app.domain.enums import Action
 
-VERSION = "role_baseline_v2"
+VERSION = "role_baseline_v3"
 # The spread gate already published by the active baseline. Not a new cutoff.
 DEFAULT_SPREAD_LIMIT_BPS = 8.0
 # One ATR of travel past the 5m level. A unit conversion, not a fitted edge.
@@ -30,6 +30,11 @@ def assess_roles(side, features, *, stale: bool = False, spread_limit_bps: float
         return {"version": VERSION, "mode": "SHADOW", "can_authorize": False,
                 "setup": "NONE", "eligible": False, "rank": None, "reasons": ["NO_CANDIDATE"]}
     context, context_votes = _context(features, direction)
+    conflicted = any(v == -1 for v in context_votes.values()) and any(v == 1 for v in context_votes.values())
+    slope_against = context_votes.get("context_15m_slope") == -1
+    pullback_flag = features.get("pullback_resume_long_5m" if direction > 0 else "pullback_resume_short_5m")
+    pullback = (pullback_flag is True and context_votes.get("context_15m_slope") == 1
+                and context_votes.get("price_vs_ema20_15m") == 1)
     event, structure_known = _event(features, direction)
     flow = _flow(features, direction)
     extension = _extension(features, direction)
@@ -37,37 +42,51 @@ def assess_roles(side, features, *, stale: bool = False, spread_limit_bps: float
     fading = _fading(features, direction)
     filters = _filters(features, stale=stale, spread_limit_bps=spread_limit_bps)
     setup = ("CONTINUATION" if context == "ALIGNED" else "REVERSAL" if context in {"CONTRARY", "MIXED"} else "UNKNOWN")
+    if setup == "CONTINUATION" and conflicted:
+        setup = "CONTINUATION_WITH_CONFLICT"
+    if pullback and event == "NONE":
+        setup = "CONTINUATION_PULLBACK"
+    pullback_candidate = not filters and pullback and structure_known and flow["taker_1m"] == 1 and flow["taker_5m"] is not None
     reasons: list[str] = []
     if context == "UNKNOWN":
         reasons.append("CONTEXT_DATA_UNAVAILABLE")
     if not structure_known:
         reasons.append("STRUCTURE_DATA_UNAVAILABLE")
-    elif event == "NONE":
+    elif event == "NONE" and not pullback_candidate:
         reasons.append("STRUCTURE_EVENT_REQUIRED")
-    if not flow["persistent"]:
+    if not flow["persistent"] and not pullback_candidate:
         reasons.append("IMPULSE_WITHOUT_SUSTAINED_FLOW" if flow["impulse_only"] else "FLOW_NOT_CONFIRMED")
     if setup == "REVERSAL" and event != "RECLAIM":
         reasons.append("REVERSAL_RECLAIM_REQUIRED")
     structure_ok = event in {"BREAK", "RETEST", "RECLAIM"}
     continuation = context == "ALIGNED" and structure_ok and flow["persistent"]
     reversal = context in {"CONTRARY", "MIXED"} and event == "RECLAIM" and flow["persistent"]
-    eligible = not filters and (continuation or reversal)
+    eligible = (not filters and (continuation or reversal)) or pullback_candidate
     return {
         "version": VERSION, "mode": "SHADOW", "can_authorize": False,
         "setup": setup, "context": context, "context_votes": context_votes,
+        "context_conflicted": conflicted, "context_slope_against": slope_against,
+        "context_warnings": (["CONTEXT_SLOPE_AGAINST"] if slope_against else []) + (["CONTEXT_VOTES_DIVERGENT"] if conflicted else []),
+        "pullback_resume": pullback_flag,
         "structure_event": event, "eligible": eligible,
         "entry_variants": {
             "immediate": {"eligible": eligible},
+            "immediate_not_extended": {"eligible": eligible and not extended and not fading},
+            "continuation_pullback": {"eligible": pullback_candidate,
+                                      "flow_divergent": flow["impulse_only"], "rank": _rank("PULLBACK" if pullback else "NONE", flow, features, extension, fading)},
             "confirmed_retest": {"eligible": not filters and context == "ALIGNED" and event == "RETEST" and flow["persistent"] and not fading},
             "sustained_reversal": {"eligible": not filters and reversal and features.get("reclaim_sustained_long_5m" if direction > 0 else "reclaim_sustained_short_5m") is True},
         },
-        "rank": _rank(event, flow, features, extension, fading),
+        "rank": _rank("PULLBACK" if pullback_candidate and event == "NONE" else event, flow, features, extension, fading),
         "extended": extended, "fading": fading,
         "participation": _participation(features),
         "timing": {"rsi": _finite(features.get("rsi")), "roc": _finite(features.get("roc")),
                    "extension_atr": extension, "extended": extended, "fading": fading,
+                   "preferred_entry": "RETEST" if extended or fading else "PULLBACK" if pullback else event,
+                   "quality_warnings": (["EXTENDED_ENTRY"] if extended else []) + (["DECELERATING_ENTRY"] if fading else []),
                    "one_minute_break": features.get("breakout") is True or features.get("breakdown") is True},
-        "flow": flow, "filters": filters, "reasons": reasons,
+        "flow": flow, "flow_warnings": ["FLOW_WINDOWS_DIVERGENT"] if flow["impulse_only"] else [],
+        "filters": filters, "reasons": reasons,
         "thresholds": {"spread_limit_bps": spread_limit_bps, "extension_atr": _EXTENSION_ATR},
     }
 
@@ -127,7 +146,7 @@ def _filters(features: dict, *, stale: bool, spread_limit_bps: float) -> list[st
 
 
 def _rank(event: str, flow: dict, features: dict, extension: float | None, fading: bool) -> float:
-    structure = 1.0 if event in {"BREAK", "RETEST", "RECLAIM"} else 0.0
+    structure = 1.0 if event in {"BREAK", "RETEST", "RECLAIM", "PULLBACK"} else 0.0
     if flow["persistent"]:
         confirmation = 1.0
     elif flow["taker_5m"] == 1 and flow["taker_1m"] != -1:

@@ -146,6 +146,7 @@ def state_for_model(payload):
         "candidate_side": side, "candle_minutes": 1,
         "evidence": {
             "trend": _present(ema_alignment=alignment, ema20_slope_5m_pct=pct(_finite(features.get("ema_20_slope"))),
+                              price_vs_ema20_15m_pct=pct(_finite(features.get("price_vs_ema20_15m"))),
                               context_15m_slope_pct=pct(_finite(features.get("context_15m_slope"))),
                               distance_to_vwap_pct=pct(_finite(features.get("distance_to_vwap")))),
             "momentum": _present(rsi_14=rsi, roc_10m_pct=pct(_finite(features.get("roc"))),

@@ -28,6 +28,15 @@ class BinanceBalanceProvider:
         self._cached: dict | None = None
         self._cached_at = 0.0
 
+    def cached_snapshot(self) -> dict | None:
+        """Local-only preflight evidence. Never refresh or expose credentials."""
+        if self._cached is None or time.monotonic() - self._cached_at >= self.ttl_s:
+            return None
+        observed = self._cached.get("observed_at")
+        if isinstance(observed, (int, float)) and time.time() - observed >= self.ttl_s:
+            return None
+        return self._cached
+
     async def snapshot(self, *, fresh: bool = False) -> dict:
         now = time.monotonic()
         if not fresh and self._cached is not None and now - self._cached_at < self.ttl_s:

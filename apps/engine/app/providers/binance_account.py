@@ -188,9 +188,11 @@ def _margin(body: Any, market_type: str) -> dict:
         borrowed = _num(row.get("borrowed"))
         interest = _num(row.get("interest"))
         net = _num(row.get("netAsset"))
-        if net == 0 and free == 0 and locked == 0 and borrowed == 0 and interest == 0:
-            continue
         asset = str(row.get("asset") or "")
+        # Keep the quote row even when zero: per-asset reconciliation uses it
+        # to distinguish a complete margin account from an incomplete payload.
+        if asset != "USDT" and net == 0 and free == 0 and locked == 0 and borrowed == 0 and interest == 0:
+            continue
         assets.append({"asset": asset, "free": free, "locked": locked, "total": net,
                        "borrowed": borrowed, "interest": interest, "gross": free + locked})
         if asset == "USDT":

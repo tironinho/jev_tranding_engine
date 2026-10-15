@@ -651,6 +651,44 @@ async def test_one_flat_asset_is_archived_while_another_position_stays(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_zero_usdt_margin_account_archives_closed_eth_but_keeps_live_sol(monkeypatch):
+    from app.providers.binance_account import _margin
+
+    monkeypatch.setattr("app.service.utcnow", clock)
+    eng = engine(market_type="margin")
+    eth = [_open(eng, symbol="ETHUSDT", quantity=quantity, mode="live", stop_client_order_id=None,
+                 opened_at=clock()-timedelta(days=1)) for quantity in (.0069, .0044, .0001)]
+    for position in eth:
+        position.protection_status = "RECOVERY_EXHAUSTED"
+    sol = _open(eng, symbol="SOLUSDT", quantity=.052, mode="live", stop_client_order_id="sol-stop",
+                opened_at=clock()-timedelta(days=1))
+    sol.protection_status = "PROTECTED"
+    eng.live.submit_close = AsyncMock()
+    eng.live.cancel = AsyncMock()
+    eng.live.fetch_verified = AsyncMock()
+    balance = _margin({"totalLiabilityOfBtc": "0", "userAssets": [
+        {"asset": "USDT", "free": "0", "locked": "0", "borrowed": "0", "interest": "0", "netAsset": "0"},
+        {"asset": "ETH", "free": "0", "locked": "0", "borrowed": "0", "interest": "0", "netAsset": "0"},
+        {"asset": "SOL", "free": "0.000669", "locked": "0.052", "borrowed": "0", "interest": "0", "netAsset": "0.052669"},
+    ]}, "margin")
+    assert any(row["asset"] == "USDT" and row["total"] == 0 for row in balance["assets"])
+    balance["observed_at"] = clock().timestamp()-10
+    await eng._reconcile_external_flat(balance)
+    assert all(str(position.position_id) in eng.accounts.accounts["baseline"].positions for position in eth)
+    await eng._reconcile_external_flat({**balance, "observed_at": clock().timestamp()})
+    positions = eng.accounts.accounts["baseline"].positions
+    assert all(str(position.position_id) not in positions for position in eth)
+    assert all(position.protection_status == "EXTERNAL_CLOSED_PENDING_AUDIT" for position in eth)
+    assert positions[str(sol.position_id)] is sol
+    assert sol.stop_client_order_id == "sol-stop"
+    assert sol.protection_status == "PROTECTED"
+    assert not eng.accounts.accounts["baseline"].trades
+    eng.live.submit_close.assert_not_awaited()
+    eng.live.cancel.assert_not_awaited()
+    eng.live.fetch_verified.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_external_reconciliation_checkpoint_failure_keeps_position_blocking(monkeypatch):
     monkeypatch.setattr("app.service.utcnow", clock)
     eng = engine(market_type="margin")

@@ -108,5 +108,5 @@ def test_preflight_respects_the_bounded_minimum_allocation(equity, possible):
     result = order_preflight(dict(entry=100, stop=100.5, target=98), Action.SHORT, limits,
                              dict(step_size=.001, min_notional=5), equity, .001)
     assert (result["status"] == "NOTIONAL_POSSIBLE") is possible
-    assert result["optimistic_notional_ceiling"] <= equity * .40 * 1.01 + 1e-9
+    assert result["optimistic_notional_ceiling"] <= equity * limits.max_leverage * .40 * 1.01 + 1e-9
     assert not result["can_authorize"]

@@ -128,7 +128,7 @@ class RiskLimits:
     max_symbol_exposure: float = 0.40
     # Zero disables the position-count cap; financial budgets still apply.
     max_open_positions: int = 0
-    # Fractions of equity, never multiplied by leverage. Zero disables each cap.
+    # Fractions of buying power, equity times max leverage. Zero disables each cap.
     max_trade_notional_fraction: float = 0.0
     # Ceiling for the exchange-minimum exception; zero disables the exception.
     max_minimum_trade_notional_fraction: float = 0.40

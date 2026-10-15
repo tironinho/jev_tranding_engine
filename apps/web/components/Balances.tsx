@@ -252,7 +252,7 @@ export function RealAccountPanel({ balance }: { balance: BinanceBalance | null |
             </tbody>
           </table>
           <div className="px-2 pt-2 text-[10px] text-mute">
-            Leitura Binance {observedAt(balance.observed_at)} (Brasília). Patrimônio marcado {num(balance.equity_usdt ?? balance.wallet, 2)} USDT. USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Bruto = livre + travado; líquido = bruto − empréstimo − juros. O Jev dimensiona em cima do patrimônio marcado.
+            Leitura Binance {observedAt(balance.observed_at)} (Brasília). Patrimônio marcado {num(balance.equity_usdt ?? balance.wallet, 2)} USDT. USDT líquido {num(balance.wallet, 2)}. Disponível {num(balance.available, 2)}. Nível de margem {balance.margin_level == null ? "—" : num(balance.margin_level, 2)}. Bruto = livre + travado; líquido = bruto − empréstimo − juros. O Jev dimensiona no poder de compra, patrimônio vezes a alavancagem, e para de abrir abaixo do nível de margem 1,25. A perda planejada continua limitada ao patrimônio.
           </div>
         </div>
       )}

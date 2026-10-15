@@ -456,7 +456,7 @@ class RiskEngine:
                 "notional_fraction": notional / context.equity,
                 "minimum_allocation_used": (
                     self.limits.max_trade_notional_fraction > 0
-                    and notional > context.equity * self.limits.max_trade_notional_fraction + 1e-6
+                    and notional > self._buying_power(context.equity) * self.limits.max_trade_notional_fraction + 1e-6
                 ),
                 "minimum_executable_notional": minimum_notional,
                 "max_minimum_trade_notional_fraction": self.limits.max_minimum_trade_notional_fraction,
@@ -602,8 +602,12 @@ class RiskEngine:
     def _leverage(self) -> float:
         return max(self.limits.max_leverage, 0.0)
 
+    def _buying_power(self, equity: float) -> float:
+        """Cross-margin capacity. The loss caps stay on equity."""
+        return equity * self._leverage()
+
     def _notional_ceiling(self, equity: float, fraction: float) -> float:
-        return equity * fraction * self._leverage()
+        return self._buying_power(equity) * fraction
 
     def _capital_room(self, context: RiskContext, entry_fee_rate: float, minimum_trade_notional: float = 0.0) -> tuple[float, str]:
         if context.equity <= 0 or context.cash <= 0 or self._leverage() <= 0:
@@ -611,12 +615,13 @@ class RiskEngine:
         symbol_room = self._notional_ceiling(context.equity, self.limits.max_symbol_exposure) - context.symbol_exposure_notional
         total_room = self._notional_ceiling(context.equity, self.limits.max_total_exposure) - context.total_exposure_notional
         cash_room = context.cash * self._leverage() / (1 + max(entry_fee_rate, 0.0))
+        power = self._buying_power(context.equity)
         trade_room = minimum_trade_room(
-            context.equity, self.limits.max_trade_notional_fraction,
+            power, self.limits.max_trade_notional_fraction,
             self.limits.max_minimum_trade_notional_fraction,
             context.symbol_exposure_notional, minimum_trade_notional,
         )
-        portfolio_room = (context.equity * self.limits.max_portfolio_notional_fraction
+        portfolio_room = (power * self.limits.max_portfolio_notional_fraction
                           - context.total_exposure_notional
                           if self.limits.max_portfolio_notional_fraction > 0 else float("inf"))
         room, reason = min(

@@ -78,7 +78,7 @@ def test_a_tight_margin_level_blocks_a_new_live_entry():
     blocked = eng.risk.evaluate(
         decision,
         snapshot,
-        _context(live_requested=True, live_armed=True, persistence_ok=True, margin_level=1.74, step_size=0.001, rules_required=True),
+        _context(live_requested=True, live_armed=True, persistence_ok=True, margin_level=1.2, step_size=0.001, rules_required=True),
         FeeQuote(0.0002, 0.0005, "config"),
         book,
     )

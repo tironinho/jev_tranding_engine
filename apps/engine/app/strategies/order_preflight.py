@@ -22,14 +22,15 @@ def order_preflight(plan, side, limits, rules, equity, fee_rate):
     valid = stop < entry < target if side is Action.LONG else target < entry < stop
     if side not in {Action.LONG, Action.SHORT} or not valid or not _number(fee_rate) or not 0 <= fee_rate < 1:
         return {**unknown,"reason":"PLAN_OR_FEES_UNAVAILABLE"}
-    hard=[equity*limits.max_symbol_exposure*limits.max_leverage,
-          equity*limits.max_total_exposure*limits.max_leverage]
-    if limits.max_portfolio_notional_fraction>0:hard.append(equity*limits.max_portfolio_notional_fraction)
+    power=equity*max(limits.max_leverage,0)
+    hard=[power*limits.max_symbol_exposure,
+          power*limits.max_total_exposure]
+    if limits.max_portfolio_notional_fraction>0:hard.append(power*limits.max_portfolio_notional_fraction)
     minimum=max(exchange_floor,limits.min_order_notional)
     required=minimum_executable_quantity(entry,stop,target,side,minimum,fee_rate,step)
     if required is None:
         return {**unknown,"reason":"PLAN_UNAVAILABLE"}
-    trade=minimum_trade_room(equity, limits.max_trade_notional_fraction,
+    trade=minimum_trade_room(power, limits.max_trade_notional_fraction,
                              limits.max_minimum_trade_notional_fraction, 0, required*entry)
     # The per-trade fraction may rise to the entry and exit minimum. Stop risk
     # and the other ceilings stay hard, so this does not enlarge a normal order.

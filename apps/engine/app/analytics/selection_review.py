@@ -42,6 +42,12 @@ def selection_review(details):
             if pairs: buckets.append(dict(lower=lo,upper=min(hi,1),n=len(pairs),mean_probability=sum(p for p,y in pairs)/len(pairs),target_rate=sum(y for p,y in pairs)/len(pairs)))
         result.append(dict(zip(("build_commit","prompt_version","side","selection_version","mode","setup","would_accept"),key)) |
             dict(n=len(rows),net=sum(d["trade"]["net_pnl"] for d in rows),fees=sum(d["trade"]["fees"] for d in rows),
+                 wins=sum(d["trade"]["net_pnl"] > 0 for d in rows),
+                 win_rate=sum(d["trade"]["net_pnl"] > 0 for d in rows)/len(rows),
+                 exit_reasons=dict(Counter(d["trade"]["exit_reason"] for d in rows)),
+                 selection_reasons=dict(Counter(reason for d in rows
+                     for reason in (((d.get("risk") or {}).get("details",{}).get("entry_selection")
+                                     or d["decision"].get("metadata",{}).get("entry_selection") or {}).get("reasons") or []))),
                  calibration_n=len(probabilities),calibration_excluded=dict(calibration_excluded),
                  brier=sum((p-y)**2 for p,y in probabilities)/len(probabilities) if probabilities else None,reliability=buckets))
     variant_rows = [dict(zip(("build_commit", "side", "version", "setup", "variant", "eligible"), key)) |

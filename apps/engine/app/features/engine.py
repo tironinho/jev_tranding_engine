@@ -56,6 +56,8 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
         "retest_long_5m": None, "retest_short_5m": None,
         "retest_long_level_5m": None, "retest_short_level_5m": None,
         "reclaim_sustained_long_5m": None, "reclaim_sustained_short_5m": None,
+        "reclaim_retest_long_5m": None, "reclaim_retest_short_5m": None,
+        "reclaim_retest_long_level_5m": None, "reclaim_retest_short_level_5m": None,
         "extension_above_resistance_5m_atr": None,
         "extension_below_support_5m_atr": None,
     }
@@ -90,8 +92,11 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
     extension_up = extension_down = None
     retest_long = retest_short = None
     retest_long_level = retest_short_level = None
+    reclaim_retest_long = reclaim_retest_short = None
+    reclaim_retest_long_level = reclaim_retest_short_level = None
     if atr_ok:
         retest_long = retest_short = False
+        reclaim_retest_long = reclaim_retest_short = False
         extension_up = (last - prior_high) / atr_value
         extension_down = (prior_low - last) / atr_value
         # Freeze the level that existed before the break. The latest rolling
@@ -99,6 +104,23 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
         for i in range(max(20, len(candles) - _RETEST_LOOKBACK), len(candles) - 1):
             level_up = max(highs[i-20:i])
             level_down = min(lows[i-20:i])
+            # Freeze the pre-sweep level. A later closed bar must revisit it,
+            # hold the reclaimed side, and resume in the intended direction.
+            tolerance = _RETEST_PROXIMITY_ATR * atr_value
+            if (lows[i] < level_down < closes[i]
+                    and all(c > level_down for c in closes[i:-1])
+                    and abs(lows[-1] - level_down) <= tolerance
+                    and level_down < last <= level_down + tolerance
+                    and last > closes[-2] and last > opens[-1]):
+                reclaim_retest_long = True
+                reclaim_retest_long_level = level_down
+            if (highs[i] > level_up > closes[i]
+                    and all(c < level_up for c in closes[i:-1])
+                    and abs(highs[-1] - level_up) <= tolerance
+                    and level_up - tolerance <= last < level_up
+                    and last < closes[-2] and last < opens[-1]):
+                reclaim_retest_short = True
+                reclaim_retest_short_level = level_up
             if (closes[i] > level_up and all(c >= level_up for c in closes[i:-1])
                     and lows[-1] <= level_up + _RETEST_PROXIMITY_ATR * atr_value
                     and last > level_up and (last-level_up)/atr_value <= _RETEST_PROXIMITY_ATR):
@@ -117,6 +139,9 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
         "bullish_reclaim_5m": bullish, "bearish_reclaim_5m": bearish,
         "retest_long_level_5m": retest_long_level, "retest_short_level_5m": retest_short_level,
         "reclaim_sustained_long_5m": sustained_long, "reclaim_sustained_short_5m": sustained_short,
+        "reclaim_retest_long_5m": reclaim_retest_long, "reclaim_retest_short_5m": reclaim_retest_short,
+        "reclaim_retest_long_level_5m": reclaim_retest_long_level,
+        "reclaim_retest_short_level_5m": reclaim_retest_short_level,
         "retest_long_5m": retest_long, "retest_short_5m": retest_short,
         "extension_above_resistance_5m_atr": extension_up,
         "extension_below_support_5m_atr": extension_down,

@@ -179,14 +179,17 @@ class RiskEngine:
             atr = snapshot.features.get("atr")
             elapsed = ((context.now - context.last_entry_at).total_seconds() / 60
                        if context.last_entry_at else 0)
-            event = (snapshot.features.get("breakout" if direction == 1 else "breakdown") is True
-                     or snapshot.features.get("bullish_reclaim" if direction == 1 else "bearish_reclaim") is True)
+            from app.strategies.context_policy import repeat_setup
+            repeat = repeat_setup(decision.action, snapshot.features, context.last_entry_at, context.now)
+            event = repeat["fresh_setup"]
             progressed = (isinstance(atr, (float, int)) and math.isfinite(atr) and atr > 0
                           and bool(context.same_side_entry_prices)
                           and all(direction * (snapshot.price - price) >= atr * self.limits.repeat_entry_atr_distance
                                   for price in context.same_side_entry_prices))
             if not event or not progressed or elapsed < self.limits.repeat_entry_interval_minutes:
                 repeat_reasons.append("REPEATED_ENTRY_WITHOUT_NEW_SETUP")
+            selection["repeat_setup"] = {**repeat, "elapsed_minutes": elapsed,
+                                         "price_progress": progressed}
         selection.update(mode=self.limits.entry_selection_mode, repeat_reasons=repeat_reasons,
                          would_accept=selection["eligible"] and not repeat_reasons)
         decision.metadata["entry_selection"] = selection

@@ -406,6 +406,12 @@ class TradingEngine:
                                             ("STOP", quote <= position.stop if position.side is Action.LONG else quote >= position.stop)):
                         if touched and reason not in position.exit_observations:
                             position.exit_observations[reason] = {"event_at": timestamp.isoformat(), "received_at": received, "quote": quote}
+                            task = asyncio.create_task(self._position_event(position, "exit_touch", reason, {
+                                **position.exit_observations[reason], "bid": state.best_bid,
+                                "ask": state.best_ask, "book_at": state.book.timestamp.isoformat() if state.book else None,
+                            }))
+                            self._background.add(task)
+                            task.add_done_callback(self._background.discard)
         bucket = self._quotes.setdefault(symbol, [])
         bucket.append(
             {
@@ -977,7 +983,7 @@ class TradingEngine:
                 return
         fresh, freshness = self._live_signal_freshness(decision, snapshot)
         if not fresh:
-            await self._resolve_entry(str(decision.decision_id))
+            await self._resolve_entry(str(decision.decision_id), "SIGNAL_EXPIRED_BEFORE_SUBMISSION")
             await self._record_risk(self.risk._reject(decision, [EXPIRED_SIGNAL], details={"freshness": freshness}))
             self._log("live_blocked", f"{EXPIRED_SIGNAL} {decision.symbol} {freshness}")
             if "price_drift" in freshness.get("failed_checks", []):
@@ -1004,9 +1010,9 @@ class TradingEngine:
             return
         await self._record_live_entry(decision, snapshot, risk, order)
 
-    async def _resolve_entry(self, decision_id: str) -> None:
+    async def _resolve_entry(self, decision_id: str, reason: str = "KNOWN_ORDER_LIFECYCLE") -> None:
         if self.postgres:
-            await self.postgres.save_event("live_entry_resolved", decision_id, {"decision_id": decision_id})
+            await self.postgres.save_event("live_entry_resolved", decision_id, {"decision_id": decision_id, "reason": reason})
             if not self.postgres.healthy:
                 return
         self.pending_entries.pop(decision_id, None)
@@ -1039,7 +1045,7 @@ class TradingEngine:
                     # Do not clear a very recent ambiguous request while the exchange may still process it.
                     age = (utcnow() - datetime.fromisoformat(pending["created_at"])).total_seconds()
                     if age > 60:
-                        await self._resolve_entry(identity)
+                        await self._resolve_entry(identity, "ENTRY_NOT_FOUND_AFTER_RECONCILIATION_WINDOW")
                     continue
                 if found.get("status") not in {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}:
                     continue
@@ -1056,7 +1062,7 @@ class TradingEngine:
             self._log("live_unfilled", order.client_order_id)
             await self._checkpoint(decision.strategy, positions=[], orders=[order_payload], fills=[])
             if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
-                await self._resolve_entry(str(decision.decision_id))
+                await self._resolve_entry(str(decision.decision_id), f"UNFILLED_{order.status.value}")
             return
         step = self.feed.rules.get(snapshot.symbol, {}).get("step_size")
         executed = lot_quantity(order.filled_quantity, step)
@@ -1203,8 +1209,10 @@ class TradingEngine:
                 self._stop_checked[identity] = time.monotonic()
                 try:
                     found = await self.live.fetch_verified(symbol, position.stop_client_order_id)
-                except Exception:
+                except Exception as exc:
                     position.protection_status = "UNKNOWN"
+                    await self._exit_blocked(key, position, "STOP_VERIFICATION_FAILED", {
+                        "error": str(exc), "error_type": type(exc).__name__})
                     found = None
                 if found:
                     if found.get("status") in {"FILLED", "PARTIALLY_FILLED"}:
@@ -1325,6 +1333,7 @@ class TradingEngine:
                 if position.protection_status != "RECOVERY_EXHAUSTED":
                     position.protection_status = "RECOVERY_EXHAUSTED"
                     position.protection_error = position.protection_error or "AUTOMATIC_RECOVERY_EXHAUSTED"
+                    await self._position_event(position, "protection_critical", "AUTOMATIC_RECOVERY_EXHAUSTED")
                     self.store.add_event("protection_critical", "AUTOMATIC_RECOVERY_EXHAUSTED", {
                         "position_id": str(position.position_id),
                         "decision_id": str(position.decision_id),
@@ -1355,11 +1364,17 @@ class TradingEngine:
                         pass  # A cancellation race must be resolved by a subsequent read.
                     found = await self.live.fetch_verified(symbol, client_id)
                 if found.get("status") not in {"FILLED", "CANCELED", "EXPIRED", "REJECTED", "NOT_FOUND"}:
+                    await self._exit_blocked(key, position, "STOP_STATUS_UNKNOWN", {"stop_status": found.get("status")})
                     self._log("live_exit_blocked", f"{tag} STOP_STATUS_UNKNOWN")
                     return
             except Exception as exc:
+                await self._exit_blocked(key, position, "STOP_RECONCILIATION", {"error": str(exc), "error_type": type(exc).__name__})
                 self._log("live_exit_blocked", f"{tag} STOP_RECONCILIATION {exc}")
                 return
+            await self._position_event(position, "stop_reconciled", reason, {
+                "client_order_id": client_id, "exchange_status": found.get("status"),
+                "executed_quantity": found.get("executedQty"),
+            })
             qty, price = execution_of(found)
             already = position.exit_processed.get(client_id, 0)
             quantity = max(0, qty - already)
@@ -1386,6 +1401,7 @@ class TradingEngine:
         if self.settings.market_type == "margin":
             balance = await self.balance.snapshot(fresh=True)
             if balance.get("status") != "ok":
+                await self._exit_blocked(key, position, "ACCOUNT_UNAVAILABLE")
                 self._log("live_exit_blocked", f"{tag} ACCOUNT_UNAVAILABLE")
                 return
             asset = next((r for r in balance.get("assets", []) if r.get("asset") == base_asset(symbol)), {})
@@ -1430,6 +1446,10 @@ class TradingEngine:
                     })
                     quantity = adjusted
         if quantity <= 0:
+            await self._exit_blocked(key, position, "NO_CLOSABLE_BALANCE_RECONCILE", {
+                "account": self.account_sample(balance, float(balance.get("equity_usdt") or 0))
+                if self.settings.market_type == "margin" else None,
+            })
             self._log("live_exit_blocked", f"{tag} NO_CLOSABLE_BALANCE_RECONCILE")
             return
         intent = OrderIntent(
@@ -1451,6 +1471,7 @@ class TradingEngine:
             position.exit_timing["exchange_at"] = order.exchange_at.isoformat() if order.exchange_at else None
         except Exception as exc:
             position.protection_error = str(exc)
+            await self._exit_blocked(key, position, "CLOSE_SUBMISSION_FAILED", {"error": str(exc), "error_type": type(exc).__name__})
             self._log(
                 "live_exit",
                 f"{tag} attempt={position.recovery_attempts} {exc}",
@@ -1969,9 +1990,11 @@ class TradingEngine:
             total = float(asset.get("total") or 0)
             free = asset.get("free")
             free_value = float(free) if isinstance(free, (int, float)) else None
-            if abs(total) < 1e-8 and (free_value is None or abs(free_value) < 1e-8):
+            components = {k: _finite_number(asset.get(k)) for k in ("locked", "borrowed", "interest", "gross")}
+            if abs(total) < 1e-8 and (free_value is None or abs(free_value) < 1e-8) and not any(
+                    abs(v) >= 1e-8 for v in components.values() if v is not None):
                 continue
-            assets.append({"asset": name, "free": free_value, "total": total})
+            assets.append({"asset": name, "free": free_value, "total": total, **components})
             if name != "USDT" and abs(total) >= 1e-8:
                 state = self.states.get(f"{name}USDT")
                 if state is not None and isinstance(state.last_price, (int, float)):
@@ -1980,6 +2003,8 @@ class TradingEngine:
         for row in self.positions_payload():
             positions.append(
                 {
+                    **{key: row.get(key) for key in ("position_id", "decision_id", "stop", "target",
+                        "stop_client_order_id", "protection_status", "protection_error", "recovery_attempts")},
                     "strategy": row.get("strategy"),
                     "symbol": row.get("symbol"),
                     "side": row.get("side"),
@@ -2139,6 +2164,8 @@ class TradingEngine:
                 rows.append(
                     {
                         "position_id": str(position.position_id),
+                        "decision_id": str(position.decision_id),
+                        "stop_client_order_id": position.stop_client_order_id,
                         "strategy": key,
                         "symbol": position.symbol,
                         "side": position.side.value,
@@ -2655,6 +2682,42 @@ class TradingEngine:
         self.logs.add(item)
         self.store.add_event(kind, message)
         log.log(level, "%s %s", kind, message)
+
+    async def _position_event(self, position, kind: str, reason: str, details: dict | None = None) -> None:
+        payload = {"position_id": str(position.position_id), "decision_id": str(position.decision_id),
+            "symbol": position.symbol, "side": position.side.value,
+            "stop_client_order_id": position.stop_client_order_id,
+            "protection_status": position.protection_status, "protection_error": position.protection_error,
+            "recovery_attempts": position.recovery_attempts, "exit_timing": dict(position.exit_timing),
+            "observed_at": utcnow().isoformat(), **(details or {})}
+        self.store.add_event(kind, reason, payload)
+        if self.postgres and self.postgres.healthy:
+            # Audit persistence must not delay a target/stop submission.
+            task = asyncio.create_task(self._persist_position_event(kind, reason, payload))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+
+    async def _persist_position_event(self, kind, reason, payload):
+        try:
+            await self.postgres.save_event(kind, reason, payload)
+        except Exception as exc:
+            self._log("audit_persistence_failed", f"{kind} {type(exc).__name__}", level=logging.ERROR)
+
+    async def _exit_blocked(self, key, position, reason, details=None):
+        # Keep the original exchange failure as well as the latest recovery cause.
+        position.protection_error = position.protection_error or reason
+        await self._position_event(position, "live_exit_blocked", reason, details)
+        await self._checkpoint(key, positions=[position], orders=[], fills=[])
+
+
+def _finite_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _free_asset(balance: dict, asset_name: str) -> float | None:

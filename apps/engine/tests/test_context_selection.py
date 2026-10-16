@@ -118,11 +118,40 @@ def test_shadow_records_rejection_and_enforce_blocks_same_trade():
 @pytest.mark.parametrize("event,elapsed,entry,allowed", [(False,10,99,False),(True,2,99,False),(True,10,100,False),(True,10,99,True)])
 def test_repeat_entry_needs_event_time_and_price_progress(event,elapsed,entry,allowed):
     eng=engine(); eng.risk.update_limits(entry_selection_mode="enforce",allow_pyramiding=True)
-    snapshot,book=long_snapshot(**facts(),atr=.1,breakout=event)
+    snapshot,book=long_snapshot(**facts(),atr=.1,breakout=True,retest_long_5m=event)
+    snapshot.features['structure_bar_open_5m']=(snapshot.timestamp-timedelta(minutes=3)).isoformat()
     ctx=_context(has_position_on_symbol=True,position_sides_on_symbol=(Action.LONG,),
                  same_side_entry_prices=(entry,),last_entry_at=snapshot.timestamp-timedelta(minutes=elapsed))
     risk=eng.risk.evaluate(_order(snapshot,Action.LONG),snapshot,ctx,FeeQuote(.0002,.0005,"test"),book)
     assert ("REPEATED_ENTRY_WITHOUT_NEW_SETUP" not in risk.reject_reasons)==allowed
+
+
+@pytest.mark.parametrize('side,sign', [(Action.LONG,1),(Action.SHORT,-1)])
+def test_repeated_impulse_cannot_authorize_reentry_and_old_retest_cannot_be_reused(side,sign):
+    from app.strategies.context_policy import repeat_setup
+    from tests.conftest import clock
+    now=clock(); entered=now-timedelta(minutes=6)
+    suffix='long' if sign==1 else 'short'
+    f={**facts(sign),'breakout':True,'breakdown':True}
+    assert not repeat_setup(side,f,entered,now)['fresh_setup']
+    f[f'retest_{suffix}_5m']=True
+    f['structure_bar_open_5m']=(entered-timedelta(seconds=1)).isoformat()
+    assert not repeat_setup(side,f,entered,now)['fresh_setup']
+    f['structure_bar_open_5m']=(entered+timedelta(minutes=1)).isoformat()
+    assert repeat_setup(side,f,entered,now)['fresh_setup']
+    f['structure_bar_open_5m']=(now+timedelta(minutes=1)).isoformat()
+    assert not repeat_setup(side,f,entered,now)['fresh_setup']
+
+
+def test_shadow_keeps_execution_unchanged_when_repeat_setup_is_rejected():
+    eng=engine(); eng.risk.update_limits(allow_pyramiding=True)
+    snapshot,book=long_snapshot(**facts(),atr=.1,breakout=True)
+    ctx=_context(has_position_on_symbol=True,position_sides_on_symbol=(Action.LONG,),
+                 same_side_entry_prices=(99,),last_entry_at=snapshot.timestamp-timedelta(minutes=10))
+    risk=eng.risk.evaluate(_order(snapshot,Action.LONG),snapshot,ctx,FeeQuote(.0002,.0005,'test'),book)
+    assert risk.accepted
+    assert not risk.details['entry_selection']['would_accept']
+    assert risk.details['entry_selection']['repeat_setup']['version']=='post_entry_retest_v1'
 
 
 def test_invalid_mode_fails_closed_at_configuration_load():

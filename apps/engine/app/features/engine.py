@@ -49,6 +49,7 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
     so a later reader cannot treat it as "no event".
     """
     empty = {
+        "structure_bar_open_5m": None, "pullback_bar_open_5m": None,
         "resistance_5m": None, "support_5m": None,
         "pullback_resume_long_5m": None, "pullback_resume_short_5m": None,
         "breakout_5m": None, "breakdown_5m": None,
@@ -132,6 +133,8 @@ def five_minute_structure(candles: list[Candle], atr_value: float | None) -> dic
                 retest_short = True
                 retest_short_level = level_down
     return {
+        "structure_bar_open_5m": candles[-1].open_time.isoformat(),
+        "pullback_bar_open_5m": candles[-2].open_time.isoformat(),
         "resistance_5m": prior_high, "support_5m": prior_low,
         "pullback_resume_long_5m": bool(closes[-2] < closes[-3] and last > closes[-2] and last > opens[-1]),
         "pullback_resume_short_5m": bool(closes[-2] > closes[-3] and last < closes[-2] and last < opens[-1]),

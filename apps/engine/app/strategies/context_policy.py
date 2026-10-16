@@ -1,9 +1,30 @@
 """Prospective entry selection; context, structure, flow and timing have separate jobs."""
 import math
+from datetime import datetime
 from app.domain.enums import Action
 
 VERSION = "context_entry_v2"
+REPEAT_VERSION = "post_entry_retest_v1"
 MAX_EXTENSION_ATR = 1.0
+
+
+def repeat_setup(side, features, last_entry_at, now):
+    """An impulse/elapsed time alone is not a new setup. Missing provenance fails closed."""
+    suffix = "long" if side == Action.LONG else "short"
+    events = []
+    if side in (Action.LONG, Action.SHORT):
+        for name, clock in ((f"retest_{suffix}_5m", "structure_bar_open_5m"),
+                            (f"reclaim_retest_{suffix}_5m", "structure_bar_open_5m"),
+                            (f"pullback_resume_{suffix}_5m", "pullback_bar_open_5m")):
+            if features.get(name) is not True or last_entry_at is None:
+                continue
+            try:
+                start = datetime.fromisoformat(features[clock].replace("Z", "+00:00"))
+                if last_entry_at < start <= now:
+                    events.append(name)
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+    return {"version": REPEAT_VERSION, "fresh_setup": bool(events), "events": events}
 
 def classify_entry(side, features):
     direction = 1 if side == Action.LONG else -1

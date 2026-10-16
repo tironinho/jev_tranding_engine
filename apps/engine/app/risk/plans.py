@@ -28,7 +28,7 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
     interest = entry * assumed_rate * max(1, math.ceil(limits.max_hold_minutes / 60)) if snapshot.market_type.value == "margin" else 0
     target = geometry.target
     original_target = target
-    if limits.cost_aware_target_floor:
+    if limits.cost_aware_target_floor and limits.extend_target_for_costs:
         target = target_for_net_rr(side=side, entry=entry, stop=geometry.stop, target=target,
             min_net_rr=limits.min_net_rr, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
             exit_slippage_per_unit=entry*limits.plan_stress_bps/10000, funding_per_unit=-interest)
@@ -39,11 +39,14 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
         quantity=1, entry_fee_rate=fee_rate, exit_fee_rate=fee_rate,
         exit_slippage_per_unit=entry * limits.plan_stress_bps / 10000,
         funding_cashflow_total=-interest, fee_source="plan_estimate")
+    feasible = (limits.extend_target_for_costs or not limits.cost_aware_target_floor
+                or (econ.net_rr is not None and econ.net_rr >= limits.min_net_rr - 1e-9))
     label = f"rr_{econ.gross_rr:.2f}".rstrip("0").rstrip(".") if econ.gross_rr is not None else "target"
     return [{"plan_id": label, "entry": entry, "stop": geometry.stop, "target": target,
         "original_target": original_target,
         "target_extended_for_costs": abs(target-entry) > abs(original_target-entry)+1e-12,
-        "target_policy": "net_rr_floor_v1" if limits.cost_aware_target_floor else limits.target_rule_version,
+        "target_policy": ("structural_cost_guard_v1" if not limits.extend_target_for_costs
+                          else "net_rr_floor_v1" if limits.cost_aware_target_floor else limits.target_rule_version),
         "gross_rr": econ.gross_rr, "net_rr": econ.net_rr, "net_risk_per_unit": econ.net_risk,
         "net_reward_per_unit": econ.net_reward, "break_even_probability": 1 / (1 + econ.net_rr) if econ.net_rr and econ.net_rr > 0 else 1,
         "horizon_minutes": limits.max_hold_minutes, "round_trip_fee_rate": fee_rate * 2,
@@ -52,7 +55,7 @@ def candidate_plans(snapshot, side, limits, fee_rate, intelligence=None, *, allo
         "interest_estimate_per_unit": interest, "interest_known": rate is not None or snapshot.market_type.value != "margin",
         "requires_structure_break": reward > calculated_limit + max(1e-12, entry * 1e-10),
         "stop_policy": "breakeven_at_1R_lock_1R_at_2R" if limits.step_stop_to_breakeven else "fixed",
-        "eligible": True, "reason": None}]
+        "eligible": feasible, "reason": None if feasible else "STRUCTURAL_TARGET_BELOW_COST_FLOOR"}]
 
 
 def market_range_plans(snapshot, side, limits, fee_rate, intelligence, geometry):

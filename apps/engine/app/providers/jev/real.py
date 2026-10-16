@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 from app.intelligence.context import jev_view
-from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, SIMPLE_MARKET_PROMPT, JevAssessment, JevMarketRequest, JevProviderError
+from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT, JevAssessment, JevMarketRequest, JevProviderError
 from app.providers.jev.simple import INSTRUCTIONS as _SIMPLE_INSTRUCTIONS, state_for_model as _simple_state
 
 _NOULS = (
@@ -122,14 +122,20 @@ class RealJevProvider:
         payload = request.model_dump(mode="json")
         instructions = {"initial_live_2026_10_08": _INITIAL_LIVE_INSTRUCTIONS,
                         "live_first_ten_2026_10_09": _FIRST_TEN_INSTRUCTIONS}.get(request.evaluation_profile, _INSTRUCTIONS)
-        if request.prompt_version == SIMPLE_MARKET_PROMPT:
+        if request.prompt_version in {SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT}:
             instructions = _SIMPLE_INSTRUCTIONS
+            if request.prompt_version == SETUP_MARKET_PROMPT:
+                note = (" setup.eligible is only mechanical eligibility, not evidence of profit. "
+                        "A 1m break is distinct from the closed 5m structure. Target/ATR and "
+                        "target/range are geometry, not independent bullish or bearish votes. "
+                        "Estimate the supplied exit rule honestly; no unreported deadline is implied.")
+                instructions = {key: value + note for key,value in instructions.items()}
         elif request.prompt_version == FIRST_TEN_HISTORICAL_PROMPT:
             if request.trade_plan is not None:
                 raise JevProviderError("historical_contract_does_not_accept_trade_plan")
             instructions = _FIRST_TEN_HISTORICAL_INSTRUCTIONS
         if (request.evaluation_profile == "live_first_ten_2026_10_09" and request.trade_plan
-                and request.prompt_version != SIMPLE_MARKET_PROMPT):
+                and request.prompt_version not in {SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT}):
             instructions = {**_FIRST_TEN_INSTRUCTIONS,
                 "trend_continuation_probability": (
                     "Estimate the probability that the baseline_action candidate reaches the supplied "
@@ -193,7 +199,7 @@ class RealJevProvider:
                     "is_mock": False,
                     "provider_version": self.provider_version,
                     "prompt_version": (request.prompt_version
-                                       if request.evaluation_profile != "plan_outcome_v3" or request.prompt_version == SIMPLE_MARKET_PROMPT
+                                       if request.evaluation_profile != "plan_outcome_v3" or request.prompt_version in {SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT}
                                        else self.prompt_version),
                     "model": parsed.get("model") if isinstance(parsed, dict) else self.model,
                     "latency_ms": (time.perf_counter() - started) * 1000,
@@ -207,7 +213,7 @@ class RealJevProvider:
 
 def _state_for_model(payload: dict, min_quality: float) -> dict[str, Any]:
     """Keep only usable evidence; omitted feeds do not add questions or votes."""
-    if payload.get("prompt_version") == SIMPLE_MARKET_PROMPT:
+    if payload.get("prompt_version") in {SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT}:
         return _simple_state(payload)
     state = _normalized_state(payload)
     intelligence = state.get("intelligence")

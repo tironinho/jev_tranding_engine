@@ -2,12 +2,12 @@
 # Limites aplicados pelo motor antes da execução; armar produção é uma configuração separada.
 
 target_mode: structure
-# Política vigente no décimo fechamento live, commit a15bc12.
-# Referência a15bc12: alvo = amplitude de 60m; economia validada após o JEV.
-target_rule_version: live_first_ten_2026_10_09
+# Alvo limitado pela estrutura e amplitude observadas; plano inviável é rejeitado.
+target_rule_version: setup_guard_2026_10_16
 min_net_rr: 2.0
-# Ajusta o alvo liquido antes de enviar o plano ao JEV.
+# Valida a economia antes do JEV, sem afastar o alvo para cobrir custos.
 cost_aware_target_floor: true
+extend_target_for_costs: false
 market_range_plans: false
 jev_expectancy_gate: false
 target_fallback: rr
@@ -26,8 +26,8 @@ max_portfolio_stop_risk: 0.02
 min_protection_quote_reserve: 0.25
 # Mantido para o perfil de planos dinâmicos; o perfil inicial usa min_net_rr.
 min_expected_net_r: 0.10
-# A configuração inicial avaliava LONG e SHORT.
-live_longs_enabled: true
+# LONG live pausado após a auditoria de 16/10; posições existentes seguem geridas.
+live_longs_enabled: false
 # Dez perdas live consecutivas pausam novas entradas até o próximo dia UTC.
 # O paper continua coletando evidência durante a pausa.
 max_consecutive_live_losses: 10

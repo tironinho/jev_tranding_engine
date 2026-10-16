@@ -137,6 +137,8 @@ class RiskLimits:
     repeat_entry_interval_minutes: int = 5
     repeat_entry_atr_distance: float = 0.5
     min_net_target_return: float = 0.0
+    # Historical replays can retain extension; production rejects an infeasible structural target.
+    extend_target_for_costs: bool = True
     min_order_notional: float = 5.0
     min_margin_level: float = 2.0
     step_stop_to_breakeven: bool = False
@@ -313,6 +315,7 @@ def risk_from_file(payload: dict, settings: Settings) -> RiskLimits:
         repeat_entry_interval_minutes=int(payload.get("repeat_entry_interval_minutes", 5)),
         repeat_entry_atr_distance=float(payload.get("repeat_entry_atr_distance", 0.5)),
         min_net_target_return=float(payload.get("min_net_target_return", 0)),
+        extend_target_for_costs=bool(payload.get("extend_target_for_costs", True)),
         min_order_notional=float(payload.get("min_order_notional", 5)),
         min_margin_level=float(payload.get("min_margin_level", 2)),
         step_stop_to_breakeven=bool(payload.get("step_stop_to_breakeven", False)),

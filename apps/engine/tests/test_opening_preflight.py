@@ -11,7 +11,7 @@ from tests.test_role_baseline import viable,_bar
 from app.features.engine import five_minute_structure
 from tests.conftest import settings,long_snapshot
 from tests.test_simple_jev_input import candidate,evaluate
-from app.service import TradingEngine
+from tests.conftest import historical_simple_engine as TradingEngine
 
 
 def test_pullback_is_a_separate_shadow_setup_without_a_new_break():

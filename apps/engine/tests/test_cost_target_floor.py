@@ -208,8 +208,8 @@ async def test_missing_geometry_does_not_become_a_direction_only_confirmation():
 
 @pytest.mark.parametrize("side", [Action.LONG, Action.SHORT])
 @pytest.mark.asyncio
-async def test_current_policy_extends_target_before_jev_and_executes_exact_plan(side):
-    from app.service import TradingEngine
+async def test_historical_policy_extends_target_before_jev_and_executes_exact_plan(side):
+    from tests.conftest import historical_simple_engine as TradingEngine
     from tests.conftest import settings
     eng = TradingEngine(settings(initial_paper_equity=20))
     eng.strategy_settings["baseline_jev"].mode = OperatingMode.PAPER

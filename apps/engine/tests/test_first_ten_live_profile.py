@@ -26,8 +26,8 @@ def first_ten_engine():
                           max_portfolio_notional_fraction=0, min_net_target_return=0)
     # Reconstruct the exact tenth-trade policy, before the cost-target correction.
     eng.weights = replace(eng.weights, version="baseline_first_ten_v1")
-    eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v1", jev_input_profile="legacy")
-    eng.risk.update_limits(cost_aware_target_floor=False, market_range_plans=False, max_hold_minutes=60)
+    eng.combination = replace(eng.combination, baseline_version="baseline_first_ten_v1", jev_input_profile="legacy", jev_rule_version="jev_break_size_v1")
+    eng.risk.update_limits(target_rule_version=PROFILE, cost_aware_target_floor=False, market_range_plans=False, max_hold_minutes=60, live_longs_enabled=True, extend_target_for_costs=True)
     eng.risk_limits = eng.risk.limits
     return eng
 

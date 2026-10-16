@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from app.providers.jev.schemas import SIMPLE_MARKET_PROMPT, JevAssessment, JevMarketRequest
+from app.providers.jev.schemas import SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT, JevAssessment, JevMarketRequest
 
 
 def _unit(value: float) -> float:
@@ -39,7 +39,7 @@ class MockJevProvider:
             provider="mock",
             is_mock=True,
             provider_version=self.provider_version,
-            prompt_version=request.prompt_version if request.prompt_version == SIMPLE_MARKET_PROMPT else self.prompt_version,
+            prompt_version=request.prompt_version if request.prompt_version in {SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT} else self.prompt_version,
             model="mock",
             trend_continuation_probability=continuation,
             reversal_probability=1 - continuation,

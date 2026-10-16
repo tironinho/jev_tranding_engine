@@ -30,6 +30,7 @@ def test_historical_policy_remains_available_with_execution_fixes():
         "prompt_version": FIRST_TEN_HISTORICAL_PROMPT,
         "target_rule_version": "live_first_ten_2026_10_09", "min_net_rr": 1.5,
         "cost_aware_target_floor": False, "market_range_plans": False,
+        "extend_target_for_costs": True, "live_longs_enabled": True,
         "jev_expectancy_gate": False, "review_below_threshold": False,
         "paper_policy_comparison": False, "max_hold_minutes": 60,
     }

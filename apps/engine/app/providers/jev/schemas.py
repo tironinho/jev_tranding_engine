@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 FIRST_TEN_HISTORICAL_PROMPT = "jev_live_first_ten_2026_10_09_a15bc12_v1"
 SIMPLE_MARKET_INPUT = "simple_market_v1"
 SIMPLE_MARKET_PROMPT = "jev_simple_market_v1"
+SETUP_MARKET_PROMPT = "jev_setup_market_v1"
 
 
 class JevMarketRequest(BaseModel):

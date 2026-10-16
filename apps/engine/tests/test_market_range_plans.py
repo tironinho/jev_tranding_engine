@@ -8,7 +8,7 @@ from app.domain.enums import Action, MarketType
 from app.providers.jev.real import _normalized_plan
 from app.risk.plans import candidate_plans
 from app.strategies.runners import BaselineJevStrategy
-from app.service import TradingEngine
+from tests.conftest import historical_simple_engine as TradingEngine
 from tests.conftest import long_snapshot, clock, engine, settings, market_range_engine
 from tests.test_initial_live_profile import AssessmentProvider, context
 from tests.test_runtime import _open

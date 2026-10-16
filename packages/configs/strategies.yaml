@@ -17,15 +17,15 @@ strategies:
 
 combination:
   baseline_version: baseline_first_ten_v2
-  jev_rule_version: jev_break_size_v1
+  jev_rule_version: jev_setup_guard_v1
   jev_request_profile: live_first_ten_2026_10_09
   # Só a representação enviada ao JEV; não altera alvo, stop, prazo ou vetos.
   jev_input_profile: simple_market_v1
   openai_rule_version: openai_jev_economic_gate_v2
   failure_policy: NO_TRADE
-  # Política vigente no décimo fechamento live (a15bc12).
+  # Pisos preservados como referência; autorização usa setup e veto obrigatório.
   # Sem rompimento: LONG >=0,55, SHORT >=0,40; o piso considera taxa/stop.
-  # Rompimento confirmado na classe reduz tamanho quando fica abaixo do piso.
+  # Nenhum rompimento dispensa o piso de probabilidade.
   min_trend_continuation: 0.55
   min_short_continuation: 0.40
   # Referência a15bc12: um pedido compacto por sinal válido da baseline.

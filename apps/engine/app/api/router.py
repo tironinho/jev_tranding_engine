@@ -413,6 +413,7 @@ async def risk_limits(request: Request) -> dict:
         "max_portfolio_notional_fraction": limits.max_portfolio_notional_fraction,
         "min_net_target_return": limits.min_net_target_return,
         "entry_selection_mode": limits.entry_selection_mode,
+        "extend_target_for_costs": limits.extend_target_for_costs,
         "repeat_entry_interval_minutes": limits.repeat_entry_interval_minutes,
         "repeat_entry_atr_distance": limits.repeat_entry_atr_distance,
         "dynamic_rr_enabled": limits.dynamic_rr_enabled,

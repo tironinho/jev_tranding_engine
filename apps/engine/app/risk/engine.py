@@ -171,8 +171,21 @@ class RiskEngine:
                 reasons.append("FUTURES_CLOSE_ALL_POSITION")
             elif any(side is not decision.action for side in context.position_sides_on_symbol):
                 reasons.append("OPPOSITE_POSITION_NETTING")
-        from app.strategies.context_policy import classify_entry
+        from app.strategies.context_policy import classify_entry, setup_guard
         selection = classify_entry(decision.action, snapshot.features)
+        if self.limits.target_rule_version == "setup_guard_2026_10_16" and decision.strategy == "baseline_jev":
+            guard = setup_guard(decision.action, snapshot.features, snapshot.timestamp)
+            decision.metadata['setup_guard'] = guard
+            reasons.extend(guard['reasons'])
+            p = decision.metadata.get('jev_continuation')
+            required = decision.metadata.get('jev_required_continuation')
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                   or not 0 <= v <= 1 for v in (p, required)):
+                reasons.append('JEV_PROBABILITY_UNAVAILABLE')
+            elif p < required:
+                reasons.append('JEV_LOW_CONTINUATION')
+            if (decision.metadata.get('jev_trade_plan') or {}).get('target_extended_for_costs'):
+                reasons.append('TARGET_EXTENDED_FOR_COSTS_DISABLED')
         repeat_reasons = []
         if context.has_position_on_symbol:
             direction = 1 if decision.action is Action.LONG else -1
@@ -235,6 +248,11 @@ class RiskEngine:
         plan = decision.metadata.get("jev_trade_plan")
         if plan:
             stop, target = float(plan["stop"]), float(plan["target"])
+            if self.limits.target_rule_version == "setup_guard_2026_10_16":
+                bound = plan_geometry(decision.action, float(plan['entry']), snapshot.features, self.limits)
+                direction = 1 if decision.action is Action.LONG else -1
+                if isinstance(bound, str) or direction*(target-bound.target) > max(1e-9, abs(target)*1e-10):
+                    return self._reject(decision, ['TARGET_EXCEEDS_OBSERVED_STRUCTURE'])
             candidate_entry = entry_guess
             valid = stop < candidate_entry < target if decision.action is Action.LONG else target < candidate_entry < stop
             if not valid or abs(candidate_entry / float(plan["entry"]) - 1) > 0.001:
@@ -451,6 +469,7 @@ class RiskEngine:
             side=decision.action,
             details={
                 "entry_selection": selection,
+                "setup_guard": decision.metadata.get('setup_guard'),
                 "role_baseline": decision.metadata.get("role_baseline"),
                 "geometry_reasons": list(geometry.reasons),
                 "extra_open_slot": bool(self.limits.max_open_positions > 0 and extra_slot
@@ -667,6 +686,7 @@ class RiskEngine:
         details: dict | None = None,
     ) -> RiskDecision:
         payload = {"risk_rejected": True, "entry_selection": decision.metadata.get("entry_selection"),
+                   "setup_guard": decision.metadata.get('setup_guard'),
                    "role_baseline": decision.metadata.get("role_baseline")}
         if details:
             payload.update(details)

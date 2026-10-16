@@ -2477,6 +2477,8 @@ class TradingEngine:
                 "target_rule_version": self.risk.limits.target_rule_version,
                 "min_net_rr": self.risk.limits.min_net_rr,
                 "cost_aware_target_floor": self.risk.limits.cost_aware_target_floor,
+                "extend_target_for_costs": self.risk.limits.extend_target_for_costs,
+                "live_longs_enabled": self.risk.limits.live_longs_enabled,
                 "market_range_plans": self.risk.limits.market_range_plans,
                 "jev_expectancy_gate": self.risk.limits.jev_expectancy_gate,
                 "review_below_threshold": self.combination.review_below_threshold,

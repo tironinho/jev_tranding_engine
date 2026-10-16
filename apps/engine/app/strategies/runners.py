@@ -32,14 +32,14 @@ from app.domain.enums import (
     SignalStatus,
 )
 from app.domain.schemas import MarketSnapshot, StrategyDecision
-from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, SIMPLE_MARKET_INPUT, SIMPLE_MARKET_PROMPT, JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
+from app.providers.jev.schemas import FIRST_TEN_HISTORICAL_PROMPT, SIMPLE_MARKET_INPUT, SIMPLE_MARKET_PROMPT, SETUP_MARKET_PROMPT, JevMarketRequest, JevNotImplemented, JevProviderError, JevShadowDeferred
 from app.providers.jev.simple import evidence_from_features, observation_plan, state_for_model as simple_state
 from app.providers.openai.schemas import OpenAICallError, OpenAIInvalidSchema, OpenAINotConfigured
 from app.strategies.baseline_score import BaselineResult, score_baseline
 from app.strategies.rules import apply_jev_veto, apply_openai_veto, break_size_scale, meta_hit_probability
 from app.risk.plans import candidate_plans, score_probability
 from app.analytics.setup_review import classify_setup
-from app.strategies.context_policy import classify_entry
+from app.strategies.context_policy import classify_entry, setup_guard
 from app.strategies.role_baseline import assess_roles
 
 
@@ -177,6 +177,17 @@ class BaselineJevStrategy:
                 jev_evaluation_mode="READ_ONLY_SHADOW" if live_context_shadow else "ACTIVE",
             )
             result = replace(result, action=candidate_action)
+        if context.combination.jev_rule_version == "jev_setup_guard_v1" and not live_context_shadow:
+            guard = setup_guard(result.action, snapshot.features, snapshot.timestamp)
+            metadata['setup_guard'] = guard
+            rejection = list(guard['reasons'])
+            if context.mode is OperatingMode.LIVE and context.risk and result.action is Action.LONG and not context.risk.live_longs_enabled:
+                rejection.insert(0, "LIVE_LONG_DISABLED")
+            if rejection:
+                return _decision(context=context, snapshot=snapshot, strategy=self.key,
+                    action=Action.NO_TRADE, confidence=result.confidence, reasons=rejection,
+                    metadata={**metadata, "jev_effect": "not_called"}, model_version=result.version,
+                    prompt_version=jev_prompt_version(context.combination, context.risk, context.jev), started=started)
         request = _jev_request(context, snapshot, result)
         metadata["jev_trade_plan"] = request.trade_plan
         if simple_input:
@@ -707,6 +718,8 @@ def _stamp_binance_agent(metadata: dict, intelligence: dict | None) -> None:
 
 
 def jev_prompt_version(combination: CombinationConfig, risk, provider) -> str:
+    if combination.jev_rule_version == "jev_setup_guard_v1" and combination.jev_input_profile == SIMPLE_MARKET_INPUT:
+        return SETUP_MARKET_PROMPT
     if combination.jev_input_profile == SIMPLE_MARKET_INPUT:
         return SIMPLE_MARKET_PROMPT
     profile = combination.jev_request_profile

@@ -10,7 +10,8 @@ from app.domain.enums import Action, NET_RR_TOO_LOW, MAX_CONSECUTIVE_LIVE_LOSSES
 from app.providers.jev.real import RealJevProvider, _state_for_model
 from app.providers.jev.schemas import SIMPLE_MARKET_INPUT, SIMPLE_MARKET_PROMPT
 from app.risk.engine import FeeQuote
-from app.service import TradingEngine
+from app.service import TradingEngine as CurrentEngine
+from tests.conftest import historical_simple_engine as TradingEngine
 from app.strategies.baseline_score import score_baseline
 from app.strategies.runners import BaselineJevStrategy
 from tests.conftest import attach_book, clock, long_snapshot, settings
@@ -38,14 +39,17 @@ async def evaluate(eng, snapshot, probability=.43, intelligence=None):
     return decision, provider
 
 
-def test_active_configuration_uses_cost_aware_target_and_simple_input():
-    eng = TradingEngine(settings())
+def test_active_configuration_uses_setup_guard_and_structural_cost_rejection():
+    from app.providers.jev.schemas import SETUP_MARKET_PROMPT
+    eng = CurrentEngine(settings())
     policy = eng.status()["decision_policy"]
     assert policy["baseline_version"] == "baseline_first_ten_v2"
     assert policy["input_profile"] == SIMPLE_MARKET_INPUT
-    assert policy["prompt_version"] == SIMPLE_MARKET_PROMPT
+    assert policy["prompt_version"] == SETUP_MARKET_PROMPT
     assert policy["request_profile"] == "live_first_ten_2026_10_09"
-    assert policy["jev_rule_version"] == "jev_break_size_v1"
+    assert policy["jev_rule_version"] == "jev_setup_guard_v1"
+    assert not policy['extend_target_for_costs']
+    assert not policy['live_longs_enabled']
     assert policy["cost_aware_target_floor"]
     assert not any(policy[k] for k in ("market_range_plans",
                                       "jev_expectancy_gate", "review_below_threshold"))

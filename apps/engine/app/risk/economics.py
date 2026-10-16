@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from app.config import RiskLimits
 from app.domain.enums import (
@@ -117,6 +118,19 @@ def _fit_target(side: Action, entry: float, distance: float, features: dict, lim
         return fitted if fitted > 0 else HOUR_RANGE_UNAVAILABLE
     if limits.target_rule_version == "live_first_ten_2026_10_09":
         fitted = entry + float(hour) if side is Action.LONG else entry - float(hour)
+        return fitted if fitted > 0 else HOUR_RANGE_UNAVAILABLE
+    if limits.target_rule_version == "setup_guard_2026_10_16":
+        direction = 1 if side is Action.LONG else -1
+        reward = float(hour)
+        # Respect the nearest observed obstacle, not just the complete prior range.
+        for key in (("resistance_5m", "resistance_15m") if direction == 1
+                    else ("support_5m", "support_15m")):
+            level = features.get(key)
+            if isinstance(level, (int, float)) and not isinstance(level, bool) and math.isfinite(level):
+                available = direction * (level-entry)
+                if available > 0:
+                    reward = min(reward, available)
+        fitted = entry + direction * reward
         return fitted if fitted > 0 else HOUR_RANGE_UNAVAILABLE
     calculated = float(hour)
     boundary_key = "resistance_15m" if side is Action.LONG else "support_15m"

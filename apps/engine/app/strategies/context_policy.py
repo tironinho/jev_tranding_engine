@@ -1,11 +1,31 @@
 """Prospective entry selection; context, structure, flow and timing have separate jobs."""
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.domain.enums import Action
 
 VERSION = "context_entry_v2"
 REPEAT_VERSION = "post_entry_retest_v1"
 MAX_EXTENSION_ATR = 1.0
+
+
+def setup_guard(side, features, as_of=None):
+    """Semantic eligibility, not a fitted profitability model. V2's full score stays shadow."""
+    selection = classify_entry(side, features)
+    blockers = {"CONTEXT_DATA_UNAVAILABLE", "NO_CANDIDATE", "ENTRY_STRUCTURE_REQUIRED",
+                "REVERSAL_RECLAIM_REQUIRED", "REVERSAL_NOT_SUSTAINED", "REVERSAL_RETEST_REQUIRED",
+                "ENTRY_TIMING_DATA_UNAVAILABLE", "ENTRY_EXTENDED_WAIT_RETEST", "ENTRY_FADING_WAIT_RESUMPTION"}
+    reasons = [r for r in selection['reasons'] if r in blockers]
+    if as_of is not None:
+        try:
+            now = datetime.fromisoformat(as_of.replace('Z','+00:00')) if isinstance(as_of,str) else as_of
+            opened = datetime.fromisoformat(features['structure_bar_open_5m'].replace('Z','+00:00'))
+            age = now - (opened + timedelta(minutes=5))
+            if age < -timedelta(milliseconds=1) or age > timedelta(minutes=5,seconds=30):
+                reasons.append('ENTRY_STRUCTURE_STALE_OR_FUTURE')
+        except (KeyError, TypeError, ValueError, AttributeError):
+            reasons.append('ENTRY_STRUCTURE_TIME_UNAVAILABLE')
+    return {"version": "setup_guard_v1", "setup": selection['setup'], "eligible": not reasons,
+            "reasons": reasons, "checks": selection.get('checks', {})}
 
 
 def repeat_setup(side, features, last_entry_at, now):

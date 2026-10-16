@@ -175,7 +175,7 @@ def state_for_model(payload):
     pct = lambda value: _finite(value*100) if value is not None else None
     volume = _finite(features.get("volume_ratio"))
     spread = _finite(features.get("spread_bps"))
-    return {"symbol": payload.get("symbol"), "market_type": payload.get("market_type"),
+    state = {"symbol": payload.get("symbol"), "market_type": payload.get("market_type"),
         "candidate_side": side, "candle_minutes": 1,
         "evidence": {
             "trend": _present(ema_alignment=alignment, ema20_slope_5m_pct=pct(_finite(features.get("ema_20_slope"))),
@@ -195,3 +195,31 @@ def state_for_model(payload):
             "volatility": _present(atr_14_pct=pct(atr_fraction), range_60m_pct=pct(span)),
             "liquidity": _present(spread_bps=spread if spread is not None and spread >= 0 else None),
         }, "trade": trade}
+    from app.providers.jev.schemas import SETUP_MARKET_PROMPT
+    if payload.get('prompt_version') == SETUP_MARKET_PROMPT:
+        from app.strategies.context_policy import setup_guard
+        guard = setup_guard(Action(side), features, payload.get('timestamp'))
+        suffix = 'long' if side == 'LONG' else 'short'
+        structure = state['evidence']['structure']
+        for name in ('breakout_5m', 'breakdown_5m', f'retest_{suffix}_5m',
+                     f'pullback_resume_{suffix}_5m', f'reclaim_retest_{suffix}_5m',
+                     f'reclaim_sustained_{suffix}_5m'):
+            if isinstance(features.get(name), bool):
+                structure[name] = features[name]
+        entry = _positive(plan.get('entry'))
+        levels = [_positive(features.get(k)) for k in
+                  (('resistance_5m','resistance_15m') if side == 'LONG' else ('support_5m','support_15m'))]
+        available = [(level/entry-1)*(1 if side=='LONG' else -1) for level in levels if level and entry]
+        available = [distance for distance in available if distance > 0]
+        target_pct = trade['target_distance_pct']
+        trade.update(_present(target_atr_1m=target_pct/(atr_fraction*100),
+            target_range_60m=target_pct/(span*100) if span else None,
+            next_obstacle_distance_pct=min(available)*100 if available else None,
+            round_trip_fee_pct=pct(_finite(plan.get('round_trip_fee_rate')))))
+        state['setup'] = {**guard, 'structure_timeframe_minutes':5,
+            'structure_bar_open_at':features.get('structure_bar_open_5m'),
+            'missing_fields':[key for key in ('structure_bar_open_5m','resistance_5m','support_5m')
+                              if features.get(key) is None]}
+        state['as_of'] = payload.get('timestamp')
+        state['probability_status'] = 'UNCALIBRATED'
+    return state
